@@ -46,3 +46,6 @@ ide-electron/.git.upstream-backup/
 
 # Misc
 tools/workspace/
+
+# GitHub Actions (need Workflows: write on fine-grained PAT to push)
+ide-electron/.github/workflows/
