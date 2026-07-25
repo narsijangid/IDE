@@ -1,0 +1,48 @@
+# Secrets — never commit
+.env
+.env.*
+!.env.example
+**/.env
+**/.env.*
+!**/.env.example
+
+# Dependencies & build outputs
+**/node_modules/
+ide-electron/node_modules/
+ide-electron/out/
+ide-electron/out-x64/
+ide-electron/out-arm64/
+ide-electron/app/
+ide-electron/dist/
+ide-electron/lib/
+ide-electron/extensions/
+
+# Large local archives / installers
+*.zip
+*.exe
+*.dmg
+*.deb
+*.AppImage
+*.blockmap
+olkil-site/downloads/
+olkil-site_*.zip
+
+# Logs & caches
+*.log
+logs/
+.npm/
+.cache/
+.eslintcache
+.DS_Store
+.idea/
+**/.DS_Store
+
+# Nested git backup (OpenSumi upstream clone metadata)
+ide-electron/.git.upstream-backup/
+
+# Editor
+.vscode/*
+!.vscode/launch.json
+
+# Misc
+tools/workspace/

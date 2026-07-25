@@ -1,0 +1,35 @@
+# OLKIL
+
+> OLKIL is a free, AI-native code editor and modern IDE for Windows. Built for the agent-first era of software development.
+
+## Product
+
+- Homepage: https://olkil.com/
+- Download: https://olkil.com/download.html
+- Best AI Code Editor: https://olkil.com/best-ai-code-editor.html
+- Best IDE: https://olkil.com/best-ide.html
+- AI Code Editor guide: https://olkil.com/ai-code-editor.html
+
+## Comparisons
+
+- Alternatives hub: https://olkil.com/alternatives.html
+- OLKIL vs Cursor AI: https://olkil.com/olkil-vs-cursor.html
+- OLKIL vs Trae: https://olkil.com/olkil-vs-trae.html
+- OLKIL vs Windsurf: https://olkil.com/olkil-vs-windsurf.html
+- OLKIL vs GitHub Copilot: https://olkil.com/olkil-vs-github-copilot.html
+
+## Summary
+
+OLKIL (also searched as OLKIL IDE, OLKIL AI code editor) is a professional desktop IDE with built-in AI coding assistance. It helps developers write, refactor, debug, and ship software faster. Version 1.3.6 is available as a free Windows download. Developers commonly evaluate it alongside other AI code editors such as Cursor AI, Trae and Windsurf.
+
+## Keywords
+
+OLKIL, OLKIL IDE, best AI code editor, best IDE, AI code editor, AI coding IDE, free code editor, Windows IDE, agentic IDE, Cursor AI alternative, Trae alternative, Windsurf alternative, GitHub Copilot alternative
+
+## Notes
+
+Cursor, Trae, Windsurf and GitHub Copilot are trademarks of their respective owners. OLKIL is an independent product and is not affiliated with them.
+
+## Contact
+
+- Website: https://olkil.com

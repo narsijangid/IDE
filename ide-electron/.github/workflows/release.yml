@@ -1,0 +1,45 @@
+name: Pre release by tag
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: macos-latest
+
+    strategy:
+      matrix:
+        node_version: [14.x]
+
+    steps:
+      - uses: actions/checkout@v2
+
+      - name: Use Node.js ${{ matrix.node-version }}
+        uses: actions/setup-node@v1
+        with:
+          node-version: ${{ matrix.node-version }}
+
+      - name: Package Electron
+        run: |
+          node ./scripts/apply-product.js
+          echo "package.json:" && cat package.json
+          echo "./build/package.json" && cat ./build/package.json
+          yarn
+          yarn download-extension
+          yarn pack
+        env:
+          TARGET_PLATFORMS: darwin
+          TARGET_ARCHES: x64,arm64
+          PRODUCT_VERSION: ${{ github.ref_name }}
+
+      - uses: 'marvinpinto/action-automatic-releases@latest'
+        with:
+          repo_token: '${{ secrets.GITHUB_TOKEN }}'
+          prerelease: true
+          files: |
+            out/LICENSE
+            out/*.dmg
+            out/*.exe

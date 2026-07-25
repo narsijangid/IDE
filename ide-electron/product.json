@@ -1,0 +1,10 @@
+{
+  "productName": "OLKIL",
+  "applicationName": "olkil",
+  "dataFolderName": ".olkil",
+  "version": "1.3.6",
+  "urlProtocol": "olkil",
+  "serverApp": { "marketplace": {} },
+  "devtoolFrontendUrl": "",
+  "sumiVersion": ""
+}
