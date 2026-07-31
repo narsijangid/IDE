@@ -1,27 +1,30 @@
-import { app, BrowserWindow } from 'electron';
+import { app } from 'electron';
 import { autoUpdater, UpdateInfo } from 'electron-updater';
 
 const UPDATE_FEED_URL = process.env.OLKIL_UPDATE_URL || 'https://updates.olkil.com';
-/** How often to poll the update feed while the app is open. */
-const CHECK_INTERVAL_MS = 5 * 60 * 1000;
-const FOCUS_CHECK_COOLDOWN_MS = 2 * 60 * 1000;
+/** Poll while the app is open. */
+const CHECK_INTERVAL_MS = 3 * 60 * 1000;
+const FOCUS_CHECK_COOLDOWN_MS = 90 * 1000;
 /**
- * After an update finishes downloading, wait this long with no user input
- * before silently installing + relaunching (Cursor-style: no dialogs).
+ * If an update was already downloaded (previous session) and we learn about it
+ * right after launch, apply + relaunch immediately so "open OLKIL" lands on the
+ * new version — no website reinstall, no dialog.
  */
-const SILENT_APPLY_IDLE_MS = 45_000;
-/** Absolute max wait after download before forcing a silent apply. */
-const SILENT_APPLY_MAX_WAIT_MS = 10 * 60 * 1000;
+const STARTUP_APPLY_WINDOW_MS = 20_000;
+/**
+ * Safety net: if the user never quits for a long time after download, apply
+ * silently and relaunch (still no dialog / no website).
+ */
+const FORCE_APPLY_AFTER_MS = 60 * 60 * 1000;
 
 let started = false;
 let updateDownloaded = false;
 let installing = false;
 let checking = false;
 let lastCheckAt = 0;
-let lastUserActivityAt = Date.now();
 let downloadedInfo: UpdateInfo | null = null;
-let silentApplyTimer: NodeJS.Timeout | null = null;
-let maxWaitTimer: NodeJS.Timeout | null = null;
+let appStartedAt = 0;
+let forceApplyTimer: NodeJS.Timeout | null = null;
 
 function log(...args: unknown[]) {
   console.log('[olkil-updater]', ...args);
@@ -31,91 +34,73 @@ function isPackagedApp(): boolean {
   return app.isPackaged;
 }
 
-function markActivity() {
-  lastUserActivityAt = Date.now();
-}
-
-function trackUserActivity() {
-  app.on('browser-window-focus', markActivity);
-  app.on('browser-window-blur', markActivity);
-  for (const win of BrowserWindow.getAllWindows()) {
-    win.on('focus', markActivity);
-    win.webContents.on('before-input-event', markActivity);
-  }
-  app.on('browser-window-created', (_e, win) => {
-    win.on('focus', markActivity);
-    win.webContents.on('before-input-event', markActivity);
-  });
-}
-
-function clearSilentTimers() {
-  if (silentApplyTimer) {
-    clearInterval(silentApplyTimer);
-    silentApplyTimer = null;
-  }
-  if (maxWaitTimer) {
-    clearTimeout(maxWaitTimer);
-    maxWaitTimer = null;
+function clearForceTimer() {
+  if (forceApplyTimer) {
+    clearTimeout(forceApplyTimer);
+    forceApplyTimer = null;
   }
 }
 
 /**
- * Install silently and relaunch. No dialogs — user does nothing.
- * Electron still needs one process restart to load new binaries; this does it automatically.
+ * Silent NSIS install. isForceRunAfter=true relaunches OLKIL automatically.
+ * User never visits the website and never clicks Restart.
  */
-function applyUpdateSilently() {
+function applyUpdateSilently(relaunch: boolean) {
   if (!updateDownloaded || installing) {
     return;
   }
   installing = true;
-  clearSilentTimers();
+  clearForceTimer();
   const version = downloadedInfo?.version || '?';
-  log('silent install + relaunch', version);
+  log(relaunch ? 'silent install + relaunch' : 'silent install (next open)', version);
   try {
-    // isSilent=true → NSIS runs quietly; isForceRunAfter=true → app reopens
-    autoUpdater.quitAndInstall(true, true);
+    autoUpdater.quitAndInstall(true, relaunch);
   } catch (err) {
     installing = false;
     log('quitAndInstall failed', err);
   }
 }
 
-function scheduleSilentApply() {
-  clearSilentTimers();
-  log('update ready — will apply silently when idle (or within max wait)');
+function onUpdateReady(info: UpdateInfo) {
+  updateDownloaded = true;
+  downloadedInfo = info;
+  const sinceStart = Date.now() - appStartedAt;
+  log('update ready', info.version, `t+${Math.round(sinceStart / 1000)}s`);
 
-  // Prefer applying when the user hasn't touched the app for a bit
-  silentApplyTimer = setInterval(() => {
-    if (!updateDownloaded || installing) {
-      return;
-    }
-    const idleFor = Date.now() - lastUserActivityAt;
-    if (idleFor >= SILENT_APPLY_IDLE_MS) {
-      log(`idle ${Math.round(idleFor / 1000)}s — applying update`);
-      applyUpdateSilently();
-    }
-  }, 5_000);
+  // Opening the app with a pending/cached update → apply now so this session
+  // becomes the new version (brief automatic relaunch, zero user action).
+  if (sinceStart <= STARTUP_APPLY_WINDOW_MS) {
+    log('pending update at startup — applying so this open is the new build');
+    setTimeout(() => applyUpdateSilently(true), 800);
+    return;
+  }
 
-  // Hard deadline so updates don't sit forever if the user is always active
-  maxWaitTimer = setTimeout(() => {
+  // Normal case: keep using the app; install when they quit. Next open = new features.
+  log('downloaded in background — will install automatically on quit (or after long idle)');
+  clearForceTimer();
+  forceApplyTimer = setTimeout(() => {
     if (updateDownloaded && !installing) {
-      log('max wait reached — applying update');
-      applyUpdateSilently();
+      log('long-running session — applying update in background');
+      applyUpdateSilently(true);
     }
-  }, SILENT_APPLY_MAX_WAIT_MS);
+  }, FORCE_APPLY_AFTER_MS);
 }
 
 /**
- * Fully automatic background updates (no reinstall, no "Restart?" dialog):
- * 1. Check feed on start + every few minutes
- * 2. Download in background
- * 3. Install silently when idle (or on quit) and relaunch
+ * Zero-click updates for installed OLKIL:
+ * 1. Check feed on start + periodically
+ * 2. Download in background (no UI)
+ * 3. Install on quit → next open shows new features
+ * 4. If update already waiting at startup → silent apply + relaunch
+ *
+ * Users never reinstall from olkil.com for normal updates.
  */
 export function startAutoUpdater(): void {
   if (started) {
     return;
   }
   started = true;
+  appStartedAt = Date.now();
 
   if (!isPackagedApp()) {
     log('skip — not a packaged build (dev mode)');
@@ -123,6 +108,8 @@ export function startAutoUpdater(): void {
   }
 
   autoUpdater.autoDownload = true;
+  // Primary path: when the user closes OLKIL, install quietly.
+  // Next time they open the same installed app → new features.
   autoUpdater.autoInstallOnAppQuit = true;
   autoUpdater.allowDowngrade = false;
 
@@ -136,8 +123,6 @@ export function startAutoUpdater(): void {
     return;
   }
 
-  trackUserActivity();
-
   autoUpdater.on('checking-for-update', () => {
     checking = true;
     log('checking', UPDATE_FEED_URL);
@@ -145,7 +130,7 @@ export function startAutoUpdater(): void {
 
   autoUpdater.on('update-available', (info) => {
     checking = false;
-    log('update available — downloading in background', info.version);
+    log('update available — downloading silently', info.version);
   });
 
   autoUpdater.on('update-not-available', (info) => {
@@ -160,25 +145,23 @@ export function startAutoUpdater(): void {
 
   autoUpdater.on('download-progress', (p) => {
     const pct = Math.round(p.percent || 0);
-    if (pct === 0 || pct === 100 || pct % 25 === 0) {
+    if (pct === 0 || pct === 100 || pct % 20 === 0) {
       log(`download ${pct}%`);
     }
   });
 
   autoUpdater.on('update-downloaded', (info) => {
     checking = false;
-    updateDownloaded = true;
-    downloadedInfo = info;
-    log('downloaded', info.version, '— scheduling silent apply');
-    scheduleSilentApply();
+    onUpdateReady(info);
   });
 
-  // If the user quits before idle timer, still install on the way out
-  app.on('before-quit', () => {
+  // Make quit-install reliable even if electron-updater's flag misses a path
+  app.on('will-quit', () => {
     if (updateDownloaded && !installing) {
-      log('app quitting — installing downloaded update');
+      log('quit — installing downloaded update for next launch');
       try {
         installing = true;
+        // relaunch=false: user closed the app; next manual open is the new build
         autoUpdater.quitAndInstall(true, false);
       } catch (err) {
         log('install-on-quit failed', err);
@@ -188,7 +171,7 @@ export function startAutoUpdater(): void {
 
   const check = (force = false) => {
     const now = Date.now();
-    if (checking || updateDownloaded) {
+    if (checking || updateDownloaded || installing) {
       return;
     }
     if (!force && now - lastCheckAt < FOCUS_CHECK_COOLDOWN_MS) {
@@ -198,8 +181,8 @@ export function startAutoUpdater(): void {
     autoUpdater.checkForUpdates().catch((err) => log('check failed', err?.message || err));
   };
 
-  // Soon after launch, then periodically
-  setTimeout(() => check(true), 5_000);
+  // Immediate check so pending updates apply on open
+  setTimeout(() => check(true), 1_500);
   setInterval(() => check(true), CHECK_INTERVAL_MS);
 
   app.on('browser-window-focus', () => {
@@ -208,7 +191,7 @@ export function startAutoUpdater(): void {
 }
 
 export function checkForUpdatesNow(): void {
-  if (!isPackagedApp()) {
+  if (!isPackagedApp() || installing) {
     return;
   }
   autoUpdater.checkForUpdates().catch((err) => log('manual check failed', err?.message || err));

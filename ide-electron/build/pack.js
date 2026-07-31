@@ -139,9 +139,13 @@ electronBuilder
         ],
       },
       nsis: {
-        oneClick: false,
-        allowToChangeInstallationDirectory: true,
+        // oneClick + per-user makes silent background updates reliable
+        // (electron-updater quitAndInstall /S works without wizard UI)
+        oneClick: true,
         perMachine: false,
+        allowToChangeInstallationDirectory: false,
+        deleteAppDataOnUninstall: false,
+        runAfterFinish: true,
         // Required so electron-updater can patch installed builds
         differentialPackage: true,
       },
