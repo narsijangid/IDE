@@ -1,74 +1,95 @@
+import React from 'react';
+import { createRoot, Root } from 'react-dom/client';
 import { Autowired } from '@opensumi/di';
 import {
+  AppConfig,
   ClientAppContribution,
   CommandContribution,
   CommandRegistry,
-  ComponentContribution,
-  ComponentRegistry,
+  ConfigProvider,
   Domain,
   KeybindingContribution,
   KeybindingRegistry,
-  SlotLocation,
 } from '@opensumi/ide-core-browser';
-import { IMainLayoutService } from '@opensumi/ide-main-layout';
 import { MenuContribution, IMenuRegistry, MenuId } from '@opensumi/ide-core-browser/lib/menu/next';
-import { OLKIL_AI_CONTAINER_ID, OLKIL_AI_ID } from '../common';
-import { OlkilAiChatView } from './chat.view';
+import { IOlkilChatUiService } from '../common';
+import { OlkilAiOverlay } from './overlay';
 
 export const OLKIL_AI_TOGGLE_COMMAND = {
   id: 'olkil.ai.toggle',
   label: 'Toggle OLKIL Agent Chat',
 };
 
-@Domain(
-  ClientAppContribution,
-  ComponentContribution,
-  CommandContribution,
-  KeybindingContribution,
-  MenuContribution,
-)
+export const OLKIL_AI_MINIMIZE_COMMAND = {
+  id: 'olkil.ai.minimize',
+  label: 'Minimize OLKIL Agent Chat',
+};
+
+const OVERLAY_ROOT_ID = 'olkil-ai-overlay-root';
+
+/**
+ * The agent lives in a floating overlay rather than a workbench slot: that keeps
+ * the editor at full width, lets the panel fold itself into a corner pill when a
+ * file is opened, and gives us full control over the transition.
+ */
+@Domain(ClientAppContribution, CommandContribution, KeybindingContribution, MenuContribution)
 export class OlkilAiContribution
-  implements
-    ClientAppContribution,
-    ComponentContribution,
-    CommandContribution,
-    KeybindingContribution,
-    MenuContribution
+  implements ClientAppContribution, CommandContribution, KeybindingContribution, MenuContribution
 {
-  @Autowired(IMainLayoutService)
-  private layoutService!: IMainLayoutService;
+  @Autowired(AppConfig)
+  private appConfig!: AppConfig;
+
+  @Autowired(IOlkilChatUiService)
+  private ui!: IOlkilChatUiService;
+
+  private host?: HTMLDivElement;
+  private reactRoot?: Root;
 
   onDidStart() {
-    // Keep right panel closed by default for a clean first paint
+    this.ui.init();
+    this.mountOverlay();
   }
 
-  registerComponent(registry: ComponentRegistry) {
-    registry.register(OLKIL_AI_ID, [], {
-      containerId: OLKIL_AI_CONTAINER_ID,
-      iconClass: 'olkil-activity-icon',
-      title: 'OLKIL Agent',
-      component: OlkilAiChatView,
-      priority: 0,
-      activateKeyBinding: 'ctrlcmd+l',
-      expanded: true,
-    });
+  onStop() {
+    this.reactRoot?.unmount();
+    this.reactRoot = undefined;
+    this.host?.remove();
+    this.host = undefined;
+  }
+
+  private mountOverlay() {
+    if (this.host || document.getElementById(OVERLAY_ROOT_ID)) {
+      return;
+    }
+    const host = document.createElement('div');
+    host.id = OVERLAY_ROOT_ID;
+    document.body.appendChild(host);
+    this.host = host;
+
+    this.reactRoot = createRoot(host);
+    this.reactRoot.render(
+      React.createElement(
+        ConfigProvider,
+        { value: this.appConfig },
+        React.createElement(OlkilAiOverlay),
+      ),
+    );
   }
 
   registerCommands(commands: CommandRegistry) {
     commands.registerCommand(OLKIL_AI_TOGGLE_COMMAND, {
       execute: () => {
-        const handler = this.layoutService.getTabbarHandler(OLKIL_AI_CONTAINER_ID);
-        if (!handler) {
-          this.layoutService.toggleSlot(SlotLocation.right, true);
-          return;
-        }
-        if (handler.isActivated()) {
-          this.layoutService.toggleSlot(SlotLocation.right, false);
+        // Ctrl+L from a minimized pill should bring the panel back, not close it.
+        if (this.ui.state === 'minimized') {
+          this.ui.restore();
         } else {
-          this.layoutService.toggleSlot(SlotLocation.right, true, 360);
-          handler.activate();
+          this.ui.toggle();
         }
       },
+    });
+
+    commands.registerCommand(OLKIL_AI_MINIMIZE_COMMAND, {
+      execute: () => this.ui.minimize(),
     });
   }
 

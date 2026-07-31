@@ -1,0 +1,6 @@
+<Project>
+  <PropertyGroup>
+    <!-- Avoid MSB8040 when VS Spectre-mitigated libs are not installed -->
+    <SpectreMitigation>false</SpectreMitigation>
+  </PropertyGroup>
+</Project>

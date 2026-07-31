@@ -16,6 +16,15 @@ ide-electron/app/
 ide-electron/dist/
 ide-electron/lib/
 ide-electron/extensions/
+ide-electron/updates-feed/
+ide-electron/updates-feed-hostinger/
+ide-electron/build/olkil.env
+ide-electron/build/ollama/
+ide-electron/src/modules/olkil-ai/node/embedded-secrets.ts
+olkil-updates_*.zip
+olkil-site_*.zip
+# Root GH Actions need Workflows:write on fine-grained PAT
+.github/workflows/
 
 # Large local archives / installers
 *.zip
@@ -26,6 +35,7 @@ ide-electron/extensions/
 *.blockmap
 olkil-site/downloads/
 olkil-site_*.zip
+ide-electron/.ollama-setup/
 
 # Logs & caches
 *.log

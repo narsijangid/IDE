@@ -1,5 +1,7 @@
 import * as fs from 'fs';
+import * as os from 'os';
 import * as path from 'path';
+import { spawn } from 'child_process';
 import { Injectable } from '@opensumi/di';
 import fetch from 'node-fetch';
 import {
@@ -8,25 +10,94 @@ import {
   ChatMessage,
   ChatStreamState,
   ChatToolCall,
+  InvestigationResult,
   IOlkilAiNodeService,
+  OllamaSetupState,
+  RepositoryIndexStatus,
+  RepositoryGrepResult,
+  RepositoryOverview,
+  RepositorySearchResult,
+  RepositorySymbolResult,
 } from '../common';
 import { AI_MODELS, DEFAULT_MODEL_ID, findModel, AiProviderId } from '../common/models';
 import { AGENT_TOOLS } from '../common/tools';
+import { RepositoryIndexService } from './repository-index.service';
+import { ripgrepSearch } from './ripgrep';
+import { EMBEDDED_ENV, EMBEDDED_POOLSIDE_API_KEY } from './embedded-secrets';
 
-const OPENROUTER_URL = 'https://openrouter.ai/api/v1/chat/completions';
-const NVIDIA_URL = 'https://integrate.api.nvidia.com/v1/chat/completions';
-const SARVAM_URL = 'https://api.sarvam.ai/v1/chat/completions';
+const POOLSIDE_URL = 'https://inference.poolside.ai/v1/chat/completions';
+const DEFAULT_OLLAMA_BASE = 'http://127.0.0.1:11434';
+
+function formatBytes(n: number): string {
+  if (!Number.isFinite(n) || n <= 0) {
+    return '0 B';
+  }
+  const gb = n / (1024 * 1024 * 1024);
+  if (gb >= 1) {
+    return `${gb.toFixed(2)} GB`;
+  }
+  const mb = n / (1024 * 1024);
+  if (mb >= 1) {
+    return `${mb.toFixed(1)} MB`;
+  }
+  return `${Math.round(n / 1024)} KB`;
+}
 
 function loadDotEnv(): Record<string, string> {
-  const candidates = [
+  const candidates: string[] = [];
+
+  // Packaged Electron resources (main process / when resourcesPath exists)
+  if (typeof process.resourcesPath === 'string' && process.resourcesPath) {
+    candidates.push(path.join(process.resourcesPath, 'olkil.env'));
+  }
+
+  // OpenSumi node child often has no resourcesPath — resolve next to the .exe
+  try {
+    const execDir = path.dirname(process.execPath);
+    candidates.push(path.join(execDir, 'resources', 'olkil.env'));
+    candidates.push(path.join(execDir, 'olkil.env'));
+  } catch {
+    // ignore
+  }
+
+  if (process.env.OLKIL_RESOURCES_PATH) {
+    candidates.push(path.join(process.env.OLKIL_RESOURCES_PATH, 'olkil.env'));
+  }
+  if (process.env.MAC_RESOURCES_PATH) {
+    candidates.push(path.join(process.env.MAC_RESOURCES_PATH, 'olkil.env'));
+  }
+
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    const electron = require('electron') as {
+      app?: { getAppPath: () => string; getPath: (name: string) => string };
+    };
+    const app = electron.app;
+    if (app?.getAppPath) {
+      const appPath = app.getAppPath();
+      candidates.push(path.join(appPath, '..', 'olkil.env'));
+      candidates.push(path.join(path.dirname(appPath), 'olkil.env'));
+      candidates.push(path.join(appPath, 'olkil.env'));
+    }
+    if (app?.getPath) {
+      candidates.push(path.join(app.getPath('userData'), 'olkil.env'));
+      candidates.push(path.join(app.getPath('userData'), '.env'));
+    }
+  } catch {
+    // non-electron / OpenSumi node process
+  }
+
+  candidates.push(
     path.join(process.cwd(), '.env'),
     path.join(__dirname, '../../.env'),
     path.join(__dirname, '../../../.env'),
-  ];
-  const out: Record<string, string> = {};
+    path.join(__dirname, '../../../../.env'),
+  );
+
+  const out: Record<string, string> = { ...EMBEDDED_ENV };
   for (const file of candidates) {
     try {
-      if (!fs.existsSync(file)) {
+      if (!file || !fs.existsSync(file)) {
         continue;
       }
       const text = fs.readFileSync(file, 'utf8');
@@ -47,9 +118,11 @@ function loadDotEnv(): Record<string, string> {
         ) {
           value = value.slice(1, -1);
         }
-        out[key] = value;
+        if (value && !value.includes('your_')) {
+          // File values override embedded defaults
+          out[key] = value;
+        }
       }
-      break;
     } catch {
       // try next
     }
@@ -58,13 +131,10 @@ function loadDotEnv(): Record<string, string> {
 }
 
 function providerLabel(provider: AiProviderId): string {
-  if (provider === 'nvidia') {
-    return 'NVIDIA';
+  if (provider === 'ollama') {
+    return 'Ollama';
   }
-  if (provider === 'sarvam') {
-    return 'Sarvam';
-  }
-  return 'OpenRouter';
+  return 'Dazzlone';
 }
 
 /** Normalize OpenAI-style content (string | parts array | null). */
@@ -103,21 +173,489 @@ export function normalizeMessageContent(content: unknown): string {
 export class OlkilAiNodeService implements IOlkilAiNodeService {
   private env = loadDotEnv();
   private streams = new Map<string, ChatStreamState>();
+  private setup: OllamaSetupState = { phase: 'idle' };
+  private setupRunning = false;
+  private serveStarted = false;
+  private pullAbort: { abort: () => void } | null = null;
+  private pullIntent: 'run' | 'pause' | 'cancel' = 'run';
+  private readonly repositoryIndex = new RepositoryIndexService();
+
+  private refreshEnv() {
+    this.env = { ...loadDotEnv(), ...this.env };
+    // Prefer freshly loaded file values for keys that were empty
+    const fresh = loadDotEnv();
+    for (const [k, v] of Object.entries(fresh)) {
+      if (v) {
+        this.env[k] = v;
+      }
+    }
+  }
+
+  ensureRepositoryIndex(root: string): Promise<RepositoryIndexStatus> {
+    return this.repositoryIndex.ensure(root);
+  }
+
+  async getRepositoryIndexStatus(root: string): Promise<RepositoryIndexStatus> {
+    return this.repositoryIndex.statusFor(root);
+  }
+
+  searchRepository(root: string, query: string, limit?: number): Promise<RepositorySearchResult> {
+    return this.repositoryIndex.search(root, query, limit);
+  }
+
+  exactRepositorySearch(root: string, query: string, limit?: number): Promise<RepositorySearchResult> {
+    return this.repositoryIndex.exactSearch(root, query, limit);
+  }
+
+  grepRepository(
+    root: string,
+    query: string,
+    options?: { maxResults?: number; regex?: boolean; caseSensitive?: boolean },
+  ): Promise<RepositoryGrepResult> {
+    return ripgrepSearch(root, query, options);
+  }
+
+  findSymbolDefinitions(root: string, symbol: string, limit?: number): Promise<RepositorySymbolResult> {
+    return this.repositoryIndex.symbolDefinitions(root, symbol, limit);
+  }
+
+  findSymbolReferences(root: string, symbol: string, limit?: number): Promise<RepositorySymbolResult> {
+    return this.repositoryIndex.symbolReferences(root, symbol, limit);
+  }
+
+  getRepositoryOverview(root: string): Promise<RepositoryOverview> {
+    return this.repositoryIndex.overview(root);
+  }
+
+  getRelatedFiles(root: string, filePath: string, limit?: number): Promise<RepositorySearchResult> {
+    return this.repositoryIndex.related(root, filePath, limit);
+  }
+
+  findModules(root: string, query: string, limit?: number): Promise<RepositorySearchResult> {
+    return this.repositoryIndex.findModules(root, query, limit);
+  }
+
+  investigateRepository(root: string, query: string, limit?: number): Promise<InvestigationResult> {
+    return this.repositoryIndex.investigate(root, query, limit);
+  }
+
+  refreshRepositoryFiles(root: string, filePaths: string[]): Promise<void> {
+    return this.repositoryIndex.refreshFiles(root, filePaths);
+  }
 
   private getKey(provider: AiProviderId): string {
-    if (provider === 'nvidia') {
-      return process.env.NVIDIA_API_KEY || this.env.NVIDIA_API_KEY || '';
+    this.refreshEnv();
+    if (provider === 'ollama') {
+      return process.env.OLLAMA_API_KEY || this.env.OLLAMA_API_KEY || 'ollama';
     }
-    if (provider === 'sarvam') {
-      return process.env.SARVAM_API_KEY || this.env.SARVAM_API_KEY || '';
-    }
-    return process.env.OPENROUTER_API_KEY || this.env.OPENROUTER_API_KEY || '';
+    return (
+      process.env.POOLSIDE_API_KEY ||
+      this.env.POOLSIDE_API_KEY ||
+      EMBEDDED_POOLSIDE_API_KEY ||
+      ''
+    );
+  }
+
+  private get ollamaBase(): string {
+    const raw =
+      process.env.OLLAMA_BASE_URL || this.env.OLLAMA_BASE_URL || DEFAULT_OLLAMA_BASE;
+    return raw.replace(/\/$/, '');
   }
 
   private get maxTokens(): number {
-    const raw = process.env.OPENROUTER_MAX_TOKENS || this.env.OPENROUTER_MAX_TOKENS || '2048';
+    const raw = process.env.OLKIL_MAX_TOKENS || this.env.OLKIL_MAX_TOKENS || '2048';
     const n = Number(raw);
-    return Number.isFinite(n) && n > 0 ? Math.min(Math.floor(n), 4096) : 2048;
+    return Number.isFinite(n) && n > 0 ? Math.min(Math.floor(n), 8192) : 2048;
+  }
+
+  /** Cap oversized tool/user payloads so cloud APIs don't 500 on huge bodies. */
+  private slimMessages(messages: ChatMessage[]): ChatMessage[] {
+    // Evidence dossiers need more room than ordinary chat. Retry logic still
+    // shrinks aggressively if a provider rejects the larger payload.
+    const MAX_MSG = 18_000;
+    const MAX_TOOL = 14_000;
+    return messages.map((m) => {
+      const content =
+        typeof m.content === 'string'
+          ? m.content.length > (m.role === 'tool' ? MAX_TOOL : MAX_MSG)
+            ? `${m.content.slice(0, m.role === 'tool' ? MAX_TOOL : MAX_MSG)}\n\n/* truncated for API size */`
+            : m.content
+          : m.content;
+      return { ...m, content };
+    });
+  }
+
+  private async isOllamaReachable(): Promise<boolean> {
+    try {
+      const res = await fetch(`${this.ollamaBase}/api/tags`, { method: 'GET' });
+      return Boolean(res?.ok);
+    } catch {
+      return false;
+    }
+  }
+
+  // ---------------------------------------------------------------------------
+  // Local AI (Ollama) auto-setup — zero manual steps for end users.
+  // ---------------------------------------------------------------------------
+
+  /** Candidate locations for the ollama executable (bundled first, then system). */
+  private ollamaBinaryCandidates(): string[] {
+    const exe = process.platform === 'win32' ? 'ollama.exe' : 'ollama';
+    const list: string[] = [];
+    const envPath = process.env.OLLAMA_PATH || this.env.OLLAMA_PATH;
+    if (envPath) {
+      list.push(envPath);
+    }
+    // Bundled with the packaged app (see build/pack.js extraResources → "ollama/")
+    const resourcesPath = (process as any).resourcesPath as string | undefined;
+    if (resourcesPath) {
+      list.push(path.join(resourcesPath, 'ollama', exe));
+    }
+    // Also relative to the running bundle during dev/packaged node fork
+    list.push(path.join(__dirname, '..', 'ollama', exe));
+    list.push(path.join(process.cwd(), 'ollama', exe));
+
+    if (process.platform === 'win32') {
+      const local = process.env.LOCALAPPDATA;
+      if (local) {
+        list.push(path.join(local, 'Programs', 'Ollama', exe));
+      }
+      list.push('C:\\Program Files\\Ollama\\ollama.exe');
+    } else if (process.platform === 'darwin') {
+      list.push('/Applications/Ollama.app/Contents/Resources/ollama');
+      list.push('/opt/homebrew/bin/ollama');
+      list.push('/usr/local/bin/ollama');
+    } else {
+      list.push('/usr/local/bin/ollama');
+      list.push('/usr/bin/ollama');
+    }
+    // Last resort: rely on PATH
+    list.push(exe);
+    return list;
+  }
+
+  private findOllamaBinary(): string | undefined {
+    for (const candidate of this.ollamaBinaryCandidates()) {
+      try {
+        // Bare "ollama" (PATH lookup) has no separator — accept as a fallback.
+        if (!candidate.includes(path.sep) && !candidate.includes('/')) {
+          return candidate;
+        }
+        if (fs.existsSync(candidate)) {
+          return candidate;
+        }
+      } catch {
+        // ignore
+      }
+    }
+    return undefined;
+  }
+
+  private async waitForOllama(timeoutMs = 20000): Promise<boolean> {
+    const start = Date.now();
+    while (Date.now() - start < timeoutMs) {
+      if (await this.isOllamaReachable()) {
+        return true;
+      }
+      await new Promise((r) => setTimeout(r, 700));
+    }
+    return this.isOllamaReachable();
+  }
+
+  private async startOllamaServe(): Promise<boolean> {
+    if (await this.isOllamaReachable()) {
+      return true;
+    }
+    const bin = this.findOllamaBinary();
+    if (!bin) {
+      return false;
+    }
+    try {
+      const child = spawn(bin, ['serve'], {
+        detached: true,
+        stdio: 'ignore',
+        windowsHide: true,
+        env: { ...process.env, OLLAMA_HOST: this.ollamaBase.replace(/^https?:\/\//, '') },
+      });
+      child.unref();
+      this.serveStarted = true;
+    } catch {
+      return false;
+    }
+    return this.waitForOllama();
+  }
+
+  private async listInstalledModels(): Promise<string[]> {
+    try {
+      const res = await fetch(`${this.ollamaBase}/api/tags`, { method: 'GET' });
+      if (!res.ok) {
+        return [];
+      }
+      const data: any = await res.json();
+      const models = Array.isArray(data?.models) ? data.models : [];
+      return models.map((m: any) => String(m?.name || m?.model || ''));
+    } catch {
+      return [];
+    }
+  }
+
+  private modelInstalled(installed: string[], model: string): boolean {
+    // Ollama tags come back like "qwen2.5-coder:7b"; a name without a tag
+    // implies ":latest".
+    const want = model.includes(':') ? model : `${model}:latest`;
+    return installed.some((name) => name === model || name === want);
+  }
+
+  async getSetupState(): Promise<OllamaSetupState> {
+    return this.setup;
+  }
+
+  async pauseLocalModelDownload(): Promise<OllamaSetupState> {
+    if (this.setup.phase !== 'pulling' && this.setup.phase !== 'starting' && this.setup.phase !== 'checking') {
+      return this.setup;
+    }
+    this.pullIntent = 'pause';
+    try {
+      this.pullAbort?.abort();
+    } catch {
+      // ignore
+    }
+    this.setup = {
+      ...this.setup,
+      phase: 'paused',
+      message: `Download paused at ${this.setup.percent ?? 0}%. Click Resume to continue.`,
+    };
+    return this.setup;
+  }
+
+  async cancelLocalModelDownload(): Promise<OllamaSetupState> {
+    this.pullIntent = 'cancel';
+    try {
+      this.pullAbort?.abort();
+    } catch {
+      // ignore
+    }
+    const model = this.setup.model;
+    this.setup = {
+      phase: 'cancelled',
+      model,
+      percent: 0,
+      message: 'Download cancelled. You can start again anytime.',
+    };
+    this.setupRunning = false;
+    return this.setup;
+  }
+
+  async ensureLocalModel(modelId?: string): Promise<OllamaSetupState> {
+    const option = findModel(modelId || DEFAULT_MODEL_ID);
+    // Only meaningful for local provider.
+    if (option.provider !== 'ollama') {
+      this.setup = { phase: 'ready', model: option.model };
+      return this.setup;
+    }
+    if (this.setupRunning && this.pullIntent === 'run') {
+      return this.setup;
+    }
+    this.pullIntent = 'run';
+    this.setupRunning = true;
+    // Run in background; browser polls getSetupState().
+    void this.runLocalSetup(option.model).finally(() => {
+      this.setupRunning = false;
+    });
+    return this.setup;
+  }
+
+  private async runLocalSetup(model: string): Promise<void> {
+    try {
+      this.setup = { phase: 'checking', model, message: 'Checking local AI…' };
+
+      if (!(await this.isOllamaReachable())) {
+        this.setup = { phase: 'starting', model, message: 'Starting local AI engine…' };
+        const started = await this.startOllamaServe();
+        if (!started) {
+          this.setup = {
+            phase: 'error',
+            model,
+            error:
+              'Local AI engine (Ollama) not found. Install Ollama from https://ollama.com or reinstall OLKIL with the bundled engine.',
+          };
+          return;
+        }
+      }
+
+      if (this.pullIntent === 'cancel') {
+        return;
+      }
+
+      const installed = await this.listInstalledModels();
+      if (this.modelInstalled(installed, model)) {
+        this.setup = {
+          phase: 'ready',
+          model,
+          percent: 100,
+          message: `${model} is ready on your machine.`,
+        };
+        return;
+      }
+
+      await this.pullModel(model);
+    } catch (e: any) {
+      if (this.pullIntent === 'pause') {
+        this.setup = {
+          ...this.setup,
+          phase: 'paused',
+          model,
+          message: `Download paused at ${this.setup.percent ?? 0}%. Click Resume to continue.`,
+        };
+        return;
+      }
+      if (this.pullIntent === 'cancel') {
+        this.setup = {
+          phase: 'cancelled',
+          model,
+          percent: 0,
+          message: 'Download cancelled. You can start again anytime.',
+        };
+        return;
+      }
+      this.setup = {
+        phase: 'error',
+        model,
+        error: e?.message || String(e),
+      };
+    }
+  }
+
+  private async pullModel(model: string): Promise<void> {
+    const prevPercent = this.setup.phase === 'paused' ? this.setup.percent || 0 : 0;
+    this.setup = {
+      phase: 'pulling',
+      model,
+      percent: prevPercent,
+      totalBytes: this.setup.totalBytes,
+      completedBytes: this.setup.completedBytes,
+      message: `Downloading Ollama model ${model} to your computer…`,
+    };
+
+    let aborted = false;
+    let bodyRef: any = null;
+    const abortHandle = {
+      abort: () => {
+        aborted = true;
+        try {
+          bodyRef?.destroy?.();
+        } catch {
+          // ignore
+        }
+      },
+    };
+    this.pullAbort = abortHandle;
+
+    const res = await fetch(`${this.ollamaBase}/api/pull`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: model, stream: true }),
+    });
+
+    if (aborted || this.pullIntent !== 'run') {
+      throw new Error('aborted');
+    }
+
+    if (!res.ok) {
+      const raw = await res.text();
+      throw new Error(`Model download failed (${res.status}): ${raw.slice(0, 300)}`);
+    }
+
+    const body: any = (res as any).body;
+    bodyRef = body;
+
+    if (!body || typeof body.on !== 'function') {
+      await res.text();
+      if (aborted || this.pullIntent !== 'run') {
+        throw new Error('aborted');
+      }
+      this.setup = {
+        phase: 'ready',
+        model,
+        percent: 100,
+        message: `${model} downloaded — ready to use locally.`,
+      };
+      return;
+    }
+
+    let buffer = '';
+    await new Promise<void>((resolve, reject) => {
+      body.on('data', (chunk: Buffer) => {
+        if (aborted || this.pullIntent !== 'run') {
+          try {
+            body.destroy();
+          } catch {
+            // ignore
+          }
+          reject(new Error('aborted'));
+          return;
+        }
+        buffer += chunk.toString('utf8');
+        const lines = buffer.split('\n');
+        buffer = lines.pop() || '';
+        for (const line of lines) {
+          const trimmed = line.trim();
+          if (!trimmed) {
+            continue;
+          }
+          try {
+            const json = JSON.parse(trimmed);
+            if (json.error) {
+              reject(new Error(String(json.error)));
+              return;
+            }
+            const total = Number(json.total) || 0;
+            const completed = Number(json.completed) || 0;
+            const percent =
+              total > 0
+                ? Math.min(100, Math.round((completed / total) * 100))
+                : typeof this.setup.percent === 'number'
+                  ? this.setup.percent
+                  : 0;
+            const status = typeof json.status === 'string' ? json.status : '';
+            const sizeHint =
+              total > 0 ? ` ${formatBytes(completed)} / ${formatBytes(total)}` : '';
+            this.setup = {
+              phase: 'pulling',
+              model,
+              percent,
+              totalBytes: total || this.setup.totalBytes,
+              completedBytes: completed || this.setup.completedBytes,
+              message: `Downloading Ollama model ${model}… ${percent}%${sizeHint}${
+                status ? ` · ${status}` : ''
+              }`,
+            };
+          } catch {
+            // ignore partial json
+          }
+        }
+      });
+      body.on('end', () => resolve());
+      body.on('error', (err: Error) => {
+        if (aborted || this.pullIntent !== 'run') {
+          reject(new Error('aborted'));
+          return;
+        }
+        reject(err);
+      });
+    });
+
+    if (aborted || this.pullIntent !== 'run') {
+      throw new Error('aborted');
+    }
+
+    this.setup = {
+      phase: 'ready',
+      model,
+      percent: 100,
+      message: `${model} downloaded — ready to use locally.`,
+    };
+    this.pullAbort = null;
   }
 
   async listModels() {
@@ -126,16 +664,60 @@ export class OlkilAiNodeService implements IOlkilAiNodeService {
       provider: m.provider,
       model: m.model,
       label: m.label,
+      displayName: m.displayName,
+      badge: m.badge,
+      approxSizeGb: m.approxSizeGb,
     }));
   }
 
-  async hasApiKey(provider?: string): Promise<boolean> {
-    if (provider === 'nvidia' || provider === 'openrouter' || provider === 'sarvam') {
-      return Boolean(this.getKey(provider as AiProviderId));
+  async getLocalModelStatus(modelId?: string) {
+    const option = findModel(modelId || DEFAULT_MODEL_ID);
+    if (option.provider !== 'ollama') {
+      return {
+        modelId: option.id,
+        provider: option.provider,
+        model: option.model,
+        engineRunning: true,
+        installed: true,
+        approxSizeGb: option.approxSizeGb,
+      };
     }
-    return Boolean(
-      this.getKey('openrouter') || this.getKey('nvidia') || this.getKey('sarvam'),
-    );
+
+    let engineRunning = await this.isOllamaReachable();
+    if (!engineRunning) {
+      // Quietly try to wake the bundled/system engine so we can read /api/tags.
+      await this.startOllamaServe();
+      engineRunning = await this.isOllamaReachable();
+    }
+
+    let installed = false;
+    if (engineRunning) {
+      const list = await this.listInstalledModels();
+      installed = this.modelInstalled(list, option.model);
+    }
+
+    return {
+      modelId: option.id,
+      provider: option.provider,
+      model: option.model,
+      engineRunning,
+      installed,
+      approxSizeGb: option.approxSizeGb,
+    };
+  }
+
+  async hasApiKey(provider?: string): Promise<boolean> {
+    if (provider === 'ollama') {
+      return this.isOllamaReachable();
+    }
+    if (provider === 'poolside') {
+      return Boolean(this.getKey('poolside'));
+    }
+    // Any usable backend
+    if (await this.isOllamaReachable()) {
+      return true;
+    }
+    return Boolean(this.getKey('poolside'));
   }
 
   async getModelName(modelId?: string): Promise<string> {
@@ -150,8 +732,26 @@ export class OlkilAiNodeService implements IOlkilAiNodeService {
   async chatCompletion(request: ChatCompletionRequest): Promise<ChatCompletionResult> {
     const option = findModel(request.modelId || DEFAULT_MODEL_ID);
     const apiKey = this.getKey(option.provider);
-    if (!apiKey) {
-      throw new Error(`${providerLabel(option.provider)} API key missing. Add it to .env`);
+
+    if (option.provider === 'ollama') {
+      if (!(await this.isOllamaReachable())) {
+        await this.startOllamaServe();
+      }
+      if (!(await this.isOllamaReachable())) {
+        throw new Error(
+          `Ollama is not running. Click “Download Ollama model” to start the engine, or install Ollama.`,
+        );
+      }
+      const installed = await this.listInstalledModels();
+      if (!this.modelInstalled(installed, option.model)) {
+        throw new Error(
+          `Ollama model "${option.model}" is not downloaded yet. Click “Download Ollama model” and wait until 100%.`,
+        );
+      }
+    } else if (!apiKey) {
+      throw new Error(
+        `${providerLabel(option.provider)} is not configured. Rebuild OLKIL with POOLSIDE_API_KEY in ide-electron/.env (packaged into the app).`,
+      );
     }
 
     const useStream = Boolean(request.stream && request.streamId);
@@ -159,14 +759,26 @@ export class OlkilAiNodeService implements IOlkilAiNodeService {
       this.streams.set(request.streamId, { text: '', done: false });
     }
 
-    const messages = request.messages.map((m) => this.serializeMessage(m));
+    const messages = this.slimMessages(request.messages).map((m) => this.serializeMessage(m));
+    const tokenBudget =
+      request.maxTokens && request.maxTokens > 0
+        ? Math.min(Math.floor(request.maxTokens), 8192)
+        : this.maxTokens;
     const body: Record<string, unknown> = {
       model: option.model,
       messages,
       temperature: 0.2,
-      max_tokens: this.maxTokens,
+      max_tokens: tokenBudget,
       stream: useStream,
     };
+
+    // Poolside Laguna can spend huge budgets on thinking; keep agent turns bounded.
+    if (option.provider === 'poolside') {
+      body.chat_template_kwargs = { enable_thinking: false };
+      if (!request.maxTokens) {
+        body.max_tokens = Math.min(tokenBudget, 2048);
+      }
+    }
 
     // Providers reject histories containing tool messages unless `tools` is also
     // sent, so keep the declarations even when forcing tool_choice: 'none'.
@@ -183,26 +795,20 @@ export class OlkilAiNodeService implements IOlkilAiNodeService {
       body.tool_choice = 'none';
     }
 
-    let url = OPENROUTER_URL;
-    if (option.provider === 'nvidia') {
-      url = NVIDIA_URL;
-    } else if (option.provider === 'sarvam') {
-      url = SARVAM_URL;
-    }
+    const url =
+      option.provider === 'ollama'
+        ? `${this.ollamaBase}/v1/chat/completions`
+        : POOLSIDE_URL;
 
     const headers: Record<string, string> = {
       'Content-Type': 'application/json',
     };
 
-    if (option.provider === 'sarvam') {
-      headers['api-subscription-key'] = apiKey;
+    if (option.provider === 'ollama') {
+      // OpenAI-compat shim accepts a dummy bearer; some builds omit it.
+      headers.Authorization = `Bearer ${apiKey || 'ollama'}`;
     } else {
       headers.Authorization = `Bearer ${apiKey}`;
-    }
-
-    if (option.provider === 'openrouter') {
-      headers['HTTP-Referer'] = 'https://olkil.local';
-      headers['X-Title'] = 'OLKIL Agent';
     }
 
     try {
@@ -215,6 +821,11 @@ export class OlkilAiNodeService implements IOlkilAiNodeService {
       if (!res.ok) {
         const raw = await res.text();
         const err = `${option.provider} API ${res.status}: ${raw.slice(0, 500)}`;
+        // Soft-retry once at the node layer for flaky 5xx (Poolside long jobs).
+        if ([500, 502, 503, 504].includes(res.status) && !(request as any).__retried) {
+          await new Promise((r) => setTimeout(r, 900));
+          return this.chatCompletion({ ...request, __retried: true } as any);
+        }
         if (useStream && request.streamId) {
           this.streams.set(request.streamId, { text: '', done: true, error: err });
         }

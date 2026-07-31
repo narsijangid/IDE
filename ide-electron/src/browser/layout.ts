@@ -16,8 +16,10 @@ export const customLayoutConfig: LayoutConfig = {
       '@opensumi/ide-debug',
     ],
   },
+  // The OLKIL agent renders as a floating overlay (see `olkil-ai.contribution`),
+  // so the right rail stays collapsed and the editor keeps the full width.
   [SlotLocation.right]: {
-    modules: ['olkil-ai'],
+    modules: [],
   },
   [SlotLocation.main]: {
     modules: ['@opensumi/ide-editor'],

@@ -3,6 +3,7 @@ import { app } from 'electron';
 import { launch } from './launch';
 import minimist from 'minimist';
 import { existsSync } from 'fs-extra';
+import { startAutoUpdater } from './services/auto-update';
 
 const launchFromCommandLine = (processArgv: string[], workingDirectory: string): Promise<void> => {
   console.log('processArgv', processArgv);
@@ -41,6 +42,10 @@ if (!isSingleInstance) {
 
 app.on('second-instance', (event, commandLine, workingDirectory) => {
   launchFromCommandLine(commandLine, workingDirectory).catch(console.error);
+});
+
+app.whenReady().then(() => {
+  startAutoUpdater();
 });
 
 launchFromCommandLine(process.argv, process.cwd()).catch(console.error);

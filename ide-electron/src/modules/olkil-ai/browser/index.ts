@@ -1,7 +1,8 @@
 import { Injectable, Provider } from '@opensumi/di';
 import { BrowserModule } from '@opensumi/ide-core-browser';
-import { IOlkilChatService, OlkilAiNodeServicePath } from '../common';
+import { IOlkilChatService, IOlkilChatUiService, OlkilAiNodeServicePath } from '../common';
 import { OlkilChatService } from './chat.service';
+import { OlkilChatUiService } from './chat.ui.service';
 import { OlkilAiContribution } from './olkil-ai.contribution';
 
 @Injectable()
@@ -11,6 +12,10 @@ export class OlkilAiModule extends BrowserModule {
     {
       token: IOlkilChatService,
       useClass: OlkilChatService,
+    },
+    {
+      token: IOlkilChatUiService,
+      useClass: OlkilChatUiService,
     },
   ];
 

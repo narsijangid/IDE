@@ -1,0 +1,330 @@
+/*
+ * Floating shell for the agent panel.
+ *
+ * Perf rules kept throughout this file:
+ *  - every transition animates only `transform` / `opacity` (compositor-only)
+ *  - the panel is opaque, so nothing behind it is repainted while it scrolls
+ *  - `contain` is set on the panel so chat updates never invalidate workbench layout
+ */
+
+.host {
+  position: fixed;
+  inset: 0;
+  z-index: 300;
+  pointer-events: none;
+
+  --olkil-inset-top: 0px;
+  --olkil-inset-bottom: 24px;
+  /* Sits just under the editor tab strip so tab actions stay clickable. */
+  --olkil-anchor-top: calc(var(--olkil-inset-top) + 44px);
+  --olkil-accent: #6d8bff;
+}
+
+.host > * {
+  pointer-events: auto;
+}
+
+/* —— Launcher / minimized chips —— */
+
+.chip {
+  position: absolute;
+  top: var(--olkil-anchor-top);
+  right: 14px;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  appearance: none;
+  padding: 0;
+  color: rgba(255, 255, 255, 0.92);
+  cursor: pointer;
+  transform-origin: top right;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  background: linear-gradient(155deg, rgba(48, 52, 70, 0.92), rgba(24, 25, 34, 0.94));
+  box-shadow: 0 8px 22px rgba(0, 0, 0, 0.45), inset 0 1px 0 rgba(255, 255, 255, 0.09);
+  backdrop-filter: blur(10px);
+  will-change: transform, opacity;
+  transition: transform 0.26s cubic-bezier(0.22, 1, 0.36, 1), opacity 0.18s ease,
+    box-shadow 0.2s ease, border-color 0.2s ease, visibility 0s;
+}
+
+.chip:hover {
+  border-color: rgba(129, 152, 255, 0.55);
+  box-shadow: 0 10px 26px rgba(0, 0, 0, 0.5), 0 0 0 3px rgba(109, 139, 255, 0.18),
+    inset 0 1px 0 rgba(255, 255, 255, 0.12);
+  transform: translateY(-1px);
+}
+
+.chip:active {
+  transform: scale(0.96);
+}
+
+.chip:focus-visible {
+  outline: 2px solid var(--olkil-accent);
+  outline-offset: 2px;
+}
+
+.chipHidden {
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+  transform: scale(0.62) translate3d(6px, -10px, 0);
+  transition: transform 0.2s ease, opacity 0.14s ease, visibility 0s linear 0.2s;
+}
+
+.launcher {
+  width: 36px;
+  height: 36px;
+  justify-content: center;
+  border-radius: 50%;
+}
+
+.chipGlyph {
+  color: #a9bcff;
+  flex-shrink: 0;
+  filter: drop-shadow(0 0 6px rgba(109, 139, 255, 0.55));
+}
+
+.pill {
+  height: 32px;
+  padding: 0 11px 0 10px;
+  border-radius: 999px;
+  font-size: 11.5px;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+}
+
+.pillLabel {
+  max-width: 96px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: rgba(255, 255, 255, 0.78);
+}
+
+.chipDot {
+  position: absolute;
+  top: 5px;
+  right: 5px;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: #4ade80;
+  box-shadow: 0 0 0 2px rgba(20, 21, 28, 0.9);
+}
+
+.pillDot {
+  position: static;
+  box-shadow: none;
+  flex-shrink: 0;
+}
+
+.chipDotBusy {
+  background: var(--olkil-accent);
+  animation: olkilPulse 1.25s ease-in-out infinite;
+}
+
+@keyframes olkilPulse {
+  0%,
+  100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 0.35;
+    transform: scale(0.72);
+  }
+}
+
+/* —— Panel —— */
+
+.panel {
+  position: absolute;
+  top: calc(var(--olkil-inset-top) + 8px);
+  right: 10px;
+  bottom: calc(var(--olkil-inset-bottom) + 8px);
+  width: var(--olkil-panel-width, 440px);
+  max-width: calc(100vw - 120px);
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  border-radius: 14px;
+  border: 1px solid rgba(255, 255, 255, 0.11);
+  background: linear-gradient(180deg, #202128 0%, #1a1b21 22%, #17181d 100%);
+  box-shadow: 0 24px 64px rgba(0, 0, 0, 0.55), 0 2px 8px rgba(0, 0, 0, 0.4),
+    inset 0 1px 0 rgba(255, 255, 255, 0.06);
+  overflow: hidden;
+  transform-origin: top right;
+  contain: layout paint style;
+  will-change: transform, opacity;
+  animation: olkilPanelIn 0.34s cubic-bezier(0.22, 1, 0.36, 1);
+  transition: transform 0.3s cubic-bezier(0.22, 1, 0.36, 1), opacity 0.2s ease,
+    width 0.3s cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+@keyframes olkilPanelIn {
+  from {
+    opacity: 0;
+    transform: translate3d(26px, -20px, 0) scale(0.95);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+.panelExpanded {
+  width: min(1080px, calc(100vw - 140px));
+}
+
+/* Folded into the pill: shrinks toward the chip anchor in the top-right. */
+.panelHidden {
+  opacity: 0;
+  transform: translate3d(28px, -26px, 0) scale(0.92);
+  pointer-events: none;
+}
+
+/* Applied once the fold-away animation ends so the panel stops compositing. */
+.panelOffscreen {
+  visibility: hidden;
+  content-visibility: hidden;
+}
+
+.panelResizing {
+  transition: none;
+  user-select: none;
+}
+
+.resizeGrip {
+  position: absolute;
+  top: 0;
+  left: 0;
+  bottom: 0;
+  width: 7px;
+  cursor: ew-resize;
+  z-index: 3;
+}
+
+.resizeGrip::after {
+  content: '';
+  position: absolute;
+  top: 18%;
+  bottom: 18%;
+  left: 2px;
+  width: 2px;
+  border-radius: 2px;
+  background: transparent;
+  transition: background 0.16s ease;
+}
+
+.resizeGrip:hover::after {
+  background: rgba(109, 139, 255, 0.65);
+}
+
+/* —— Title bar —— */
+
+.titleBar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+  height: 38px;
+  padding: 0 8px 0 12px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.07);
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.045), rgba(255, 255, 255, 0));
+}
+
+.brand {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+}
+
+.brand img {
+  display: block;
+  border-radius: 4px;
+  object-fit: contain;
+  flex-shrink: 0;
+}
+
+.brandName {
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.11em;
+  color: rgba(255, 255, 255, 0.94);
+}
+
+.brandSub {
+  font-size: 11px;
+  font-weight: 500;
+  color: rgba(255, 255, 255, 0.42);
+}
+
+.liveTag {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  color: rgba(255, 255, 255, 0.34);
+}
+
+.liveTagBusy {
+  color: #a9bcff;
+}
+
+.titleActions {
+  display: flex;
+  align-items: center;
+  gap: 1px;
+  flex-shrink: 0;
+}
+
+.iconBtn {
+  appearance: none;
+  border: none;
+  background: transparent;
+  color: rgba(255, 255, 255, 0.55);
+  width: 26px;
+  height: 26px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: background 0.14s ease, color 0.14s ease;
+}
+
+.iconBtn:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.09);
+  color: rgba(255, 255, 255, 0.95);
+}
+
+.iconBtn:disabled {
+  opacity: 0.32;
+  cursor: default;
+}
+
+.iconBtn:focus-visible {
+  outline: 1px solid var(--olkil-accent);
+  outline-offset: -1px;
+}
+
+.iconBtnOn {
+  color: #a9bcff;
+  background: rgba(109, 139, 255, 0.16);
+}
+
+.iconBtnDanger:hover:not(:disabled) {
+  background: rgba(248, 81, 73, 0.18);
+  color: #ff9b95;
+}
+
+.panelBody {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+}

@@ -1,7 +1,7 @@
 import os from 'os';
 import { join } from 'path';
 import { app } from 'electron';
-import { existsSync, statSync, ensureDir } from 'fs-extra';
+import { existsSync, statSync, ensureDir, readFileSync } from 'fs-extra';
 import { ElectronMainApp } from '@opensumi/ide-core-electron-main';
 import { isOSX, URI } from '@opensumi/ide-core-common';
 import { MainModule } from './services';
@@ -20,6 +20,51 @@ const getResourcesPath = () => {
   }
   return appPath;
 };
+
+/** Load packaged olkil.env into process.env so the OpenSumi node child inherits Dazzlone keys. */
+function hydrateEnvFromResources() {
+  const resources = getResourcesPath();
+  process.env.OLKIL_RESOURCES_PATH = resources;
+  if (isOSX) {
+    process.env.MAC_RESOURCES_PATH = resources;
+  }
+  const candidates = [join(resources, 'olkil.env'), join(resources, '..', 'olkil.env')];
+  for (const file of candidates) {
+    try {
+      if (!existsSync(file)) {
+        continue;
+      }
+      const text = readFileSync(file, 'utf8');
+      for (const line of text.split(/\r?\n/)) {
+        const trimmed = line.trim();
+        if (!trimmed || trimmed.startsWith('#')) {
+          continue;
+        }
+        const eq = trimmed.indexOf('=');
+        if (eq <= 0) {
+          continue;
+        }
+        const key = trimmed.slice(0, eq).trim();
+        let value = trimmed.slice(eq + 1).trim();
+        if (
+          (value.startsWith('"') && value.endsWith('"')) ||
+          (value.startsWith("'") && value.endsWith("'"))
+        ) {
+          value = value.slice(1, -1);
+        }
+        if (key && value && !process.env[key]) {
+          process.env[key] = value;
+        }
+      }
+      break;
+    } catch {
+      // try next
+    }
+  }
+}
+
+hydrateEnvFromResources();
+
 export interface ThemeData {
   menuBarBackground?: string;
   sideBarBackground?: string;
@@ -30,11 +75,6 @@ export interface ThemeData {
 
 const getExtensionDir = () => join(getResourcesPath(), 'extensions');
 const getUserExtensionDir = () => join(join(os.homedir(), Constants.DATA_FOLDER), 'extensions');
-
-if (isOSX) {
-  process.env.MAC_RESOURCES_PATH = getResourcesPath();
-  console.log('MAC_RESOURCES_PATH', process.env.MAC_RESOURCES_PATH);
-}
 
 const injector = new Injector([
   {
