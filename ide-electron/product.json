@@ -2,7 +2,7 @@
   "productName": "OLKIL",
   "applicationName": "olkil",
   "dataFolderName": ".olkil",
-  "version": "1.3.12",
+  "version": "1.3.13",
   "urlProtocol": "olkil",
   "updateUrl": "https://updates.olkil.com",
   "serverApp": { "marketplace": {} },

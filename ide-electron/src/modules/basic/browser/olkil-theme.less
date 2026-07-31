@@ -1,0 +1,72 @@
+/**
+ * OLKIL Black + Yellow workbench accents.
+ * Overrides OpenSumi CSS variables so chrome stays clean and consistent
+ * even when the active color theme falls back to VS Code blue defaults.
+ */
+
+:root {
+  --olkil-yellow: #f0c000;
+  --olkil-yellow-strong: #ffd20a;
+  --olkil-yellow-soft: rgba(240, 192, 0, 0.22);
+  --olkil-on-yellow: #141414;
+
+  /* Status bar — the bright blue strip becomes yellow */
+  --statusBar-background: var(--olkil-yellow) !important;
+  --statusBar-foreground: var(--olkil-on-yellow) !important;
+  --statusBar-noFolderBackground: var(--olkil-yellow) !important;
+  --statusBar-noFolderForeground: var(--olkil-on-yellow) !important;
+  --statusBar-debuggingBackground: #e08900 !important;
+  --statusBar-debuggingForeground: var(--olkil-on-yellow) !important;
+  --statusBarItem-remoteBackground: #c9a000 !important;
+  --statusBarItem-remoteForeground: var(--olkil-on-yellow) !important;
+  --statusBarItem-errorForeground: #ffffff !important;
+  --statusBarItem-warningForeground: #ffffff !important;
+
+  /* Activity bar badge (e.g. SCM count) */
+  --activityBarBadge-background: var(--olkil-yellow) !important;
+  --activityBarBadge-foreground: var(--olkil-on-yellow) !important;
+  --activityBar-activeBorder: var(--olkil-yellow) !important;
+  --activityBar-activeFocusBorder: var(--olkil-yellow) !important;
+
+  /* Focus / selection accents */
+  --focusBorder: var(--olkil-yellow) !important;
+  --sash-hoverBorder: var(--olkil-yellow) !important;
+  --badge-background: var(--olkil-yellow) !important;
+  --badge-foreground: var(--olkil-on-yellow) !important;
+  --progressBar-background: var(--olkil-yellow) !important;
+  --button-background: var(--olkil-yellow) !important;
+  --button-foreground: var(--olkil-on-yellow) !important;
+  --button-hoverBackground: var(--olkil-yellow-strong) !important;
+  --button-secondaryBackground: #2a2a2a !important;
+  --button-secondaryForeground: #f5f5f5 !important;
+  --inputOption-activeBorder: var(--olkil-yellow) !important;
+  --inputOption-activeBackground: var(--olkil-yellow-soft) !important;
+  --inputValidation-infoBorder: var(--olkil-yellow) !important;
+  --list-focusOutline: var(--olkil-yellow) !important;
+  --list-activeSelectionBackground: rgba(240, 192, 0, 0.28) !important;
+  --list-activeSelectionForeground: #ffffff !important;
+  --list-inactiveSelectionBackground: rgba(240, 192, 0, 0.14) !important;
+  --list-hoverBackground: rgba(255, 255, 255, 0.05) !important;
+  --panelTitle-activeBorder: var(--olkil-yellow) !important;
+  --tab-activeBorderTop: var(--olkil-yellow) !important;
+  --tab-activeBorder: var(--olkil-yellow) !important;
+  --editor-selectionHighlightBackground: rgba(240, 192, 0, 0.18) !important;
+  --editorLineHighlight-border: rgba(240, 192, 0, 0.35) !important;
+  --scrollbarSlider-activeBackground: rgba(240, 192, 0, 0.45) !important;
+  --menubar-selectionBackground: rgba(240, 192, 0, 0.18) !important;
+  --menu-selectionBackground: rgba(240, 192, 0, 0.28) !important;
+  --peekView-border: var(--olkil-yellow) !important;
+  --notificationLink-foreground: var(--olkil-yellow-strong) !important;
+  --textLink-foreground: #f0c000 !important;
+  --textLink-activeForeground: #ffd84a !important;
+}
+
+/* Hard fallback — theme service can rewrite vars without !important mid-session */
+#statusBar {
+  background-color: var(--olkil-yellow) !important;
+  color: var(--olkil-on-yellow) !important;
+}
+
+#statusBar .codicon {
+  color: var(--olkil-on-yellow) !important;
+}
