@@ -1,72 +1,93 @@
 /**
- * OLKIL Black + Yellow workbench accents.
- * Overrides OpenSumi CSS variables so chrome stays clean and consistent
- * even when the active color theme falls back to VS Code blue defaults.
+ * OLKIL Black + Pink chrome.
+ * Accent: #fe019a on deep black workbench.
  */
 
 :root {
-  --olkil-yellow: #f0c000;
-  --olkil-yellow-strong: #ffd20a;
-  --olkil-yellow-soft: rgba(240, 192, 0, 0.22);
-  --olkil-on-yellow: #141414;
+  --olkil-pink: #fe019a;
+  --olkil-pink-strong: #ff4db8;
+  --olkil-pink-soft: rgba(254, 1, 154, 0.22);
+  --olkil-black: #0a0a0a;
+  --olkil-on-pink: #ffffff;
 
-  /* Status bar — the bright blue strip becomes yellow */
-  --statusBar-background: var(--olkil-yellow) !important;
-  --statusBar-foreground: var(--olkil-on-yellow) !important;
-  --statusBar-noFolderBackground: var(--olkil-yellow) !important;
-  --statusBar-noFolderForeground: var(--olkil-on-yellow) !important;
-  --statusBar-debuggingBackground: #e08900 !important;
-  --statusBar-debuggingForeground: var(--olkil-on-yellow) !important;
-  --statusBarItem-remoteBackground: #c9a000 !important;
-  --statusBarItem-remoteForeground: var(--olkil-on-yellow) !important;
+  /* Status bar */
+  --statusBar-background: var(--olkil-pink) !important;
+  --statusBar-foreground: var(--olkil-on-pink) !important;
+  --statusBar-noFolderBackground: var(--olkil-pink) !important;
+  --statusBar-noFolderForeground: var(--olkil-on-pink) !important;
+  --statusBar-debuggingBackground: #c40078 !important;
+  --statusBar-debuggingForeground: var(--olkil-on-pink) !important;
+  --statusBarItem-remoteBackground: #c40078 !important;
+  --statusBarItem-remoteForeground: var(--olkil-on-pink) !important;
   --statusBarItem-errorForeground: #ffffff !important;
   --statusBarItem-warningForeground: #ffffff !important;
 
-  /* Activity bar badge (e.g. SCM count) */
-  --activityBarBadge-background: var(--olkil-yellow) !important;
-  --activityBarBadge-foreground: var(--olkil-on-yellow) !important;
-  --activityBar-activeBorder: var(--olkil-yellow) !important;
-  --activityBar-activeFocusBorder: var(--olkil-yellow) !important;
+  /* Activity bar */
+  --activityBar-background: #000000 !important;
+  --activityBar-foreground: #ffffff !important;
+  --activityBar-inactiveForeground: rgba(255, 255, 255, 0.55) !important;
+  --activityBarBadge-background: var(--olkil-pink) !important;
+  --activityBarBadge-foreground: var(--olkil-on-pink) !important;
+  --activityBar-activeBorder: var(--olkil-pink) !important;
+  --activityBar-activeFocusBorder: var(--olkil-pink) !important;
+
+  /* Side bar / panels — keep black */
+  --sideBar-background: #0d0d0d !important;
+  --sideBarSectionHeader-background: #141414 !important;
+  --editor-background: #0a0a0a !important;
+  --editorGroupHeader-tabsBackground: #0a0a0a !important;
+  --panel-background: #0a0a0a !important;
+  --terminal-background: #0a0a0a !important;
+  --tab-activeBackground: #121212 !important;
+  --tab-inactiveBackground: #0a0a0a !important;
 
   /* Focus / selection accents */
-  --focusBorder: var(--olkil-yellow) !important;
-  --sash-hoverBorder: var(--olkil-yellow) !important;
-  --badge-background: var(--olkil-yellow) !important;
-  --badge-foreground: var(--olkil-on-yellow) !important;
-  --progressBar-background: var(--olkil-yellow) !important;
-  --button-background: var(--olkil-yellow) !important;
-  --button-foreground: var(--olkil-on-yellow) !important;
-  --button-hoverBackground: var(--olkil-yellow-strong) !important;
-  --button-secondaryBackground: #2a2a2a !important;
+  --focusBorder: var(--olkil-pink) !important;
+  --sash-hoverBorder: var(--olkil-pink) !important;
+  --badge-background: var(--olkil-pink) !important;
+  --badge-foreground: var(--olkil-on-pink) !important;
+  --progressBar-background: var(--olkil-pink) !important;
+  --button-background: var(--olkil-pink) !important;
+  --button-foreground: var(--olkil-on-pink) !important;
+  --button-hoverBackground: var(--olkil-pink-strong) !important;
+  --button-secondaryBackground: #1a1a1a !important;
   --button-secondaryForeground: #f5f5f5 !important;
-  --inputOption-activeBorder: var(--olkil-yellow) !important;
-  --inputOption-activeBackground: var(--olkil-yellow-soft) !important;
-  --inputValidation-infoBorder: var(--olkil-yellow) !important;
-  --list-focusOutline: var(--olkil-yellow) !important;
-  --list-activeSelectionBackground: rgba(240, 192, 0, 0.28) !important;
+  --inputOption-activeBorder: var(--olkil-pink) !important;
+  --inputOption-activeBackground: var(--olkil-pink-soft) !important;
+  --inputValidation-infoBorder: var(--olkil-pink) !important;
+  --list-focusOutline: var(--olkil-pink) !important;
+  --list-activeSelectionBackground: rgba(254, 1, 154, 0.32) !important;
   --list-activeSelectionForeground: #ffffff !important;
-  --list-inactiveSelectionBackground: rgba(240, 192, 0, 0.14) !important;
+  --list-inactiveSelectionBackground: rgba(254, 1, 154, 0.16) !important;
   --list-hoverBackground: rgba(255, 255, 255, 0.05) !important;
-  --panelTitle-activeBorder: var(--olkil-yellow) !important;
-  --tab-activeBorderTop: var(--olkil-yellow) !important;
-  --tab-activeBorder: var(--olkil-yellow) !important;
-  --editor-selectionHighlightBackground: rgba(240, 192, 0, 0.18) !important;
-  --editorLineHighlight-border: rgba(240, 192, 0, 0.35) !important;
-  --scrollbarSlider-activeBackground: rgba(240, 192, 0, 0.45) !important;
-  --menubar-selectionBackground: rgba(240, 192, 0, 0.18) !important;
-  --menu-selectionBackground: rgba(240, 192, 0, 0.28) !important;
-  --peekView-border: var(--olkil-yellow) !important;
-  --notificationLink-foreground: var(--olkil-yellow-strong) !important;
-  --textLink-foreground: #f0c000 !important;
-  --textLink-activeForeground: #ffd84a !important;
+  --panelTitle-activeBorder: var(--olkil-pink) !important;
+  --tab-activeBorderTop: var(--olkil-pink) !important;
+  --tab-activeBorder: var(--olkil-pink) !important;
+  --editor-selectionHighlightBackground: rgba(254, 1, 154, 0.18) !important;
+  --editorLineHighlight-border: rgba(254, 1, 154, 0.35) !important;
+  --scrollbarSlider-activeBackground: rgba(254, 1, 154, 0.45) !important;
+  --menubar-selectionBackground: rgba(254, 1, 154, 0.18) !important;
+  --menu-selectionBackground: rgba(254, 1, 154, 0.28) !important;
+  --peekView-border: var(--olkil-pink) !important;
+  --notificationLink-foreground: var(--olkil-pink-strong) !important;
+  --textLink-foreground: #fe019a !important;
+  --textLink-activeForeground: #fe019a !important;
+
+  /* Terminal shell tabs (powershell.exe) — default is blue textLink color */
+  --kt-panelTab-activeForeground: #fe019a !important;
+  --kt-panelTab-inactiveForeground: rgba(255, 255, 255, 0.72) !important;
+  --kt-panelTab-activeBorder: #fe019a !important;
+  --kt-panelTabActionIcon-foreground: rgba(255, 255, 255, 0.7) !important;
+  --tab-activeForeground: #fe019a !important;
+  --terminal-offlineLinkForeground: #fe019a !important;
 }
 
-/* Hard fallback — theme service can rewrite vars without !important mid-session */
 #statusBar {
-  background-color: var(--olkil-yellow) !important;
-  color: var(--olkil-on-yellow) !important;
+  background: #fe019a !important;
+  background-image: none !important;
+  color: #ffffff !important;
 }
 
 #statusBar .codicon {
-  color: var(--olkil-on-yellow) !important;
+  color: #ffffff !important;
 }

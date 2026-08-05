@@ -488,6 +488,18 @@ export const OlkilAiChatView = ({ dormant = false }: OlkilAiChatViewProps) => {
               Plan
             </button>
           </div>
+          <button
+            type="button"
+            className={styles.liveTestBtn}
+            disabled={busy || ollamaBlocked}
+            title="Start app, open live browser, test UI, capture errors, fix & retest"
+            onClick={() => {
+              void chat.startLiveTest(input.trim() || undefined);
+              setInput('');
+            }}
+          >
+            Live Test
+          </button>
           <div className={styles.modelPicker} ref={modelMenuRef}>
             <button
               type="button"

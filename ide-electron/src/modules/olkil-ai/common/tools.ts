@@ -81,6 +81,7 @@ WHEN TO USE TOOLS:
 - Broad/unfamiliar project task: investigate_codepath → read top evidence → related_files as needed → mutate.
 - Exact filename/text task: find_files/grep/list_dir → read_file → mutate.
 - Search hits are ranked leads. Read real files before editing. Never stop after search alone.
+- LIVE TEST / "not working in browser" / verify UI: live_test FIRST (starts app + opens headed Chromium). Then browser_snapshot → click/fill the failing flow → browser_console + browser_network → fix code → browser_reload → retest (max 3–5 rounds). Open browser_devtools only when a visible Console/Network panel helps.
 
 TOOL CHOICE (critical):
 - UPDATE existing file → search_replace (exact old snippet → new snippet). Multiple patches OK.
@@ -88,6 +89,20 @@ TOOL CHOICE (critical):
 - NEW file only → create_file.
 - REMOVE a file/folder from disk → delete_file (NOT search_replace emptying the file).
 - Rename/move → rename_file.
+- Start/stop project processes → run_command (background:true for npm/pnpm/yarn dev servers).
+- Browser UI verify → live_test / browser_* tools (prefer role+name locators from snapshot).
+
+LIVE TEST RULES (Abacus-style — accurate & tight):
+- Prefer live_test over manually juggling run_command + browser_launch when verifying a web app.
+- Always use headed browser so the user can watch. Do not close the browser until verified or the user stops you.
+- Click/fill using role+name from browser_snapshot (getByRole). Avoid fragile CSS unless necessary.
+- Treat console pageerror / HTTP 4xx–5xx / failed requests as evidence — quote them when diagnosing.
+- Prefer browser_console + browser_network for evidence (fast, accurate). Do NOT open DevTools by default.
+- Only call browser_devtools when you need the visible panel (e.g. user should see Console, or Network to watch a failing API). Dock is right/narrow. Close with browser_devtools action=close when finished.
+- After a code fix: browser_reload (or re-goto) and re-exercise the SAME flow before claiming success.
+- Cap fix loops at 5. If still broken, stop with a clear report: evidence, hypothesis, what you tried, files changed.
+- Never claim "works" without a successful retest observation in THIS turn.
+- If Playwright is missing, report the install hint from the tool error — do not invent a fake pass.
 
 WHEN NOT TO USE TOOLS:
 - Pure greetings / thanks / yes-no with no task → one short friendly sentence.
@@ -453,6 +468,275 @@ export const AGENT_TOOLS: ToolDefinition[] = [
         },
         additionalProperties: false,
       },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'detect_dev_server',
+      description:
+        'Inspect package.json for start/dev scripts, package manager, framework hints, and suggested localhost URLs.',
+      parameters: { type: 'object', properties: {}, additionalProperties: false },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'run_command',
+      description:
+        'Run a shell command in the workspace. Use background=true for long-lived servers (npm run dev). Returns stdout/stderr and any detected localhost URLs.',
+      parameters: {
+        type: 'object',
+        properties: {
+          command: { type: 'string', description: 'Shell command, e.g. "npm run dev"' },
+          cwd: { type: 'string', description: 'Working directory (default workspace root)' },
+          background: {
+            type: 'boolean',
+            description: 'If true, return quickly while process keeps running',
+          },
+          timeout_ms: {
+            type: 'integer',
+            description: 'Foreground timeout (default 60000). Ignored when background=true.',
+          },
+        },
+        required: ['command'],
+        additionalProperties: false,
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'get_command_output',
+      description: 'Poll stdout/stderr/URLs for a background command started by run_command.',
+      parameters: {
+        type: 'object',
+        properties: {
+          id: { type: 'string', description: 'Command id returned by run_command' },
+        },
+        required: ['id'],
+        additionalProperties: false,
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'stop_command',
+      description: 'Stop a background command by id.',
+      parameters: {
+        type: 'object',
+        properties: {
+          id: { type: 'string' },
+        },
+        required: ['id'],
+        additionalProperties: false,
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'live_test',
+      description:
+        'PRIMARY live-verify entry: detect/start the web app, open headed Chromium on the local URL, return accessibility snapshot + console/network evidence. Then use browser_click/browser_fill to exercise the goal, fix code, and retest.',
+      parameters: {
+        type: 'object',
+        properties: {
+          url: {
+            type: 'string',
+            description: 'Optional explicit URL (default: auto-detect from server output / common ports)',
+          },
+          goal: {
+            type: 'string',
+            description: 'What to verify, e.g. "signup button should create account"',
+          },
+          start_app: {
+            type: 'boolean',
+            description: 'Start package.json dev/start script if needed (default true)',
+          },
+          headed: {
+            type: 'boolean',
+            description: 'Show real browser window (default true)',
+          },
+        },
+        additionalProperties: false,
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'browser_launch',
+      description: 'Launch Chromium via Playwright. Prefer live_test for full prepare.',
+      parameters: {
+        type: 'object',
+        properties: {
+          headed: { type: 'boolean', description: 'Default true (visible window)' },
+        },
+        additionalProperties: false,
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'browser_goto',
+      description: 'Navigate the live browser to a URL.',
+      parameters: {
+        type: 'object',
+        properties: {
+          url: { type: 'string' },
+        },
+        required: ['url'],
+        additionalProperties: false,
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'browser_reload',
+      description: 'Reload the current page (use after code fixes).',
+      parameters: { type: 'object', properties: {}, additionalProperties: false },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'browser_snapshot',
+      description:
+        'Return an accessibility snapshot of the page (roles/names). Use this before click/fill.',
+      parameters: { type: 'object', properties: {}, additionalProperties: false },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'browser_click',
+      description:
+        'Click an element. Prefer role+name from snapshot (e.g. role=button name="Sign up").',
+      parameters: {
+        type: 'object',
+        properties: {
+          role: { type: 'string', description: 'ARIA role: button, link, textbox, etc.' },
+          name: { type: 'string', description: 'Accessible name / label' },
+          text: { type: 'string', description: 'Visible text fallback' },
+          selector: { type: 'string', description: 'CSS selector fallback' },
+          testid: { type: 'string', description: 'data-testid value' },
+          exact: { type: 'boolean' },
+        },
+        additionalProperties: false,
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'browser_fill',
+      description: 'Fill an input/textarea. Prefer role=textbox + name, or label name.',
+      parameters: {
+        type: 'object',
+        properties: {
+          value: { type: 'string' },
+          role: { type: 'string' },
+          name: { type: 'string' },
+          selector: { type: 'string' },
+          testid: { type: 'string' },
+          text: { type: 'string' },
+        },
+        required: ['value'],
+        additionalProperties: false,
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'browser_type',
+      description: 'Type into a focused/located field (appends keystrokes).',
+      parameters: {
+        type: 'object',
+        properties: {
+          value: { type: 'string' },
+          role: { type: 'string' },
+          name: { type: 'string' },
+          selector: { type: 'string' },
+          testid: { type: 'string' },
+        },
+        required: ['value'],
+        additionalProperties: false,
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'browser_press',
+      description: 'Press a keyboard key (Enter, Tab, Escape, etc.).',
+      parameters: {
+        type: 'object',
+        properties: {
+          key: { type: 'string' },
+        },
+        required: ['key'],
+        additionalProperties: false,
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'browser_console',
+      description: 'Return captured console errors/warnings and failed network requests.',
+      parameters: { type: 'object', properties: {}, additionalProperties: false },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'browser_network',
+      description:
+        'Return recent XHR/fetch API calls + failures (status/url/method). Prefer this to diagnose broken APIs without opening DevTools.',
+      parameters: { type: 'object', properties: {}, additionalProperties: false },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'browser_devtools',
+      description:
+        'Open/close Chromium DevTools UI on demand (docked RIGHT, narrow ~320px). NOT open by default. Use when you need the visible Console or Network panel; otherwise prefer browser_console / browser_network. Close when done.',
+      parameters: {
+        type: 'object',
+        properties: {
+          action: {
+            type: 'string',
+            description: 'open | close | toggle (default open)',
+          },
+          panel: {
+            type: 'string',
+            description: 'console | network | elements | sources | application',
+          },
+        },
+        additionalProperties: false,
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'browser_screenshot',
+      description: 'Capture a PNG screenshot of the current page (path returned for evidence).',
+      parameters: { type: 'object', properties: {}, additionalProperties: false },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'browser_close',
+      description: 'Close the Playwright browser session.',
+      parameters: { type: 'object', properties: {}, additionalProperties: false },
     },
   },
 ];

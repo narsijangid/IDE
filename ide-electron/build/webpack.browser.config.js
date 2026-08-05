@@ -38,7 +38,7 @@ module.exports = createConfig({
         type: 'javascript/auto',
       },
       {
-        test: /\.png$/,
+        test: /\.(png|gif|jpe?g|webp|svg|mp4|webm)$/i,
         type: 'asset/resource',
       },
       {
@@ -135,6 +135,10 @@ module.exports = createConfig({
         {
           from: path.join(srcDir, 'assets/olkil-logo.png'),
           to: path.join(distDir, 'assets/olkil-logo.png'),
+        },
+        {
+          from: path.join(srcDir, 'assets/olkil.mp4'),
+          to: path.join(distDir, 'assets/olkil.mp4'),
         },
       ],
     }),

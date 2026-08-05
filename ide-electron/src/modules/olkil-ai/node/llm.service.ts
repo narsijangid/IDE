@@ -5,13 +5,21 @@ import { spawn } from 'child_process';
 import { Injectable } from '@opensumi/di';
 import fetch from 'node-fetch';
 import {
+  BrowserActionRequest,
+  BrowserActionResult,
+  BrowserDevToolsRequest,
   ChatCompletionRequest,
   ChatCompletionResult,
   ChatMessage,
   ChatStreamState,
   ChatToolCall,
+  CommandRunRequest,
+  CommandRunResult,
+  DevServerDetectResult,
   InvestigationResult,
   IOlkilAiNodeService,
+  LiveTestRequest,
+  LiveTestResult,
   OllamaSetupState,
   RepositoryIndexStatus,
   RepositoryGrepResult,
@@ -24,6 +32,8 @@ import { AGENT_TOOLS } from '../common/tools';
 import { RepositoryIndexService } from './repository-index.service';
 import { ripgrepSearch } from './ripgrep';
 import { EMBEDDED_ENV, EMBEDDED_POOLSIDE_API_KEY } from './embedded-secrets';
+import { CommandRunner } from './command-runner';
+import { BrowserTestService } from './browser-test.service';
 
 const POOLSIDE_URL = 'https://inference.poolside.ai/v1/chat/completions';
 const DEFAULT_OLLAMA_BASE = 'http://127.0.0.1:11434';
@@ -179,6 +189,8 @@ export class OlkilAiNodeService implements IOlkilAiNodeService {
   private pullAbort: { abort: () => void } | null = null;
   private pullIntent: 'run' | 'pause' | 'cancel' = 'run';
   private readonly repositoryIndex = new RepositoryIndexService();
+  private readonly commandRunner = new CommandRunner();
+  private readonly browserTest = new BrowserTestService(this.commandRunner);
 
   private refreshEnv() {
     this.env = { ...loadDotEnv(), ...this.env };
@@ -241,6 +253,78 @@ export class OlkilAiNodeService implements IOlkilAiNodeService {
 
   refreshRepositoryFiles(root: string, filePaths: string[]): Promise<void> {
     return this.repositoryIndex.refreshFiles(root, filePaths);
+  }
+
+  async detectDevServer(root: string): Promise<DevServerDetectResult> {
+    return this.commandRunner.detectDevServer(root);
+  }
+
+  runCommand(request: CommandRunRequest): Promise<CommandRunResult> {
+    return this.commandRunner.run(request);
+  }
+
+  async getCommandOutput(id: string): Promise<CommandRunResult | null> {
+    return this.commandRunner.getOutput(id);
+  }
+
+  async stopCommand(id: string): Promise<boolean> {
+    return this.commandRunner.stop(id);
+  }
+
+  browserLaunch(headed?: boolean): Promise<BrowserActionResult> {
+    return this.browserTest.launch(headed !== false);
+  }
+
+  browserGoto(url: string): Promise<BrowserActionResult> {
+    return this.browserTest.goto(url);
+  }
+
+  browserReload(): Promise<BrowserActionResult> {
+    return this.browserTest.reload();
+  }
+
+  browserClick(request: BrowserActionRequest): Promise<BrowserActionResult> {
+    return this.browserTest.click(request);
+  }
+
+  browserFill(request: BrowserActionRequest): Promise<BrowserActionResult> {
+    return this.browserTest.fill(request);
+  }
+
+  browserType(request: BrowserActionRequest): Promise<BrowserActionResult> {
+    return this.browserTest.type(request);
+  }
+
+  browserPress(key: string): Promise<BrowserActionResult> {
+    return this.browserTest.press(key);
+  }
+
+  browserSnapshot(): Promise<BrowserActionResult> {
+    return this.browserTest.snapshot();
+  }
+
+  browserScreenshot(): Promise<BrowserActionResult> {
+    return this.browserTest.screenshot();
+  }
+
+  browserConsole(): Promise<BrowserActionResult> {
+    return this.browserTest.consoleDump();
+  }
+
+  browserNetwork(): Promise<BrowserActionResult> {
+    return this.browserTest.networkDump();
+  }
+
+  browserDevtools(request?: BrowserDevToolsRequest): Promise<BrowserActionResult> {
+    return this.browserTest.devtools(request || {});
+  }
+
+  browserClose(): Promise<BrowserActionResult> {
+    return this.browserTest.close();
+  }
+
+  liveTest(request: LiveTestRequest): Promise<LiveTestResult> {
+    return this.browserTest.liveTest(request);
   }
 
   private getKey(provider: AiProviderId): string {

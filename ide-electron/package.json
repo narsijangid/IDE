@@ -36,6 +36,7 @@
     "release:bump": "node ./scripts/bump-and-tag.js",
     "stage-ollama": "node ./scripts/stage-ollama.js",
     "stage-olkil-env": "node ./scripts/stage-olkil-env.js",
+    "playwright:install": "playwright install chromium",
     "rebuild-native": "node ./scripts/rebuild-native.js --target=electron",
     "download-extension": "cross-env DEBUG=InstallExtension node scripts/download-extensions.js",
     "prepare": "husky install"
@@ -148,6 +149,7 @@
   "dependencies": {
     "@opensumi/ide-ai-native": "3.2.1",
     "@opensumi/ide-design": "3.2.1",
-    "electron-updater": "^6.3.9"
+    "electron-updater": "^6.3.9",
+    "playwright": "1.49.1"
   }
 }

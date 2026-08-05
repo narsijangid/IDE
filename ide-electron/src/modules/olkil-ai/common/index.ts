@@ -211,6 +211,123 @@ export interface LocalModelStatus {
   approxSizeGb?: number;
 }
 
+/** Background / foreground shell command for the live-test agent. */
+export interface CommandRunRequest {
+  command: string;
+  cwd?: string;
+  background?: boolean;
+  timeoutMs?: number;
+  /** Extra wait before returning background process output (ms). */
+  settleMs?: number;
+}
+
+export interface CommandRunResult {
+  id: string;
+  command: string;
+  cwd: string;
+  background: boolean;
+  running: boolean;
+  exitCode: number | null;
+  stdout: string;
+  stderr: string;
+  urls: string[];
+  pid?: number;
+  elapsedMs?: number;
+  error?: string;
+}
+
+export interface DevServerDetectResult {
+  root: string;
+  packageManager: 'npm' | 'yarn' | 'pnpm';
+  scripts: string[];
+  recommendedCommand: string | null;
+  suggestedUrls: string[];
+  frameworkHints: string[];
+  error?: string;
+}
+
+/** Locator + action payload for Playwright tools. */
+export interface BrowserActionRequest {
+  url?: string;
+  headed?: boolean;
+  role?: string;
+  name?: string;
+  selector?: string;
+  text?: string;
+  testid?: string;
+  exact?: boolean;
+  value?: string;
+  key?: string;
+  timeoutMs?: number;
+}
+
+export interface BrowserConsoleEntry {
+  type: string;
+  text: string;
+  timestamp: number;
+}
+
+export interface BrowserNetworkFailure {
+  url: string;
+  method: string;
+  status?: number;
+  error?: string;
+  timestamp: number;
+}
+
+export interface BrowserNetworkRequest {
+  url: string;
+  method: string;
+  status?: number;
+  resourceType?: string;
+  error?: string;
+  timestamp: number;
+}
+
+/** Open / close Chromium DevTools (docked right, on-demand). */
+export interface BrowserDevToolsRequest {
+  action?: 'open' | 'close' | 'toggle' | 'show';
+  /** console | network | elements | sources | application */
+  panel?: string;
+}
+
+export interface BrowserActionResult {
+  ok: boolean;
+  action: string;
+  message: string;
+  url: string;
+  title?: string;
+  snapshot: string;
+  screenshotPath?: string;
+  consoleErrors: BrowserConsoleEntry[];
+  networkFailures: BrowserNetworkFailure[];
+  /** Recent XHR/fetch (+ errors) for accurate API diagnosis without DevTools UI. */
+  networkRequests?: BrowserNetworkRequest[];
+  /** Whether the visible DevTools dock is currently open. */
+  devtoolsOpen?: boolean;
+  error?: string;
+}
+
+export interface LiveTestRequest {
+  workspaceRoot: string;
+  url?: string;
+  goal?: string;
+  startApp?: boolean;
+  headed?: boolean;
+  readyTimeoutMs?: number;
+}
+
+export interface LiveTestResult {
+  ok: boolean;
+  url: string;
+  commandId?: string;
+  command?: string;
+  detect: DevServerDetectResult;
+  notes: string[];
+  result: BrowserActionResult;
+  error?: string;
+}
+
 export interface IOlkilAiNodeService {
   chatCompletion(request: ChatCompletionRequest): Promise<ChatCompletionResult>;
   getStreamState(streamId: string): Promise<ChatStreamState>;
@@ -257,6 +374,31 @@ export interface IOlkilAiNodeService {
   pauseLocalModelDownload(): Promise<OllamaSetupState>;
   /** Cancel an in-progress Ollama model download. */
   cancelLocalModelDownload(): Promise<OllamaSetupState>;
+
+  /** Detect package.json scripts / framework for live testing. */
+  detectDevServer(root: string): Promise<DevServerDetectResult>;
+  /** Run a shell command in the workspace (optionally background for `npm run dev`). */
+  runCommand(request: CommandRunRequest): Promise<CommandRunResult>;
+  getCommandOutput(id: string): Promise<CommandRunResult | null>;
+  stopCommand(id: string): Promise<boolean>;
+  /** Playwright: launch / navigate / interact / evidence. */
+  browserLaunch(headed?: boolean): Promise<BrowserActionResult>;
+  browserGoto(url: string): Promise<BrowserActionResult>;
+  browserReload(): Promise<BrowserActionResult>;
+  browserClick(request: BrowserActionRequest): Promise<BrowserActionResult>;
+  browserFill(request: BrowserActionRequest): Promise<BrowserActionResult>;
+  browserType(request: BrowserActionRequest): Promise<BrowserActionResult>;
+  browserPress(key: string): Promise<BrowserActionResult>;
+  browserSnapshot(): Promise<BrowserActionResult>;
+  browserScreenshot(): Promise<BrowserActionResult>;
+  browserConsole(): Promise<BrowserActionResult>;
+  /** Captured XHR/fetch + failures (prefer over DevTools for API diagnosis). */
+  browserNetwork(): Promise<BrowserActionResult>;
+  /** Open/close DevTools UI on demand (right dock). Not open by default. */
+  browserDevtools(request?: BrowserDevToolsRequest): Promise<BrowserActionResult>;
+  browserClose(): Promise<BrowserActionResult>;
+  /** Start app (if needed) + open headed browser + first snapshot. */
+  liveTest(request: LiveTestRequest): Promise<LiveTestResult>;
 }
 
 export type FileChangeKind = 'edit' | 'create' | 'rename' | 'delete';
@@ -328,6 +470,8 @@ export interface IOlkilChatService {
   pauseOllamaDownload(): Promise<void>;
   cancelOllamaDownload(): Promise<void>;
   setChatMode(mode: 'agent' | 'plan'): void;
+  /** One-click live browser verify → fix → retest loop. */
+  startLiveTest(goal?: string): Promise<void>;
   clear(): void;
   stop(): void;
   acceptChange(changeId: string): Promise<void>;

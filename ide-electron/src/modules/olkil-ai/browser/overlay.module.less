@@ -17,9 +17,9 @@
   --olkil-inset-bottom: 24px;
   /* Sits just under the editor tab strip so tab actions stay clickable. */
   --olkil-anchor-top: calc(var(--olkil-inset-top) + 44px);
-  --olkil-accent: #f0c000;
-  --olkil-accent-soft: rgba(240, 192, 0, 0.2);
-  --olkil-accent-glow: rgba(240, 192, 0, 0.45);
+  --olkil-accent: #fe019a;
+  --olkil-accent-soft: rgba(254, 1, 154, 0.2);
+  --olkil-accent-glow: rgba(254, 1, 154, 0.45);
 }
 
 .host > * {
@@ -50,7 +50,7 @@
 }
 
 .chip:hover {
-  border-color: rgba(240, 192, 0, 0.55);
+  border-color: rgba(254, 1, 154, 0.55);
   box-shadow: 0 10px 26px rgba(0, 0, 0, 0.5), 0 0 0 3px var(--olkil-accent-soft),
     inset 0 1px 0 rgba(255, 255, 255, 0.12);
   transform: translateY(-1px);
@@ -78,12 +78,12 @@
   height: 36px;
   justify-content: center;
   border-radius: 50%;
-  border-color: rgba(240, 192, 0, 0.35);
-  background: linear-gradient(155deg, rgba(42, 38, 20, 0.95), rgba(18, 18, 18, 0.96));
+  border-color: rgba(254, 1, 154, 0.4);
+  background: linear-gradient(155deg, rgba(40, 8, 28, 0.96), rgba(10, 10, 10, 0.98));
 }
 
 .chipGlyph {
-  color: #ffd54a;
+  color: #fe019a;
   flex-shrink: 0;
   filter: drop-shadow(0 0 7px var(--olkil-accent-glow));
 }
@@ -221,7 +221,7 @@
 }
 
 .resizeGrip:hover::after {
-  background: rgba(240, 192, 0, 0.7);
+  background: rgba(254, 1, 154, 0.75);
 }
 
 /* —— Title bar —— */
@@ -277,7 +277,7 @@
 }
 
 .liveTagBusy {
-  color: #ffd54a;
+  color: #fe019a;
 }
 
 .titleActions {
@@ -318,7 +318,7 @@
 }
 
 .iconBtnOn {
-  color: #ffd54a;
+  color: #fe019a;
   background: var(--olkil-accent-soft);
 }
 

@@ -434,6 +434,27 @@ export class OlkilChatService extends Disposable implements IOlkilChatService {
     this.fire();
   }
 
+  /** One-click: agent starts app → headed browser → test → fix → retest. */
+  async startLiveTest(goal?: string) {
+    if (this.busy) {
+      return;
+    }
+    this.chatMode = 'agent';
+    const focus = (goal || '').trim();
+    const prompt = `LIVE TEST MODE — Verify this project in a real browser (headed Chromium on my screen).
+
+${focus ? `Focus / bug report:\n${focus}\n` : ''}
+Required loop:
+1. Call live_test (start_app true, headed true)${focus ? ` with goal set to the focus above` : ''}.
+2. Read the snapshot. Exercise the main UI (and the reported bug if any) via browser_click / browser_fill using role+name.
+3. Call browser_console + browser_network + browser_screenshot. Treat pageerror / 4xx–5xx as bugs.
+4. Only if you need the visible inspector: browser_devtools panel=console|network (right dock). Close it when done — do NOT leave DevTools open by default.
+5. If broken: investigate_codepath / read_file → search_replace fix → browser_reload → retest the SAME flow.
+6. Max 5 fix rounds. End with PASS/FAIL, evidence (console/network), and files changed.
+7. Do not claim success without a successful retest in this turn. Start now.`;
+    await this.send(prompt);
+  }
+
   clear() {
     void this.decorations.clearAll();
     this.history = [];
@@ -454,6 +475,7 @@ export class OlkilChatService extends Disposable implements IOlkilChatService {
     this.status = 'Stopped';
     this.busy = false;
     this.fire();
+    void this.aiNode.browserClose().catch(() => undefined);
   }
 
   async acceptChange(changeId: string) {
@@ -860,9 +882,11 @@ Read the highest-scoring evidence in trail order. For a bug, trace UI → handle
   }
 
   private async runAgentLoop(pendingId: string): Promise<string> {
-    const maxSteps = this.chatMode === 'agent' ? 36 : 12;
-    const active = this.editorService.currentResource?.uri.codeUri.fsPath;
     const latestUser = [...this.history].reverse().find((m) => m.role === 'user')?.content || '';
+    const liveTestIntent = this.isLiveTestIntent(latestUser);
+    const maxSteps =
+      this.chatMode === 'agent' ? (liveTestIntent ? 48 : 36) : 12;
+    const active = this.editorService.currentResource?.uri.codeUri.fsPath;
     const casual = this.isCasualMessage(latestUser);
     const research = casual
       ? { context: '', candidates: [] as string[] }
@@ -1587,12 +1611,132 @@ Read the highest-scoring evidence in trail order. For a bug, trace UI → handle
         case 'list_dir':
           this.setStatus(`Listing ${args.path || '.'}…`);
           return await this.toolListDir(args.path ? String(args.path) : '');
+        case 'detect_dev_server':
+          this.setStatus('Detecting dev server…');
+          return this.fmtJson(await this.aiNode.detectDevServer(this.workspaceRoot()));
+        case 'run_command':
+          this.setStatus(`Running ${args.command}…`);
+          return this.fmtJson(
+            await this.aiNode.runCommand({
+              command: String(args.command || ''),
+              cwd: args.cwd ? String(args.cwd) : this.workspaceRoot(),
+              background: Boolean(args.background),
+              timeoutMs: args.timeout_ms != null ? Number(args.timeout_ms) : undefined,
+            }),
+          );
+        case 'get_command_output':
+          this.setStatus('Reading command output…');
+          return this.fmtJson(await this.aiNode.getCommandOutput(String(args.id || '')));
+        case 'stop_command':
+          this.setStatus('Stopping command…');
+          return this.fmtJson({ stopped: await this.aiNode.stopCommand(String(args.id || '')) });
+        case 'live_test':
+          this.setStatus('Live testing in browser…');
+          return this.fmtJson(
+            await this.aiNode.liveTest({
+              workspaceRoot: this.workspaceRoot(),
+              url: args.url ? String(args.url) : undefined,
+              goal: args.goal ? String(args.goal) : undefined,
+              startApp: args.start_app !== false,
+              headed: args.headed !== false,
+            }),
+          );
+        case 'browser_launch':
+          this.setStatus('Launching browser…');
+          return this.fmtJson(await this.aiNode.browserLaunch(args.headed !== false));
+        case 'browser_goto':
+          this.setStatus(`Opening ${args.url}…`);
+          return this.fmtJson(await this.aiNode.browserGoto(String(args.url || '')));
+        case 'browser_reload':
+          this.setStatus('Reloading page…');
+          return this.fmtJson(await this.aiNode.browserReload());
+        case 'browser_snapshot':
+          this.setStatus('Snapshotting page…');
+          return this.fmtJson(await this.aiNode.browserSnapshot());
+        case 'browser_click':
+          this.setStatus('Clicking in browser…');
+          return this.fmtJson(
+            await this.aiNode.browserClick({
+              role: args.role ? String(args.role) : undefined,
+              name: args.name ? String(args.name) : undefined,
+              text: args.text ? String(args.text) : undefined,
+              selector: args.selector ? String(args.selector) : undefined,
+              testid: args.testid ? String(args.testid) : undefined,
+              exact: Boolean(args.exact),
+            }),
+          );
+        case 'browser_fill':
+          this.setStatus('Filling form…');
+          return this.fmtJson(
+            await this.aiNode.browserFill({
+              value: String(args.value ?? ''),
+              role: args.role ? String(args.role) : undefined,
+              name: args.name ? String(args.name) : undefined,
+              text: args.text ? String(args.text) : undefined,
+              selector: args.selector ? String(args.selector) : undefined,
+              testid: args.testid ? String(args.testid) : undefined,
+            }),
+          );
+        case 'browser_type':
+          this.setStatus('Typing in browser…');
+          return this.fmtJson(
+            await this.aiNode.browserType({
+              value: String(args.value ?? ''),
+              role: args.role ? String(args.role) : undefined,
+              name: args.name ? String(args.name) : undefined,
+              selector: args.selector ? String(args.selector) : undefined,
+              testid: args.testid ? String(args.testid) : undefined,
+            }),
+          );
+        case 'browser_press':
+          this.setStatus(`Pressing ${args.key}…`);
+          return this.fmtJson(await this.aiNode.browserPress(String(args.key || 'Enter')));
+        case 'browser_console':
+          this.setStatus('Reading browser console…');
+          return this.fmtJson(await this.aiNode.browserConsole());
+        case 'browser_network':
+          this.setStatus('Reading network / API calls…');
+          return this.fmtJson(await this.aiNode.browserNetwork());
+        case 'browser_devtools':
+          this.setStatus(
+            args.action === 'close' ? 'Closing DevTools…' : 'Opening DevTools…',
+          );
+          return this.fmtJson(
+            await this.aiNode.browserDevtools({
+              action: (['open', 'close', 'toggle', 'show'].includes(String(args.action))
+                ? String(args.action)
+                : 'open') as 'open' | 'close' | 'toggle' | 'show',
+              panel: args.panel ? String(args.panel) : undefined,
+            }),
+          );
+        case 'browser_screenshot':
+          this.setStatus('Capturing screenshot…');
+          return this.fmtJson(await this.aiNode.browserScreenshot());
+        case 'browser_close':
+          this.setStatus('Closing browser…');
+          return this.fmtJson(await this.aiNode.browserClose());
         default:
           return `Unknown tool: ${name}`;
       }
     } catch (e: any) {
       return `Tool ${name} failed: ${e?.message || e}`;
     }
+  }
+
+  private fmtJson(value: unknown): string {
+    try {
+      const text = JSON.stringify(value, null, 2);
+      return text.length > 28_000 ? `${text.slice(0, 28_000)}\n/* truncated */` : text;
+    } catch {
+      return String(value);
+    }
+  }
+
+  private isLiveTestIntent(text: string): boolean {
+    const t = String(text || '');
+    return /LIVE TEST MODE|live\s*test|browser.*(test|check|verify)|verify.*(browser|ui)|headed chromium|not working.*(browser|ui|page|button)/i.test(
+      t,
+    );
   }
 
   private displayPath(filePath: string): string {

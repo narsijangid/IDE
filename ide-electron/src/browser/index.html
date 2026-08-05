@@ -16,24 +16,46 @@
     <link rel="icon" type="image/png" href="./assets/olkil-logo.png" />
     <title>OLKIL</title>
     <style>
+      html,
       body {
         margin: 0;
-        background-color: #2a2a2a;
+        height: 100%;
+        background-color: #0a0a0a;
       }
 
       #loading {
-        position: absolute;
-        top: 0;
-        left: 0;
-        width: 100vw;
-        height: 100vh;
-        line-height: 100vh;
-        color: #fff;
-        text-align: center;
+        position: fixed;
+        inset: 0;
         z-index: 100;
-        transition: opacity 500ms;
-        font-size: 32px;
-        background-color: #2a2a2a;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        gap: 18px;
+        background: #0a0a0a;
+        color: #ffffff;
+        transition: opacity 420ms ease;
+        -webkit-app-region: drag;
+        user-select: none;
+      }
+
+      #loading video {
+        width: 148px;
+        height: 148px;
+        object-fit: contain;
+        display: block;
+        background: transparent;
+      }
+
+      #loading .brand {
+        margin: 0;
+        font-family: 'Segoe UI', 'Helvetica Neue', Arial, sans-serif;
+        font-size: 42px;
+        font-weight: 700;
+        letter-spacing: 0.28em;
+        color: #ffffff;
+        text-indent: 0.28em;
+        line-height: 1;
       }
 
       #main {
@@ -45,10 +67,26 @@
 
       .loading-hidden {
         opacity: 0;
+        pointer-events: none;
       }
     </style>
   </head>
   <body>
+    <div id="loading" aria-label="Loading OLKIL">
+      <video
+        src="./assets/olkil.mp4"
+        width="148"
+        height="148"
+        autoplay
+        loop
+        muted
+        playsinline
+        preload="auto"
+        disablepictureinpicture
+        aria-hidden="true"
+      ></video>
+      <p class="brand">OLKIL</p>
+    </div>
     <div id="main"></div>
   </body>
 </html>

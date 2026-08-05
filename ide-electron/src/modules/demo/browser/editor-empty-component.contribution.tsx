@@ -15,7 +15,7 @@ import { localize } from '@opensumi/ide-core-common';
 import { IKeymapService } from '@opensumi/ide-keymaps/lib/common/keymaps';
 
 import styles from './editor-empty-component.module.less';
-import logoUrl from '../../../browser/assets/olkil-logo.png';
+import logoUrl from '../../../browser/assets/olkil.mp4';
 
 /**
  * 单行快捷键信息
@@ -104,7 +104,17 @@ export const EditorEmptyComponent = () => {
 
   return (
     <div className={styles.empty_component}>
-      <img src={logoUrl} alt="OLKIL" draggable={false} />
+      <video
+        src={logoUrl}
+        autoPlay
+        loop
+        muted
+        playsInline
+        preload="auto"
+        disablePictureInPicture
+        draggable={false}
+        aria-label="OLKIL"
+      />
       <h1 className={styles.brand}>OLKIL</h1>
       {ShortcutView}
     </div>

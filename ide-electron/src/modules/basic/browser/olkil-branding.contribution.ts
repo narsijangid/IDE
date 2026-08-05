@@ -12,22 +12,32 @@ import './olkil-activity-icon.less';
 import './olkil-theme.less';
 
 const OLKIL_ACCENT_VARS: Record<string, string> = {
-  '--statusBar-background': '#f0c000',
-  '--statusBar-foreground': '#141414',
-  '--statusBar-noFolderBackground': '#f0c000',
-  '--statusBar-noFolderForeground': '#141414',
-  '--activityBarBadge-background': '#f0c000',
-  '--activityBarBadge-foreground': '#141414',
-  '--focusBorder': '#f0c000',
-  '--badge-background': '#f0c000',
-  '--badge-foreground': '#141414',
-  '--progressBar-background': '#f0c000',
-  '--button-background': '#f0c000',
-  '--button-foreground': '#141414',
-  '--button-hoverBackground': '#ffd20a',
-  '--panelTitle-activeBorder': '#f0c000',
-  '--tab-activeBorderTop': '#f0c000',
-  '--activityBar-activeBorder': '#f0c000',
+  '--statusBar-background': '#fe019a',
+  '--statusBar-foreground': '#ffffff',
+  '--statusBar-noFolderBackground': '#fe019a',
+  '--statusBar-noFolderForeground': '#ffffff',
+  '--activityBar-background': '#000000',
+  '--activityBarBadge-background': '#fe019a',
+  '--activityBarBadge-foreground': '#ffffff',
+  '--focusBorder': '#fe019a',
+  '--badge-background': '#fe019a',
+  '--badge-foreground': '#ffffff',
+  '--progressBar-background': '#fe019a',
+  '--button-background': '#fe019a',
+  '--button-foreground': '#ffffff',
+  '--button-hoverBackground': '#ff4db8',
+  '--panelTitle-activeBorder': '#fe019a',
+  '--tab-activeBorderTop': '#fe019a',
+  '--activityBar-activeBorder': '#fe019a',
+  '--sideBar-background': '#0d0d0d',
+  '--editor-background': '#0a0a0a',
+  '--panel-background': '#0a0a0a',
+  '--kt-panelTab-activeForeground': '#fe019a',
+  '--kt-panelTab-inactiveForeground': 'rgba(255,255,255,0.72)',
+  '--tab-activeForeground': '#fe019a',
+  '--textLink-foreground': '#fe019a',
+  '--textLink-activeForeground': '#fe019a',
+  '--terminal-offlineLinkForeground': '#fe019a',
 };
 
 function applyOlkilAccentVars() {
@@ -37,14 +47,14 @@ function applyOlkilAccentVars() {
   }
   const status = document.getElementById('statusBar');
   if (status) {
-    status.style.backgroundColor = '#f0c000';
-    status.style.color = '#141414';
+    status.style.background = '#fe019a';
+    status.style.backgroundImage = 'none';
+    status.style.color = '#ffffff';
   }
 }
 
 /**
- * Registers the menubar logo (before OLKIL text) via OpenSumi's
- * `@opensumi/ide-menu-bar-logo` slot, and locks Black + Yellow chrome accents.
+ * Registers the menubar logo and locks Black + Pink (#fe019a) chrome.
  */
 @Domain(ComponentContribution, ClientAppContribution)
 export class OlkilBrandingContribution implements ComponentContribution, ClientAppContribution {
@@ -71,7 +81,6 @@ export class OlkilBrandingContribution implements ComponentContribution, ClientA
     }
 
     applyOlkilAccentVars();
-    // Theme swaps rewrite CSS vars — re-assert yellow accents after each change.
     this.eventBus.on(ThemeChangedEvent, () => {
       window.requestAnimationFrame(applyOlkilAccentVars);
     });
