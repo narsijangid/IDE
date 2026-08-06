@@ -45,7 +45,7 @@ export class MainCommandContribution implements CommandContribution {
     commands.registerCommand(
       {
         id: Commands.OPEN_DEVTOOLS_MAIN,
-        label: '调试主进程',
+        label: 'Debug Main Process',
       },
       {
         execute: () => {
@@ -57,7 +57,7 @@ export class MainCommandContribution implements CommandContribution {
     commands.registerCommand(
       {
         id: Commands.OPEN_DEVTOOLS_NODE,
-        label: '调试Node进程',
+        label: 'Debug Node Process',
       },
       {
         execute: () => {
@@ -69,7 +69,7 @@ export class MainCommandContribution implements CommandContribution {
     commands.registerCommand(
       {
         id: Commands.OPEN_DEVTOOLS_EXTENSION,
-        label: '调试插件进程',
+        label: 'Debug Extension Process',
       },
       {
         execute: () => {

@@ -52,7 +52,10 @@ export interface ChatAttachment {
   path: string;
   /** Relative display path */
   name: string;
-  kind: 'file' | 'folder';
+  kind: 'file' | 'folder' | 'image' | 'codebase' | 'problems' | 'git' | 'selection' | 'docs' | 'web';
+  /** Optional base64 data URL for images */
+  dataUrl?: string;
+  mimeType?: string;
 }
 
 export interface ChatCompletionResult {
@@ -65,6 +68,8 @@ export interface ChatStreamState {
   text: string;
   done: boolean;
   error?: string;
+  /** Tool names discovered so far while streaming (Cursor-style live activity) */
+  toolNames?: string[];
 }
 
 export interface RepositoryIndexStatus {
@@ -346,6 +351,11 @@ export interface IOlkilAiNodeService {
   getRelatedFiles(root: string, filePath: string, limit?: number): Promise<RepositorySearchResult>;
   /** Fuzzy module/folder discovery: "application timeline" → ApplicationTimeline / application-timeline. */
   findModules(root: string, query: string, limit?: number): Promise<RepositorySearchResult>;
+  findFilesByName(
+    root: string,
+    query: string,
+    limit?: number,
+  ): Promise<{ files: string[]; engine: 'index' | 'empty'; elapsedMs: number }>;
   investigateRepository(root: string, query: string, limit?: number): Promise<InvestigationResult>;
   refreshRepositoryFiles(root: string, filePaths: string[]): Promise<void>;
   getModelName(modelId?: string): Promise<string>;
@@ -428,14 +438,77 @@ export interface FileChangeInfo {
   summary?: string;
   /** How many tool edits were merged into this card */
   editCount?: number;
+  /** Cursor-style per-hunk review */
+  hunks?: Array<{
+    id: string;
+    title: string;
+    additions: number;
+    deletions: number;
+    status: 'pending' | 'accepted' | 'rejected';
+    preview: FileDiffLine[];
+  }>;
+  /** When true, card shows full preview */
+  expanded?: boolean;
+}
+
+/** Cursor-style live tool / thinking row in the transcript. */
+export type ActivityKind =
+  | 'thinking'
+  | 'reading'
+  | 'searching'
+  | 'editing'
+  | 'running'
+  | 'browsing'
+  | 'indexing'
+  | 'done'
+  | 'info'
+  | 'todo';
+
+export interface ActivityInfo {
+  kind: ActivityKind;
+  label: string;
+  detail?: string;
+  /** When true, row shows as completed (checkmark style). */
+  done?: boolean;
+  /** Tool function name for expandable cards */
+  toolName?: string;
+  /** Pretty-printed args (truncated) */
+  argsPreview?: string;
+  /** Truncated tool result / thinking body */
+  resultPreview?: string;
+  /** Absolute or workspace-relative path — click opens editor */
+  filePath?: string;
+  /** Shell command line when kind=running */
+  command?: string;
+  exitCode?: number | null;
+}
+
+/** Cursor TodoWrite-style checklist item. */
+export interface AgentTodoItem {
+  id: string;
+  content: string;
+  status: 'pending' | 'in_progress' | 'completed' | 'cancelled';
+}
+
+export interface QueuedChatMessage {
+  id: string;
+  text: string;
+  attachments: ChatAttachment[];
 }
 
 export interface UiChatMessage {
   id: string;
-  role: 'user' | 'assistant' | 'system' | 'status' | 'file_change';
+  role: 'user' | 'assistant' | 'system' | 'status' | 'file_change' | 'activity' | 'todos';
   content: string;
   pending?: boolean;
   fileChange?: FileChangeInfo;
+  activity?: ActivityInfo;
+  /** Context pills under a user bubble */
+  attachments?: ChatAttachment[];
+  /** Sticky agent todo checklist */
+  todos?: AgentTodoItem[];
+  /** Parsed follow-up suggestion chips under assistant reply */
+  suggestions?: string[];
 }
 
 export interface IOlkilChatService {
@@ -453,12 +526,18 @@ export interface IOlkilChatService {
     badge?: string;
     approxSizeGb?: number;
   }>;
-  /** 'agent' = autonomous edits; 'plan' = discuss first */
-  chatMode: 'agent' | 'plan';
+  /** 'agent' = autonomous edits; 'plan' = discuss first; 'ask' = read-only */
+  chatMode: 'agent' | 'plan' | 'ask';
   /** Local Ollama download / readiness for the selected model */
   ollamaDownload: OllamaDownloadUiState;
   /** Pending (not yet accepted/reverted) file changes from the agent */
   pendingChanges: FileChangeInfo[];
+  /** Messages waiting while the agent is busy (Cursor-style queue) */
+  queuedMessages: QueuedChatMessage[];
+  /** Latest agent todo checklist (also mirrored in transcript) */
+  agentTodos: AgentTodoItem[];
+  /** Checkpoint stack for rewind */
+  checkpoints: Array<{ id: string; label: string; createdAt: number }>;
   onDidChange: any;
   init(): Promise<void>;
   send(text: string, attachments?: ChatAttachment[]): Promise<void>;
@@ -469,11 +548,28 @@ export interface IOlkilChatService {
   startOllamaDownload(): Promise<void>;
   pauseOllamaDownload(): Promise<void>;
   cancelOllamaDownload(): Promise<void>;
-  setChatMode(mode: 'agent' | 'plan'): void;
+  setChatMode(mode: 'agent' | 'plan' | 'ask'): void;
   /** One-click live browser verify → fix → retest loop. */
   startLiveTest(goal?: string): Promise<void>;
   clear(): void;
   stop(): void;
+  /** Drop a queued follow-up before it runs. */
+  cancelQueued(id: string): void;
+  /** Re-run from the last user message (Cursor regenerate). */
+  regenerate(): Promise<void>;
+  /** Edit a prior user message and resubmit from there. */
+  editAndResend(messageId: string, text: string): Promise<void>;
+  /** Restore files + chat to a checkpoint. */
+  restoreCheckpoint(checkpointId: string): Promise<void>;
+  /** Create a named checkpoint of current pending file snapshots. */
+  createCheckpoint(label?: string): string;
+  /** Open a workspace path from an activity / citation click. */
+  openPath(filePath: string, line?: number): Promise<void>;
+  /** Cmd-K style: rewrite the current selection with an instruction. */
+  inlineEdit(instruction: string): Promise<void>;
+  /** Accept / reject a single hunk inside a file change card. */
+  acceptHunk(changeId: string, hunkId: string): Promise<void>;
+  rejectHunk(changeId: string, hunkId: string): Promise<void>;
   acceptChange(changeId: string): Promise<void>;
   revertChange(changeId: string): Promise<void>;
   acceptAllPending(): Promise<void>;

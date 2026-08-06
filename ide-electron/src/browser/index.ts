@@ -123,5 +123,30 @@ renderApp({
     'editor.semanticHighlighting.enabled': true,
     'editor.bracketPairColorization.enabled': true,
     'editor.guides.bracketPairs': true,
+    // Explicit profiles (not auto-detected) so they appear in the Terminal + dropdown.
+    // OpenSumi only lists profiles where isAutoDetected !== true.
+    'terminal.integrated.profiles.windows': {
+      PowerShell: {
+        source: 'PowerShell',
+        args: ['-NoLogo'],
+      },
+      'Windows PowerShell': {
+        path: 'C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe',
+        args: ['-NoLogo'],
+      },
+      'Git Bash': {
+        source: 'Git Bash',
+      },
+      'Command Prompt': {
+        path: 'C:\\Windows\\System32\\cmd.exe',
+        args: [],
+      },
+    },
+    'terminal.integrated.defaultProfile.windows': 'Windows PowerShell',
+    // OpenSumi bug: getDefaultProfileName() concatenates an unresolved Promise into the
+    // preference key, so defaultProfile.* is ignored and fallback shell starts with no args.
+    // Setting terminal.type forces the legacy path that DOES apply shellArgs.windows.
+    'terminal.type': 'powershell',
+    'terminal.integrated.shellArgs.windows': ['-NoLogo'],
   },
 });

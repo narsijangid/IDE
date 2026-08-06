@@ -1,14 +1,182 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState, startTransition } from 'react';
 import { useInjectable } from '@opensumi/ide-core-browser';
-import { ChatAttachment, FileChangeInfo, FileDiffLine, IOlkilChatService, OllamaDownloadUiState, UiChatMessage } from '../common';
+import {
+  AgentTodoItem,
+  ChatAttachment,
+  FileChangeInfo,
+  FileDiffLine,
+  IOlkilChatService,
+  OllamaDownloadUiState,
+  QueuedChatMessage,
+  UiChatMessage,
+} from '../common';
 import { MarkdownMessage } from './markdown';
-import { CheckIcon, SendIcon, StopIcon } from './icons';
+import { CheckIcon, CopyIcon, RefreshIcon, SendIcon, StopIcon } from './icons';
 import styles from './chat.view.module.less';
 import logoUrl from './olkil-logo.png';
 
 /** How long the composer confirms a finished turn before offering Send again. */
 const DONE_HINT_MS = 1800;
 const INPUT_MAX_HEIGHT = 168;
+
+function activityGlyph(kind: string, done?: boolean): string {
+  if (done) {
+    return '✓';
+  }
+  switch (kind) {
+    case 'thinking':
+      return '···';
+    case 'reading':
+      return '◎';
+    case 'searching':
+    case 'indexing':
+      return '⌕';
+    case 'editing':
+      return '✎';
+    case 'running':
+      return '›';
+    case 'browsing':
+      return '◉';
+    case 'todo':
+      return '☰';
+    case 'done':
+      return '✓';
+    default:
+      return '·';
+  }
+}
+
+async function copyText(text: string) {
+  try {
+    await navigator.clipboard.writeText(text);
+  } catch {
+    // ignore
+  }
+}
+
+function ActivityRow({
+  message,
+  onOpenPath,
+}: {
+  message: UiChatMessage;
+  onOpenPath: (path: string) => void;
+}) {
+  const a = message.activity;
+  const [open, setOpen] = useState(false);
+  if (!a) {
+    return null;
+  }
+  const expandable = Boolean(
+    a.resultPreview || a.argsPreview || a.command || a.kind === 'thinking' || a.kind === 'running',
+  );
+  return (
+    <div
+      className={`${styles.activityCard} ${a.done ? styles.activityDone : styles.activityLive} ${
+        styles[`activity_${a.kind}`] || ''
+      }`}
+    >
+      <button
+        type="button"
+        className={styles.activityHeader}
+        onClick={() => expandable && setOpen((v) => !v)}
+        disabled={!expandable}
+      >
+        <span className={styles.activityGlyph} aria-hidden>
+          {activityGlyph(a.kind, a.done)}
+        </span>
+        <span className={styles.activityLabel}>{a.label}</span>
+        {a.exitCode != null ? (
+          <span className={a.exitCode === 0 ? styles.activityOk : styles.activityFail}>
+            exit {a.exitCode}
+          </span>
+        ) : null}
+        {a.filePath ? (
+          <span
+            className={styles.activityPathBtn}
+            role="link"
+            tabIndex={0}
+            onClick={(e) => {
+              e.stopPropagation();
+              onOpenPath(a.filePath!);
+            }}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') {
+                e.stopPropagation();
+                onOpenPath(a.filePath!);
+              }
+            }}
+          >
+            open
+          </span>
+        ) : null}
+        {expandable ? (
+          <span className={`${styles.activityChevron} ${open ? styles.activityChevronOpen : ''}`}>
+            ▸
+          </span>
+        ) : null}
+      </button>
+      {open ? (
+        <div className={styles.activityBody}>
+          {a.command ? (
+            <div className={styles.activityCmd}>
+              <code>$ {a.command}</code>
+              <button type="button" className={styles.miniBtn} onClick={() => void copyText(a.command || '')}>
+                Copy
+              </button>
+            </div>
+          ) : null}
+          {a.argsPreview ? (
+            <pre className={styles.activityPre}>
+              <div className={styles.activityPreLabel}>Args</div>
+              {a.argsPreview}
+            </pre>
+          ) : null}
+          {a.resultPreview ? (
+            <pre className={styles.activityPre}>
+              <div className={styles.activityPreLabel}>
+                {a.kind === 'thinking' ? 'Thought' : 'Output'}
+              </div>
+              {a.resultPreview}
+            </pre>
+          ) : null}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+function TodosCard({ todos }: { todos: AgentTodoItem[] }) {
+  if (!todos?.length) {
+    return null;
+  }
+  const done = todos.filter((t) => t.status === 'completed').length;
+  return (
+    <div className={styles.todosCard}>
+      <div className={styles.todosHeader}>
+        <span>Todos</span>
+        <span className={styles.todosCount}>
+          {done}/{todos.length}
+        </span>
+      </div>
+      <ul className={styles.todosList}>
+        {todos.map((t) => (
+          <li key={t.id} className={`${styles.todoItem} ${styles[`todo_${t.status}`] || ''}`}>
+            <span className={styles.todoMark} aria-hidden>
+              {t.status === 'completed'
+                ? '✓'
+                : t.status === 'in_progress'
+                  ? '●'
+                  : t.status === 'cancelled'
+                    ? '–'
+                    : '○'}
+            </span>
+            <span className={styles.todoText}>{t.content}</span>
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
+}
 
 function extBadge(name: string): string {
   const ext = name.includes('.') ? name.split('.').pop()!.toLowerCase() : '';
@@ -71,12 +239,17 @@ function FileChangeCard({
   onAccept,
   onRevert,
   onOpen,
+  onAcceptHunk,
+  onRejectHunk,
 }: {
   change: FileChangeInfo;
   onAccept: (id: string) => void;
   onRevert: (id: string) => void;
   onOpen: (id: string) => void;
+  onAcceptHunk?: (changeId: string, hunkId: string) => void;
+  onRejectHunk?: (changeId: string, hunkId: string) => void;
 }) {
+  const [expanded, setExpanded] = useState(false);
   const title =
     change.kind === 'rename'
       ? `${change.displayName} → ${change.newDisplayName || ''}`
@@ -84,6 +257,7 @@ function FileChangeCard({
         ? `Deleted ${change.displayName}`
         : change.displayName;
   const pending = change.status === 'pending';
+  const previewLines = expanded ? change.preview : change.preview?.slice(0, 16);
 
   return (
     <div className={`${styles.fileCard} ${pending ? styles.fileCardShine : ''} ${styles[`status_${change.status}`] || ''}`}>
@@ -100,17 +274,46 @@ function FileChangeCard({
         <span className={styles.fileStats}>
           {change.additions > 0 ? <span className={styles.statAdd}>+{change.additions}</span> : null}
           {change.deletions > 0 ? <span className={styles.statDel}>−{change.deletions}</span> : null}
-          {change.kind === 'rename' && !change.additions && !change.deletions ? (
-            <span className={styles.statRename}>renamed</span>
-          ) : null}
-          {change.kind === 'delete' ? <span className={styles.statDel}>deleted</span> : null}
           {change.editCount && change.editCount > 1 ? (
             <span className={styles.editCount}>{change.editCount} edits</span>
           ) : null}
         </span>
       </div>
 
-      {change.preview?.length ? <DiffPreview lines={change.preview} /> : null}
+      {previewLines?.length ? <DiffPreview lines={previewLines} /> : null}
+      {change.preview && change.preview.length > 16 ? (
+        <button type="button" className={styles.expandDiffBtn} onClick={() => setExpanded((v) => !v)}>
+          {expanded ? 'Collapse diff' : 'Show full diff'}
+        </button>
+      ) : null}
+
+      {pending && change.hunks && change.hunks.length > 1 ? (
+        <div className={styles.hunkList}>
+          {change.hunks.map((h) => (
+            <div key={h.id} className={`${styles.hunkRow} ${styles[`hunk_${h.status}`] || ''}`}>
+              <span className={styles.hunkTitle}>
+                {h.title}
+                <span className={styles.hunkStats}>
+                  {h.additions ? ` +${h.additions}` : ''}
+                  {h.deletions ? ` −${h.deletions}` : ''}
+                </span>
+              </span>
+              {h.status === 'pending' ? (
+                <span className={styles.hunkActions}>
+                  <button type="button" className={styles.acceptBtn} onClick={() => onAcceptHunk?.(change.id, h.id)}>
+                    Keep
+                  </button>
+                  <button type="button" className={styles.revertBtn} onClick={() => onRejectHunk?.(change.id, h.id)}>
+                    Undo
+                  </button>
+                </span>
+              ) : (
+                <span className={styles.statusLabel}>{h.status}</span>
+              )}
+            </div>
+          ))}
+        </div>
+      ) : null}
 
       {change.summary ? <div className={styles.fileSummary}>{change.summary}</div> : null}
 
@@ -153,6 +356,7 @@ export const OlkilAiChatView = ({ dormant = false }: OlkilAiChatViewProps) => {
   const [chatMode, setChatMode] = useState(chat.chatMode);
   const [ollamaDownload, setOllamaDownload] = useState<OllamaDownloadUiState>(chat.ollamaDownload);
   const [pendingCount, setPendingCount] = useState(chat.pendingChanges.length);
+  const [queue, setQueue] = useState<QueuedChatMessage[]>(chat.queuedMessages);
   const [input, setInput] = useState('');
   const [attachments, setAttachments] = useState<ChatAttachment[]>([]);
   const [mentionOpen, setMentionOpen] = useState(false);
@@ -163,6 +367,7 @@ export const OlkilAiChatView = ({ dormant = false }: OlkilAiChatViewProps) => {
   const listRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const mentionSeq = useRef(0);
+  const stickBottomRef = useRef(true);
 
   const sync = useCallback(() => {
     setMessages([...chat.messages]);
@@ -173,6 +378,7 @@ export const OlkilAiChatView = ({ dormant = false }: OlkilAiChatViewProps) => {
     setChatMode(chat.chatMode);
     setOllamaDownload({ ...chat.ollamaDownload });
     setPendingCount(chat.pendingChanges.length);
+    setQueue([...chat.queuedMessages]);
   }, [chat]);
 
   const dormantRef = useRef(dormant);
@@ -204,8 +410,18 @@ export const OlkilAiChatView = ({ dormant = false }: OlkilAiChatViewProps) => {
     if (!el || dormant) {
       return;
     }
-    el.scrollTop = el.scrollHeight;
+    if (stickBottomRef.current) {
+      el.scrollTop = el.scrollHeight;
+    }
   }, [messages, status, dormant]);
+
+  const onListScroll = () => {
+    const el = listRef.current;
+    if (!el) {
+      return;
+    }
+    stickBottomRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 80;
+  };
 
   const addAttachment = useCallback((att: ChatAttachment) => {
     setAttachments((prev) => {
@@ -261,16 +477,17 @@ export const OlkilAiChatView = ({ dormant = false }: OlkilAiChatViewProps) => {
 
   const onSend = useCallback(async () => {
     const text = input.trim();
-    if ((!text && attachments.length === 0) || busy) {
+    if (!text && attachments.length === 0) {
       return;
     }
     setInput('');
     const atts = [...attachments];
     setAttachments([]);
     setMentionOpen(false);
+    stickBottomRef.current = true;
     await chat.send(text, atts);
     inputRef.current?.focus();
-  }, [attachments, busy, chat, input]);
+  }, [attachments, chat, input]);
 
   const onKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if (mentionOpen && mentionItems.length) {
@@ -331,15 +548,28 @@ export const OlkilAiChatView = ({ dormant = false }: OlkilAiChatViewProps) => {
     e.preventDefault();
     e.stopPropagation();
     setDragOver(false);
-    const files = Array.from(e.dataTransfer?.files || []);
+    const files = Array.from(e.dataTransfer?.files || []) as File[];
     for (const f of files) {
       const p = (f as any).path as string;
+      const isImage = (f.type || '').startsWith('image/');
+      if (isImage) {
+        const reader = new FileReader();
+        reader.onload = () => {
+          addAttachment({
+            path: p || `image:${f.name}`,
+            name: f.name || 'image',
+            kind: 'image',
+            dataUrl: String(reader.result || ''),
+            mimeType: f.type,
+          });
+        };
+        reader.readAsDataURL(f);
+        continue;
+      }
       if (!p) {
         continue;
       }
-      // Electron File objects expose .path
       const name = p.replace(/\\/g, '/').split('/').pop() || p;
-      // Heuristic: no extension or trailing slash-ish → folder (Electron folders may appear as files)
       const isDir = !name.includes('.') && !(f as any).type;
       addAttachment({
         path: p,
@@ -447,8 +677,18 @@ export const OlkilAiChatView = ({ dormant = false }: OlkilAiChatViewProps) => {
     ollamaDownload.phase === 'downloading' ||
     ollamaDownload.phase === 'paused' ||
     ollamaDownload.phase === 'error';
-  const canSend = !busy && !ollamaBlocked && (Boolean(input.trim()) || attachments.length > 0);
-  const sendMode = busy ? 'stop' : turnDone && !canSend ? 'done' : 'send';
+  const canCompose = !ollamaBlocked && (Boolean(input.trim()) || attachments.length > 0);
+  // While busy: Enter queues; Stop button stays primary
+  const canSend = canCompose && (!busy || true);
+  const sendMode = busy ? 'stop' : turnDone && !canCompose ? 'done' : 'send';
+  const lastAssistantId = useMemo(() => {
+    for (let i = messages.length - 1; i >= 0; i--) {
+      if (messages[i].role === 'assistant' && !messages[i].pending && messages[i].content) {
+        return messages[i].id;
+      }
+    }
+    return null;
+  }, [messages]);
 
   const formatGb = (bytes?: number, fallbackGb?: number) => {
     if (typeof bytes === 'number' && bytes > 0) {
@@ -475,6 +715,17 @@ export const OlkilAiChatView = ({ dormant = false }: OlkilAiChatViewProps) => {
               title="Autonomous: explores & edits files itself"
             >
               Agent
+            </button>
+            <button
+              type="button"
+              role="tab"
+              aria-selected={chatMode === 'ask'}
+              className={`${styles.modeBtn} ${chatMode === 'ask' ? styles.modeBtnActive : ''}`}
+              disabled={busy}
+              onClick={() => chat.setChatMode('ask')}
+              title="Read-only Q&A — no file edits"
+            >
+              Ask
             </button>
             <button
               type="button"
@@ -656,8 +907,24 @@ export const OlkilAiChatView = ({ dormant = false }: OlkilAiChatViewProps) => {
         </div>
       ) : null}
 
-      <div className={styles.list} ref={listRef}>
+      <div className={styles.list} ref={listRef} onScroll={onListScroll}>
         {rows.map((m) => {
+          if (m.role === 'activity' && m.activity) {
+            return (
+              <div key={m.id} className={styles.rowLeft}>
+                <ActivityRow message={m} onOpenPath={(p) => void chat.openPath(p)} />
+              </div>
+            );
+          }
+
+          if (m.role === 'todos' && m.todos?.length) {
+            return (
+              <div key={m.id} className={styles.rowLeft}>
+                <TodosCard todos={m.todos} />
+              </div>
+            );
+          }
+
           if (m.role === 'file_change' && m.fileChange) {
             return (
               <div key={m.id} className={styles.rowLeft}>
@@ -666,13 +933,21 @@ export const OlkilAiChatView = ({ dormant = false }: OlkilAiChatViewProps) => {
                   onAccept={(id) => chat.acceptChange(id)}
                   onRevert={(id) => chat.revertChange(id)}
                   onOpen={(id) => chat.openChangeFile(id)}
+                  onAcceptHunk={(cid, hid) => void chat.acceptHunk(cid, hid)}
+                  onRejectHunk={(cid, hid) => void chat.rejectHunk(cid, hid)}
                 />
               </div>
             );
           }
 
+          // Hide empty pending bubble until final/streamed text arrives (Cursor timeline)
+          if (m.role === 'assistant' && m.pending && !(m.content || '').trim()) {
+            return null;
+          }
+
           const isUser = m.role === 'user';
           const isSystem = m.role === 'system' || m.role === 'status';
+          const showActions = !isSystem && !(m.pending && isUser);
           return (
             <div
               key={m.id}
@@ -688,7 +963,9 @@ export const OlkilAiChatView = ({ dormant = false }: OlkilAiChatViewProps) => {
                 {!isUser && !isSystem ? (
                   <div className={styles.roleRow}>
                     <img className={styles.roleAvatar} src={logoUrl} alt="" width={14} height={14} draggable={false} />
-                    <span className={styles.role}>{chatMode === 'plan' ? 'Plan' : 'Agent'}</span>
+                    <span className={styles.role}>
+                      {chatMode === 'plan' ? 'Plan' : chatMode === 'ask' ? 'Ask' : 'Agent'}
+                    </span>
                   </div>
                 ) : null}
                 {isUser || isSystem ? (
@@ -697,8 +974,76 @@ export const OlkilAiChatView = ({ dormant = false }: OlkilAiChatViewProps) => {
                   <MarkdownMessage
                     className={styles.contentMd}
                     text={m.content || (m.pending ? '…' : '')}
+                    onOpenPath={(p, line) => void chat.openPath(p, line)}
                   />
                 )}
+                {isUser && m.attachments?.length ? (
+                  <div className={styles.msgAttachRow}>
+                    {m.attachments.map((a) => (
+                      <button
+                        key={a.path}
+                        type="button"
+                        className={styles.msgAttachChip}
+                        title={a.path}
+                        onClick={() => void chat.openPath(a.path)}
+                      >
+                        @{a.name}
+                      </button>
+                    ))}
+                  </div>
+                ) : null}
+                {m.suggestions?.length ? (
+                  <div className={styles.suggestRow}>
+                    {m.suggestions.map((s) => (
+                      <button
+                        key={s}
+                        type="button"
+                        className={styles.suggestChip}
+                        disabled={busy}
+                        onClick={() => void chat.send(s)}
+                      >
+                        {s}
+                      </button>
+                    ))}
+                  </div>
+                ) : null}
+                {showActions ? (
+                  <div className={styles.msgActions}>
+                    <button
+                      type="button"
+                      className={styles.msgActionBtn}
+                      title="Copy"
+                      onClick={() => void copyText(m.content || '')}
+                    >
+                      <CopyIcon size={12} />
+                    </button>
+                    {!isUser && m.id === lastAssistantId && !busy ? (
+                      <button
+                        type="button"
+                        className={styles.msgActionBtn}
+                        title="Regenerate"
+                        onClick={() => void chat.regenerate()}
+                      >
+                        <RefreshIcon size={12} />
+                      </button>
+                    ) : null}
+                    {isUser && !busy ? (
+                      <button
+                        type="button"
+                        className={styles.msgActionBtn}
+                        title="Edit & resend"
+                        onClick={() => {
+                          const next = window.prompt('Edit message', m.content || '');
+                          if (next != null && next.trim()) {
+                            void chat.editAndResend(m.id, next.trim());
+                          }
+                        }}
+                      >
+                        ✎
+                      </button>
+                    ) : null}
+                  </div>
+                ) : null}
               </div>
             </div>
           );
@@ -712,6 +1057,25 @@ export const OlkilAiChatView = ({ dormant = false }: OlkilAiChatViewProps) => {
         onDragLeave={onDragLeave}
         onDrop={onDrop}
       >
+        {queue.length ? (
+          <div className={styles.queueRow}>
+            {queue.map((q) => (
+              <span key={q.id} className={styles.queueChip} title={q.text}>
+                <span className={styles.queueLabel}>Queued</span>
+                <span className={styles.queueText}>{q.text.slice(0, 48)}</span>
+                <button
+                  type="button"
+                  className={styles.attachRemove}
+                  onClick={() => chat.cancelQueued(q.id)}
+                  aria-label="Cancel queued message"
+                >
+                  ×
+                </button>
+              </span>
+            ))}
+          </div>
+        ) : null}
+
         {attachments.length ? (
           <div className={styles.attachRow}>
             {attachments.map((a) => (
@@ -745,7 +1109,21 @@ export const OlkilAiChatView = ({ dormant = false }: OlkilAiChatViewProps) => {
                   insertMention(item);
                 }}
               >
-                <span className={styles.mentionBadge}>{item.kind === 'folder' ? 'DIR' : extBadge(item.name)}</span>
+                <span className={styles.mentionBadge}>
+                  {item.kind === 'folder'
+                    ? 'DIR'
+                    : item.kind === 'codebase'
+                      ? 'CB'
+                      : item.kind === 'problems'
+                        ? 'ERR'
+                        : item.kind === 'git'
+                          ? 'GIT'
+                          : item.kind === 'selection'
+                            ? 'SEL'
+                            : item.kind === 'image'
+                              ? 'IMG'
+                              : extBadge(item.name)}
+                </span>
                 <span className={styles.mentionPath}>{item.name}</span>
               </button>
             ))}
@@ -758,29 +1136,64 @@ export const OlkilAiChatView = ({ dormant = false }: OlkilAiChatViewProps) => {
             className={styles.input}
             value={input}
             placeholder={
-              chatMode === 'agent'
-                ? 'Ask Agent…  @file for context, or drop files here'
-                : 'Describe a goal…  @file or drop references'
+              chatMode === 'ask'
+                ? 'Ask about the code…  @codebase @Problems @Git @Selection'
+                : chatMode === 'agent'
+                  ? 'Ask Agent…  @file · @codebase · drop images · Ctrl+K inline'
+                  : 'Describe a goal…  @file or drop references'
             }
             onChange={onInputChange}
             onKeyDown={onKeyDown}
+            onPaste={(e) => {
+              const items = Array.from(e.clipboardData?.items || []) as DataTransferItem[];
+              for (const item of items) {
+                if (!item.type.startsWith('image/')) {
+                  continue;
+                }
+                e.preventDefault();
+                const blob = item.getAsFile();
+                if (!blob) {
+                  continue;
+                }
+                const reader = new FileReader();
+                reader.onload = () => {
+                  addAttachment({
+                    path: `paste:${Date.now()}`,
+                    name: `paste.${item.type.split('/')[1] || 'png'}`,
+                    kind: 'image',
+                    dataUrl: String(reader.result || ''),
+                    mimeType: item.type,
+                  });
+                };
+                reader.readAsDataURL(blob);
+              }
+            }}
             rows={1}
           />
           <div className={styles.inputFooter}>
             <span className={styles.composerHint}>
-              <kbd>@</kbd> mention · <kbd>Enter</kbd> send · <kbd>Shift</kbd>+<kbd>Enter</kbd> newline
+              <kbd>@</kbd> mention · <kbd>Enter</kbd> {busy ? 'queue' : 'send'} · <kbd>Shift</kbd>
+              +<kbd>Enter</kbd> newline
             </span>
             <button
               type="button"
               className={`${styles.sendBtn} ${styles[`sendBtn_${sendMode}`] || ''}`}
-              onClick={busy ? () => chat.stop() : onSend}
-              disabled={sendMode === 'send' && !canSend}
+              onClick={
+                busy
+                  ? () => chat.stop()
+                  : canCompose
+                    ? onSend
+                    : undefined
+              }
+              disabled={sendMode === 'send' && !canCompose}
               title={
                 sendMode === 'stop'
                   ? 'Stop generating'
                   : sendMode === 'done'
                     ? 'Reply complete'
-                    : 'Send message'
+                    : busy
+                      ? 'Queue message'
+                      : 'Send message'
               }
               aria-label={sendMode === 'stop' ? 'Stop generating' : 'Send message'}
             >

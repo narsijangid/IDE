@@ -31,13 +31,91 @@ import { AI_MODELS, DEFAULT_MODEL_ID, findModel, AiProviderId } from '../common/
 import { AGENT_TOOLS } from '../common/tools';
 import { RepositoryIndexService } from './repository-index.service';
 import { ripgrepSearch } from './ripgrep';
-import { EMBEDDED_ENV, EMBEDDED_POOLSIDE_API_KEY } from './embedded-secrets';
+import {
+  EMBEDDED_DEEPSEEK_API_KEY,
+  EMBEDDED_ENV,
+  EMBEDDED_POOLSIDE_API_KEY,
+} from './embedded-secrets';
 import { CommandRunner } from './command-runner';
 import { BrowserTestService } from './browser-test.service';
 
 const POOLSIDE_URL = 'https://inference.poolside.ai/v1/chat/completions';
+const DEFAULT_DEEPSEEK_BASE = 'https://api.deepseek.com';
 const DEFAULT_OLLAMA_BASE = 'http://127.0.0.1:11434';
 
+/** Known tool names for collapsing duplicated stream fragments. */
+const KNOWN_TOOL_NAMES: string[] = (AGENT_TOOLS || []).map((t) => t.function.name).filter(Boolean);
+
+/**
+ * Merge streamed tool-name deltas without doubling.
+ * Providers may send: (a) full name once, (b) full name every chunk, (c) char fragments.
+ */
+function mergeStreamedToolName(current: string, incoming: string): string {
+  const next = (incoming || '').trim();
+  if (!next) {
+    return current || '';
+  }
+  const cur = current || '';
+  if (!cur) {
+    return next;
+  }
+  if (next === cur) {
+    return cur;
+  }
+  // Growing name: "re" → "read" → "read_file"
+  if (next.startsWith(cur)) {
+    return next;
+  }
+  // Shorter/equal prefix resent
+  if (cur.startsWith(next)) {
+    return cur;
+  }
+  // Full name duplicated: "read_file" + "read_file" → keep once
+  if (cur.endsWith(next) || next.endsWith(cur)) {
+    return cur.length >= next.length ? cur : next;
+  }
+  // Tiny token fragment
+  if (next.length <= 4 && !KNOWN_TOOL_NAMES.includes(next)) {
+    const merged = cur + next;
+    return sanitizeToolName(merged) || merged;
+  }
+  return sanitizeToolName(cur + next) || cur;
+}
+
+/** Collapse read_fileread_file → read_file using known catalog names. */
+function sanitizeToolName(raw: string): string {
+  const name = (raw || '').trim();
+  if (!name) {
+    return '';
+  }
+  if (KNOWN_TOOL_NAMES.includes(name)) {
+    return name;
+  }
+  // Prefer longest known name that tiles the raw string, or that raw starts with.
+  const sorted = [...KNOWN_TOOL_NAMES].sort((a, b) => b.length - a.length);
+  for (const known of sorted) {
+    if (name === known) {
+      return known;
+    }
+    // Exact N repetitions: read_fileread_file
+    if (name.length % known.length === 0) {
+      const times = name.length / known.length;
+      if (times > 1 && known.repeat(times) === name) {
+        return known;
+      }
+    }
+    if (name.startsWith(known) && name.slice(known.length).startsWith(known)) {
+      return known;
+    }
+  }
+  // Prefix match: take first known name that is a prefix
+  for (const known of sorted) {
+    if (name.startsWith(known)) {
+      return known;
+    }
+  }
+  return name;
+}
 function formatBytes(n: number): string {
   if (!Number.isFinite(n) || n <= 0) {
     return '0 B';
@@ -144,6 +222,9 @@ function providerLabel(provider: AiProviderId): string {
   if (provider === 'ollama') {
     return 'Ollama';
   }
+  if (provider === 'deepseek') {
+    return 'DeepSeek';
+  }
   return 'Dazzlone';
 }
 
@@ -247,6 +328,14 @@ export class OlkilAiNodeService implements IOlkilAiNodeService {
     return this.repositoryIndex.findModules(root, query, limit);
   }
 
+  findFilesByName(
+    root: string,
+    query: string,
+    limit?: number,
+  ): Promise<{ files: string[]; engine: 'index' | 'empty'; elapsedMs: number }> {
+    return this.repositoryIndex.findFilesByName(root, query, limit);
+  }
+
   investigateRepository(root: string, query: string, limit?: number): Promise<InvestigationResult> {
     return this.repositoryIndex.investigate(root, query, limit);
   }
@@ -332,6 +421,14 @@ export class OlkilAiNodeService implements IOlkilAiNodeService {
     if (provider === 'ollama') {
       return process.env.OLLAMA_API_KEY || this.env.OLLAMA_API_KEY || 'ollama';
     }
+    if (provider === 'deepseek') {
+      return (
+        process.env.DEEPSEEK_API_KEY ||
+        this.env.DEEPSEEK_API_KEY ||
+        EMBEDDED_DEEPSEEK_API_KEY ||
+        ''
+      );
+    }
     return (
       process.env.POOLSIDE_API_KEY ||
       this.env.POOLSIDE_API_KEY ||
@@ -346,18 +443,35 @@ export class OlkilAiNodeService implements IOlkilAiNodeService {
     return raw.replace(/\/$/, '');
   }
 
-  private get maxTokens(): number {
-    const raw = process.env.OLKIL_MAX_TOKENS || this.env.OLKIL_MAX_TOKENS || '2048';
-    const n = Number(raw);
-    return Number.isFinite(n) && n > 0 ? Math.min(Math.floor(n), 8192) : 2048;
+  private get deepseekBase(): string {
+    const raw =
+      process.env.DEEPSEEK_BASE_URL ||
+      this.env.DEEPSEEK_BASE_URL ||
+      DEFAULT_DEEPSEEK_BASE;
+    return raw.replace(/\/$/, '');
   }
 
-  /** Cap oversized tool/user payloads so cloud APIs don't 500 on huge bodies. */
+  private chatCompletionsUrl(provider: AiProviderId): string {
+    if (provider === 'ollama') {
+      return `${this.ollamaBase}/v1/chat/completions`;
+    }
+    if (provider === 'deepseek') {
+      // DeepSeek accepts both /chat/completions and /v1/chat/completions
+      return `${this.deepseekBase}/chat/completions`;
+    }
+    return POOLSIDE_URL;
+  }
+
+  private get maxTokens(): number {
+    const raw = process.env.OLKIL_MAX_TOKENS || this.env.OLKIL_MAX_TOKENS || '2200';
+    const n = Number(raw);
+    return Number.isFinite(n) && n > 0 ? Math.min(Math.floor(n), 8192) : 2200;
+  }
+
+  /** Cap oversized tool/user payloads so cloud APIs don't burn tokens / 500. */
   private slimMessages(messages: ChatMessage[]): ChatMessage[] {
-    // Evidence dossiers need more room than ordinary chat. Retry logic still
-    // shrinks aggressively if a provider rejects the larger payload.
-    const MAX_MSG = 18_000;
-    const MAX_TOOL = 14_000;
+    const MAX_MSG = 10_000;
+    const MAX_TOOL = 6_000;
     return messages.map((m) => {
       const content =
         typeof m.content === 'string'
@@ -797,11 +911,14 @@ export class OlkilAiNodeService implements IOlkilAiNodeService {
     if (provider === 'poolside') {
       return Boolean(this.getKey('poolside'));
     }
+    if (provider === 'deepseek') {
+      return Boolean(this.getKey('deepseek'));
+    }
     // Any usable backend
     if (await this.isOllamaReachable()) {
       return true;
     }
-    return Boolean(this.getKey('poolside'));
+    return Boolean(this.getKey('deepseek') || this.getKey('poolside'));
   }
 
   async getModelName(modelId?: string): Promise<string> {
@@ -834,7 +951,9 @@ export class OlkilAiNodeService implements IOlkilAiNodeService {
       }
     } else if (!apiKey) {
       throw new Error(
-        `${providerLabel(option.provider)} is not configured. Rebuild OLKIL with POOLSIDE_API_KEY in ide-electron/.env (packaged into the app).`,
+        `${providerLabel(option.provider)} is not configured. Add ${
+          option.provider === 'deepseek' ? 'DEEPSEEK_API_KEY' : 'POOLSIDE_API_KEY'
+        } to ide-electron/.env and rebuild (yarn stage-olkil-env).`,
       );
     }
 
@@ -864,6 +983,17 @@ export class OlkilAiNodeService implements IOlkilAiNodeService {
       }
     }
 
+    // DeepSeek V4 defaults to thinking mode (bills at output rate) — disable for agent speed/cost.
+    // Keep enough max_tokens for tool-call JSON + real UI patches (Cursor-class edits).
+    if (option.provider === 'deepseek') {
+      body.thinking = { type: 'disabled' };
+      if (!request.maxTokens) {
+        body.max_tokens = Math.min(Math.max(tokenBudget, 1800), 4096);
+      } else {
+        body.max_tokens = Math.min(Math.max(tokenBudget, 1600), 4096);
+      }
+    }
+
     // Providers reject histories containing tool messages unless `tools` is also
     // sent, so keep the declarations even when forcing tool_choice: 'none'.
     const historyHasToolTraffic = request.messages.some(
@@ -879,10 +1009,7 @@ export class OlkilAiNodeService implements IOlkilAiNodeService {
       body.tool_choice = 'none';
     }
 
-    const url =
-      option.provider === 'ollama'
-        ? `${this.ollamaBase}/v1/chat/completions`
-        : POOLSIDE_URL;
+    const url = this.chatCompletionsUrl(option.provider);
 
     const headers: Record<string, string> = {
       'Content-Type': 'application/json',
@@ -907,7 +1034,7 @@ export class OlkilAiNodeService implements IOlkilAiNodeService {
         const err = `${option.provider} API ${res.status}: ${raw.slice(0, 500)}`;
         // Soft-retry once at the node layer for flaky 5xx (Poolside long jobs).
         if ([500, 502, 503, 504].includes(res.status) && !(request as any).__retried) {
-          await new Promise((r) => setTimeout(r, 900));
+          await new Promise((r) => setTimeout(r, 450));
           return this.chatCompletion({ ...request, __retried: true } as any);
         }
         if (useStream && request.streamId) {
@@ -1002,7 +1129,11 @@ export class OlkilAiNodeService implements IOlkilAiNodeService {
             const piece = normalizeMessageContent(delta.content);
             if (piece) {
               content += piece;
-              this.streams.set(streamId, { text: content, done: false });
+              this.streams.set(streamId, {
+                text: content,
+                done: false,
+                toolNames: toolCalls.filter(Boolean).map((t) => t.function.name).filter(Boolean),
+              });
             }
             if (Array.isArray(delta.tool_calls)) {
               for (const tc of delta.tool_calls) {
@@ -1011,19 +1142,33 @@ export class OlkilAiNodeService implements IOlkilAiNodeService {
                   toolCalls[idx] = {
                     id: tc.id || `call_${idx}`,
                     type: 'function',
-                    function: { name: tc.function?.name || '', arguments: '' },
+                    function: { name: '', arguments: '' },
                   };
                 }
                 if (tc.id) {
                   toolCalls[idx].id = tc.id;
                 }
                 if (tc.function?.name) {
-                  toolCalls[idx].function.name += tc.function.name;
+                  // Poolside/Laguna often re-sends the FULL tool name every SSE
+                  // chunk. Naïve `+=` turns read_file → read_fileread_file and
+                  // breaks dispatch ("Unknown tool"). Merge safely instead.
+                  toolCalls[idx].function.name = mergeStreamedToolName(
+                    toolCalls[idx].function.name,
+                    tc.function.name,
+                  );
                 }
                 if (tc.function?.arguments) {
                   toolCalls[idx].function.arguments += tc.function.arguments;
                 }
               }
+              this.streams.set(streamId, {
+                text: content,
+                done: false,
+                toolNames: toolCalls
+                  .filter(Boolean)
+                  .map((t) => sanitizeToolName(t.function.name))
+                  .filter(Boolean),
+              });
             }
           } catch {
             // ignore partial JSON
@@ -1036,7 +1181,15 @@ export class OlkilAiNodeService implements IOlkilAiNodeService {
 
     return {
       content,
-      tool_calls: toolCalls.length ? toolCalls.filter(Boolean) : undefined,
+      tool_calls: toolCalls.length
+        ? toolCalls.filter(Boolean).map((tc) => ({
+            ...tc,
+            function: {
+              ...tc.function,
+              name: sanitizeToolName(tc.function.name),
+            },
+          }))
+        : undefined,
       finish_reason: finishReason,
     };
   }

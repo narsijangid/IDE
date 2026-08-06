@@ -1,27 +1,35 @@
-import React from 'react';
+import React, { useState } from 'react';
 
 /**
  * Lightweight safe markdown renderer (no raw HTML).
- * Supports: fenced code, inline code, **bold**, *italic*, lists, headings, links-as-text.
+ * Supports: fenced code, inline code, **bold**, *italic*, lists, headings, links-as-text,
+ * clickable file paths, copy on code blocks.
  */
-export function MarkdownMessage({ text, className }: { text: string; className?: string }) {
+export function MarkdownMessage({
+  text,
+  className,
+  onOpenPath,
+}: {
+  text: string;
+  className?: string;
+  onOpenPath?: (path: string, line?: number) => void;
+}) {
   const blocks = parseBlocks(text || '');
   return (
     <div className={className}>
       {blocks.map((block, i) => {
         if (block.type === 'code') {
           return (
-            <pre key={i} className="md-code-block">
-              {block.lang ? <div className="md-code-lang">{block.lang}</div> : null}
-              <code>{block.text}</code>
-            </pre>
+            <div key={i}>
+              <CodeBlock lang={block.lang} text={block.text} />
+            </div>
           );
         }
         if (block.type === 'ul') {
           return (
             <ul key={i} className="md-ul">
               {block.items.map((item, j) => (
-                <li key={j}>{renderInline(item)}</li>
+                <li key={j}>{renderInline(item, onOpenPath)}</li>
               ))}
             </ul>
           );
@@ -30,7 +38,7 @@ export function MarkdownMessage({ text, className }: { text: string; className?:
           return (
             <ol key={i} className="md-ol">
               {block.items.map((item, j) => (
-                <li key={j}>{renderInline(item)}</li>
+                <li key={j}>{renderInline(item, onOpenPath)}</li>
               ))}
             </ol>
           );
@@ -41,20 +49,20 @@ export function MarkdownMessage({ text, className }: { text: string; className?:
           if (level === 1) {
             return (
               <h1 key={i} className={className}>
-                {renderInline(block.text)}
+                {renderInline(block.text, onOpenPath)}
               </h1>
             );
           }
           if (level === 2) {
             return (
               <h2 key={i} className={className}>
-                {renderInline(block.text)}
+                {renderInline(block.text, onOpenPath)}
               </h2>
             );
           }
           return (
             <h3 key={i} className={className}>
-              {renderInline(block.text)}
+              {renderInline(block.text, onOpenPath)}
             </h3>
           );
         }
@@ -63,11 +71,35 @@ export function MarkdownMessage({ text, className }: { text: string; className?:
         }
         return (
           <p key={i} className="md-p">
-            {renderInline(block.text)}
+            {renderInline(block.text, onOpenPath)}
           </p>
         );
       })}
     </div>
+  );
+}
+
+function CodeBlock({ lang, text }: { lang?: string; text: string }) {
+  const [copied, setCopied] = useState(false);
+  const onCopy = async () => {
+    try {
+      await navigator.clipboard.writeText(text);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1200);
+    } catch {
+      // ignore
+    }
+  };
+  return (
+    <pre className="md-code-block">
+      <div className="md-code-toolbar">
+        {lang ? <span className="md-code-lang">{lang}</span> : <span className="md-code-lang">code</span>}
+        <button type="button" className="md-code-copy" onClick={() => void onCopy()}>
+          {copied ? 'Copied' : 'Copy'}
+        </button>
+      </div>
+      <code>{text}</code>
+    </pre>
   );
 }
 
@@ -87,7 +119,6 @@ function parseBlocks(src: string): Block[] {
   while (i < lines.length) {
     const line = lines[i];
 
-    // fenced code
     const fence = line.match(/^```(\w*)\s*$/);
     if (fence) {
       const lang = fence[1] || undefined;
@@ -98,13 +129,12 @@ function parseBlocks(src: string): Block[] {
         i++;
       }
       if (i < lines.length) {
-        i++; // closing ```
+        i++;
       }
       out.push({ type: 'code', text: buf.join('\n'), lang });
       continue;
     }
 
-    // heading
     const h = line.match(/^(#{1,3})\s+(.+)$/);
     if (h) {
       out.push({ type: 'h', level: h[1].length, text: h[2] });
@@ -112,14 +142,12 @@ function parseBlocks(src: string): Block[] {
       continue;
     }
 
-    // hr
     if (/^(-{3,}|\*{3,}|_{3,})\s*$/.test(line)) {
       out.push({ type: 'hr' });
       i++;
       continue;
     }
 
-    // unordered list
     if (/^\s*[-*+]\s+/.test(line)) {
       const items: string[] = [];
       while (i < lines.length && /^\s*[-*+]\s+/.test(lines[i])) {
@@ -130,7 +158,6 @@ function parseBlocks(src: string): Block[] {
       continue;
     }
 
-    // ordered list
     if (/^\s*\d+[.)]\s+/.test(line)) {
       const items: string[] = [];
       while (i < lines.length && /^\s*\d+[.)]\s+/.test(lines[i])) {
@@ -141,13 +168,11 @@ function parseBlocks(src: string): Block[] {
       continue;
     }
 
-    // blank
     if (!line.trim()) {
       i++;
       continue;
     }
 
-    // paragraph (merge consecutive non-empty non-special lines)
     const buf: string[] = [line];
     i++;
     while (
@@ -168,10 +193,14 @@ function parseBlocks(src: string): Block[] {
   return out.length ? out : [{ type: 'p', text: '' }];
 }
 
-function renderInline(text: string): React.ReactNode[] {
-  // Tokenize: `code`, **bold**, *italic*, remaining text
+function renderInline(
+  text: string,
+  onOpenPath?: (path: string, line?: number) => void,
+): React.ReactNode[] {
   const nodes: React.ReactNode[] = [];
-  const re = /(`[^`]+`|\*\*[^*]+\*\*|__[^_]+__|\*[^*]+\*|_[^_]+_)/g;
+  // `code`, **bold**, *italic*, backtick paths, bare path:line
+  const re =
+    /(`[^`]+`|\*\*[^*]+\*\*|__[^_]+__|\*[^*]+\*|_[^_]+_|`?(?:[A-Za-z]:)?[A-Za-z0-9_./\\-]+\.[A-Za-z0-9]+(?::\d+)?`?)/g;
   let last = 0;
   let m: RegExpExecArray | null;
   let key = 0;
@@ -180,7 +209,28 @@ function renderInline(text: string): React.ReactNode[] {
       nodes.push(text.slice(last, m.index));
     }
     const tok = m[0];
-    if (tok.startsWith('`')) {
+    if (tok.startsWith('`') && tok.endsWith('`') && tok.length > 2 && !/\s/.test(tok.slice(1, -1))) {
+      const inner = tok.slice(1, -1);
+      if (looksLikePath(inner) && onOpenPath) {
+        const { path, line } = splitPathLine(inner);
+        nodes.push(
+          <button
+            key={key++}
+            type="button"
+            className="md-file-link"
+            onClick={() => onOpenPath(path, line)}
+          >
+            {inner}
+          </button>,
+        );
+      } else {
+        nodes.push(
+          <code key={key++} className="md-inline-code">
+            {inner}
+          </code>,
+        );
+      }
+    } else if (tok.startsWith('`')) {
       nodes.push(
         <code key={key++} className="md-inline-code">
           {tok.slice(1, -1)}
@@ -189,15 +239,29 @@ function renderInline(text: string): React.ReactNode[] {
     } else if (tok.startsWith('**') || tok.startsWith('__')) {
       nodes.push(
         <strong key={key++} className="md-strong">
-          {renderInline(tok.slice(2, -2))}
+          {renderInline(tok.slice(2, -2), onOpenPath)}
         </strong>,
       );
-    } else {
+    } else if (tok.startsWith('*') || tok.startsWith('_')) {
       nodes.push(
         <em key={key++} className="md-em">
           {tok.slice(1, -1)}
         </em>,
       );
+    } else if (looksLikePath(tok) && onOpenPath) {
+      const { path, line } = splitPathLine(tok);
+      nodes.push(
+        <button
+          key={key++}
+          type="button"
+          className="md-file-link"
+          onClick={() => onOpenPath(path, line)}
+        >
+          {tok}
+        </button>,
+      );
+    } else {
+      nodes.push(tok);
     }
     last = m.index + tok.length;
   }
@@ -205,4 +269,16 @@ function renderInline(text: string): React.ReactNode[] {
     nodes.push(text.slice(last));
   }
   return nodes;
+}
+
+function looksLikePath(s: string): boolean {
+  return /(?:\/|\\|\.[A-Za-z0-9]{1,8}$)/.test(s) && !/\s/.test(s) && s.length < 200;
+}
+
+function splitPathLine(s: string): { path: string; line?: number } {
+  const m = /^(.*):(\d+)$/.exec(s);
+  if (m) {
+    return { path: m[1], line: Number(m[2]) };
+  }
+  return { path: s };
 }

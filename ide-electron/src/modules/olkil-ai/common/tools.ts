@@ -1,7 +1,7 @@
 import { ToolDefinition } from './index';
 import { AI_MODELS, publicModelName } from './models';
 
-export type ChatMode = 'agent' | 'plan';
+export type ChatMode = 'agent' | 'plan' | 'ask';
 
 export const DEFAULT_CHAT_MODE: ChatMode = 'agent';
 
@@ -15,10 +15,18 @@ export function buildSystemPrompt(
   workspaceRoot: string,
   activeFile?: string,
   modelInfo?: { provider: string; model: string; label: string },
+  extraRules?: string,
 ): string {
-  return mode === 'plan'
-    ? buildPlanPrompt(workspaceRoot, activeFile, modelInfo)
-    : buildAgentPrompt(workspaceRoot, activeFile, modelInfo);
+  const base =
+    mode === 'plan'
+      ? buildPlanPrompt(workspaceRoot, activeFile, modelInfo)
+      : mode === 'ask'
+        ? buildAskPrompt(workspaceRoot, activeFile, modelInfo)
+        : buildAgentPrompt(workspaceRoot, activeFile, modelInfo);
+  if (extraRules?.trim()) {
+    return `${base}\n\n${extraRules.trim()}`;
+  }
+  return base;
 }
 
 function identityBlock(modelInfo?: { provider: string; model: string; label: string }): string {
@@ -72,6 +80,7 @@ MINDSET:
 - Use ATTACHED / @mentioned files as primary context when present.
 - Never invent a different project. Never claim you lack access if WORKSPACE ROOT is set.
 - Keep replies SHORT after tools (1–3 sentences). Do not dump huge code into chat — edit files via tools.
+- Token discipline: call the fewest tools that unblock the next edit; prefer start_line/end_line reads over whole files.
 
 WHEN TO USE TOOLS:
 - Coding/file tasks: create, update, fix, refactor, rename, delete, SEO, feature, structure, design.
@@ -109,14 +118,18 @@ WHEN NOT TO USE TOOLS:
 
 HARD RULES:
 - NEVER ask "should I proceed". Just do the work.
+- NEVER ask the user which file is correct. Rank evidence yourself and edit the best match. If wrong, undo and try the next.
+- If the user said "frontend only" / "only frontend" / "UI only", IGNORE backend/models/migrations/API files — edit HTML/TS/SCSS/components only.
 - NEVER claim you changed something unless you called a mutating tool THIS turn.
-- If a module/feature name is mentioned, you MUST call find_module (or repository_search) and read_file on the best hits before concluding.
-- If you cannot find the module, list the closest candidates and keep searching with alternate spellings (kebab/camel/Pascal) — do NOT end with a vague failure.
+- If a module/feature name is mentioned, you MUST call find_module (or exact_code_search/grep) and read_file on the best hits before concluding.
+- Prefer exact UI labels from the user request (section titles, button text) via exact_code_search/grep over fuzzy "Retail"/"Wholesale" cousins.
+- If you cannot find the module, keep searching with alternate spellings (kebab/camel/Pascal) — do NOT end by listing candidates for the user to pick.
 - Investigation confidence < 80 means research is incomplete: read evidence, search discovered calls/routes, and continue.
 - Follow evidence, not guesses. For bugs, identify the broken call chain before editing.
-- For implementation requests, search alone is not completion: read → edit → verify.
+- For implementation requests, search alone is not completion: read → edit → verify. Ending with "tell me which file" is a FAILURE.
 - NEVER paste tutorials or sample projects instead of editing the open workspace.
 - After edits: brief confirmation of what changed.
+- After a mutating edit, call get_diagnostics on the touched file(s). If new errors appear, fix them before claiming done.
 
 EDIT DISCIPLINE (zero-mistake — Cursor-class verify-then-apply):
 - Think like Cursor: READ → PLAN smallest patch → APPLY → VERIFY. Never invent code for unread files.
@@ -130,6 +143,14 @@ EDIT DISCIPLINE (zero-mistake — Cursor-class verify-then-apply):
 - If a tool replies EDIT REJECTED or EDIT BLOCKED, the file was NOT changed. Re-read the region and retry with corrected code — never ignore it, never claim success.
 - Successful search_replace returns verified_preview of the landed lines — if that preview looks wrong, fix immediately with another search_replace.
 - After the final edit of a task, confirm what changed in 1–3 sentences. Never say "done" after a rejected edit.
+
+FINAL REPLY (Cursor-style — after tools finish):
+- Write a short completion theory: what you did, why, and which files changed.
+- End with 1–3 concrete "Suggested checks" the user can run (commands, UI clicks, or files to open). Do not invent fake test results.
+- Keep it tight — no essay, no tool dumps.
+
+TODOS (multi-step tasks):
+- For any non-trivial task (3+ steps), call update_todos early to show a checklist, mark items in_progress/completed as you go, and finish with all items completed or cancelled.
 `;
 }
 
@@ -147,13 +168,34 @@ ${workspaceBlock(workspaceRoot, activeFile)}
 
 MODE = PLAN:
 - Outline a short plan for broad goals, then ask which parts to apply.
-- You MAY explore with find_files / grep / read_file / list_dir.
+- You MAY explore with find_files / grep / read_file / list_dir / get_diagnostics / get_git_status.
 - Do NOT make large multi-file edits until the user agrees (or says "go ahead / kar do / apply").
 - Small explicit single-file fixes may be patched with search_replace immediately.
 - delete_file only when the user clearly asked to remove a file.
 
 EDITING:
 - Prefer search_replace. write_file for full small-file rewrites. create_file for new files.
+`;
+}
+
+/** Ask mode — Cursor Ask: read-only answers, no file mutations. */
+function buildAskPrompt(
+  workspaceRoot: string,
+  activeFile?: string,
+  modelInfo?: { provider: string; model: string; label: string },
+): string {
+  return `You are OLKIL in ASK mode — read-only Q&A like Cursor Ask.
+
+${identityBlock(modelInfo)}
+
+${workspaceBlock(workspaceRoot, activeFile)}
+
+MODE = ASK (HARD):
+- Answer questions about the codebase accurately using read/search tools only.
+- NEVER call search_replace, write_file, create_file, rename_file, delete_file, or run destructive shell.
+- You MAY use: read_file, grep, find_files, investigate_codepath, get_diagnostics, get_git_status, list_dir, repository_*.
+- Prefer citing real paths and line ranges. Keep answers clear and structured.
+- If the user asks you to implement, briefly say switch to Agent mode (or they'll switch), and outline the plan.
 `;
 }
 
@@ -168,6 +210,84 @@ export const AGENT_TOOLS: ToolDefinition[] = [
     function: {
       name: 'get_active_file',
       description: 'Get the currently focused editor file path + short numbered preview.',
+      parameters: { type: 'object', properties: {}, additionalProperties: false },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'update_todos',
+      description:
+        'Create or update a Cursor-style todo checklist for multi-step work. Call early on non-trivial tasks; mark items in_progress/completed as you go. Replaces the whole list each call.',
+      parameters: {
+        type: 'object',
+        properties: {
+          todos: {
+            type: 'array',
+            items: {
+              type: 'object',
+              properties: {
+                id: { type: 'string', description: 'Stable id for the item' },
+                content: { type: 'string', description: 'Short actionable step' },
+                status: {
+                  type: 'string',
+                  enum: ['pending', 'in_progress', 'completed', 'cancelled'],
+                },
+              },
+              required: ['id', 'content', 'status'],
+            },
+          },
+          merge: {
+            type: 'boolean',
+            description: 'If true, merge by id into the existing list; else replace.',
+          },
+        },
+        required: ['todos'],
+        additionalProperties: false,
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'get_diagnostics',
+      description:
+        'Read IDE linter/TypeScript/ESLint diagnostics (errors & warnings). Call after edits to verify nothing broke. Optional path filter.',
+      parameters: {
+        type: 'object',
+        properties: {
+          path: { type: 'string', description: 'Optional file path to filter' },
+          severity: {
+            type: 'string',
+            enum: ['error', 'warning', 'all'],
+            description: 'Default error',
+          },
+          max_results: { type: 'number' },
+        },
+        additionalProperties: false,
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'get_git_status',
+      description:
+        'List git/SCM changed files (staged/unstaged) like Cursor @Git. Use before summarizing diffs or committing.',
+      parameters: {
+        type: 'object',
+        properties: {
+          max_results: { type: 'number' },
+        },
+        additionalProperties: false,
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'get_selection',
+      description: 'Get the current editor selection text + path + line range (Cursor selection context).',
       parameters: { type: 'object', properties: {}, additionalProperties: false },
     },
   },
@@ -740,3 +860,132 @@ export const AGENT_TOOLS: ToolDefinition[] = [
     },
   },
 ];
+
+/** Tools safe to run in parallel within one model step. */
+export const READONLY_TOOL_NAMES = new Set([
+  'get_active_file',
+  'get_diagnostics',
+  'get_git_status',
+  'get_selection',
+  'exact_code_search',
+  'goto_definition',
+  'find_references',
+  'investigate_codepath',
+  'find_module',
+  'repository_search',
+  'repository_overview',
+  'related_files',
+  'find_files',
+  'grep',
+  'read_file',
+  'list_dir',
+  'detect_dev_server',
+  'get_command_output',
+  'browser_snapshot',
+  'browser_console',
+  'browser_network',
+  'browser_screenshot',
+]);
+
+export const MUTATING_TOOL_NAMES = new Set([
+  'search_replace',
+  'create_file',
+  'write_file',
+  'rename_file',
+  'delete_file',
+]);
+
+const ASK_TOOL_NAMES = new Set([
+  'get_active_file',
+  'get_diagnostics',
+  'get_git_status',
+  'get_selection',
+  'exact_code_search',
+  'goto_definition',
+  'find_references',
+  'investigate_codepath',
+  'find_module',
+  'repository_search',
+  'repository_overview',
+  'related_files',
+  'find_files',
+  'grep',
+  'read_file',
+  'list_dir',
+]);
+
+const EXPLORE_TOOL_NAMES = new Set([
+  ...ASK_TOOL_NAMES,
+  'update_todos',
+]);
+
+const EDIT_TOOL_NAMES = new Set([
+  ...EXPLORE_TOOL_NAMES,
+  'search_replace',
+  'create_file',
+  'write_file',
+  'rename_file',
+  'delete_file',
+  'run_command',
+  'get_command_output',
+  'stop_command',
+  'detect_dev_server',
+]);
+
+const BROWSER_TOOL_NAMES = new Set([
+  ...EDIT_TOOL_NAMES,
+  'live_test',
+  'browser_launch',
+  'browser_goto',
+  'browser_reload',
+  'browser_snapshot',
+  'browser_click',
+  'browser_fill',
+  'browser_type',
+  'browser_press',
+  'browser_console',
+  'browser_network',
+  'browser_devtools',
+  'browser_screenshot',
+  'browser_close',
+]);
+
+/**
+ * Cursor-style schema routing: explore briefly, then unlock edits fast.
+ * Cursor does not gate mutation tools behind many search rounds.
+ */
+export function selectAgentTools(opts: {
+  mode?: ChatMode;
+  liveTest?: boolean;
+  madeEdits?: boolean;
+  searchCount?: number;
+  readCount?: number;
+}): ToolDefinition[] {
+  if (opts.mode === 'ask') {
+    return AGENT_TOOLS.filter((t) => ASK_TOOL_NAMES.has(t.function.name));
+  }
+  if (opts.liveTest) {
+    return AGENT_TOOLS.filter((t) => BROWSER_TOOL_NAMES.has(t.function.name));
+  }
+  // Only the very first round is explore-only; after any search/read, allow edits.
+  const exploring =
+    (opts.searchCount || 0) + (opts.readCount || 0) < 1 && !opts.madeEdits;
+  if (opts.mode === 'plan' && exploring) {
+    return AGENT_TOOLS.filter((t) => EXPLORE_TOOL_NAMES.has(t.function.name));
+  }
+  if (exploring) {
+    return AGENT_TOOLS.filter((t) => EXPLORE_TOOL_NAMES.has(t.function.name));
+  }
+  return AGENT_TOOLS.filter((t) => EDIT_TOOL_NAMES.has(t.function.name));
+}
+
+/** Per-step completion budget — edits need room for tool-call JSON + patches. */
+export function routingMaxTokens(step: number, madeEdits: boolean): number {
+  if (madeEdits) {
+    return 2800;
+  }
+  if (step === 0) {
+    return 1400;
+  }
+  return 2200;
+}

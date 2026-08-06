@@ -1,4 +1,4 @@
-export type AiProviderId = 'ollama' | 'poolside';
+export type AiProviderId = 'ollama' | 'poolside' | 'deepseek';
 
 export interface AiModelOption {
   /** Unique UI id, e.g. ollama:qwen2.5-coder:7b */
@@ -19,10 +19,19 @@ export interface AiModelOption {
 }
 
 /**
- * Cloud (Dazzlone) + local Ollama models.
+ * Cloud (DeepSeek / Dazzlone) + local Ollama models.
  * Pull Ollama models with: `ollama pull <model>`
  */
 export const AI_MODELS: AiModelOption[] = [
+  {
+    id: 'deepseek:deepseek-v4-flash',
+    provider: 'deepseek',
+    model: 'deepseek-v4-flash',
+    label: 'DeepSeek V4 Flash',
+    displayName: 'DeepSeek V4 Flash',
+    badge: 'CLOUD',
+    publicName: 'DeepSeek V4 Flash',
+  },
   {
     id: 'poolside:poolside/laguna-s-2.1',
     provider: 'poolside',
@@ -74,8 +83,8 @@ export const AI_MODELS: AiModelOption[] = [
   },
 ];
 
-/** Default = Dazzlone (cloud, free) */
-export const DEFAULT_MODEL_ID = 'poolside:poolside/laguna-s-2.1';
+/** Default = DeepSeek V4 Flash (fast, low-cost cloud) */
+export const DEFAULT_MODEL_ID = 'deepseek:deepseek-v4-flash';
 
 export function findModel(id: string): AiModelOption {
   return AI_MODELS.find((m) => m.id === id) || AI_MODELS[0];

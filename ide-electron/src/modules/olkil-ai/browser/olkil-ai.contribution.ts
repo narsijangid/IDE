@@ -12,7 +12,7 @@ import {
   KeybindingRegistry,
 } from '@opensumi/ide-core-browser';
 import { MenuContribution, IMenuRegistry, MenuId } from '@opensumi/ide-core-browser/lib/menu/next';
-import { IOlkilChatUiService } from '../common';
+import { IOlkilChatService, IOlkilChatUiService } from '../common';
 import { OlkilAiOverlay } from './overlay';
 
 export const OLKIL_AI_TOGGLE_COMMAND = {
@@ -23,6 +23,11 @@ export const OLKIL_AI_TOGGLE_COMMAND = {
 export const OLKIL_AI_MINIMIZE_COMMAND = {
   id: 'olkil.ai.minimize',
   label: 'Minimize OLKIL Agent Chat',
+};
+
+export const OLKIL_AI_INLINE_EDIT_COMMAND = {
+  id: 'olkil.ai.inlineEdit',
+  label: 'OLKIL Inline Edit (Cmd+K)',
 };
 
 const OVERLAY_ROOT_ID = 'olkil-ai-overlay-root';
@@ -41,6 +46,9 @@ export class OlkilAiContribution
 
   @Autowired(IOlkilChatUiService)
   private ui!: IOlkilChatUiService;
+
+  @Autowired(IOlkilChatService)
+  private chat!: IOlkilChatService;
 
   private host?: HTMLDivElement;
   private reactRoot?: Root;
@@ -79,7 +87,6 @@ export class OlkilAiContribution
   registerCommands(commands: CommandRegistry) {
     commands.registerCommand(OLKIL_AI_TOGGLE_COMMAND, {
       execute: () => {
-        // Ctrl+L from a minimized pill should bring the panel back, not close it.
         if (this.ui.state === 'minimized') {
           this.ui.restore();
         } else {
@@ -91,6 +98,21 @@ export class OlkilAiContribution
     commands.registerCommand(OLKIL_AI_MINIMIZE_COMMAND, {
       execute: () => this.ui.minimize(),
     });
+
+    commands.registerCommand(OLKIL_AI_INLINE_EDIT_COMMAND, {
+      execute: async () => {
+        if (this.ui.state === 'closed' || this.ui.state === 'minimized') {
+          this.ui.restore();
+        }
+        const instruction = window.prompt(
+          'OLKIL Inline Edit — describe the change for the selected code:',
+          '',
+        );
+        if (instruction?.trim()) {
+          await this.chat.inlineEdit(instruction.trim());
+        }
+      },
+    });
   }
 
   registerKeybindings(keybindings: KeybindingRegistry) {
@@ -98,12 +120,22 @@ export class OlkilAiContribution
       command: OLKIL_AI_TOGGLE_COMMAND.id,
       keybinding: 'ctrlcmd+l',
     });
+    keybindings.registerKeybinding({
+      command: OLKIL_AI_INLINE_EDIT_COMMAND.id,
+      keybinding: 'ctrlcmd+k',
+      when: 'editorTextFocus',
+    });
   }
 
   registerMenus(menus: IMenuRegistry) {
     menus.registerMenuItem(MenuId.MenubarViewMenu, {
       command: OLKIL_AI_TOGGLE_COMMAND.id,
       label: 'OLKIL Agent Chat',
+      group: '5_panel',
+    });
+    menus.registerMenuItem(MenuId.MenubarViewMenu, {
+      command: OLKIL_AI_INLINE_EDIT_COMMAND.id,
+      label: 'OLKIL Inline Edit',
       group: '5_panel',
     });
   }

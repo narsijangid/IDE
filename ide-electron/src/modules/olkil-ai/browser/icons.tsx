@@ -100,6 +100,26 @@ export const NewChatIcon = ({ size, className }: IconProps) => (
   </Svg>
 );
 
+export const CopyIcon = ({ size, className }: IconProps) => (
+  <Svg size={size} className={className}>
+    <rect x="8.5" y="8.5" width="10" height="10" rx="1.8" {...stroke} />
+    <path d="M6.2 15.2V6.2A1.6 1.6 0 0 1 7.8 4.6h8.4" {...stroke} />
+  </Svg>
+);
+
+export const RefreshIcon = ({ size, className }: IconProps) => (
+  <Svg size={size} className={className}>
+    <path d="M19.2 12a7.2 7.2 0 1 1-2.1-5.1" {...stroke} />
+    <path d="M19.2 4.8v4.6h-4.6" {...stroke} />
+  </Svg>
+);
+
+export const ChevronIcon = ({ size, className }: IconProps) => (
+  <Svg size={size} className={className}>
+    <path d="M9 6.5l6 5.5-6 5.5" {...stroke} />
+  </Svg>
+);
+
 export const PinIcon = ({ size, className }: IconProps) => (
   <Svg size={size} className={className}>
     <circle cx="12" cy="8.2" r="3.4" {...stroke} />

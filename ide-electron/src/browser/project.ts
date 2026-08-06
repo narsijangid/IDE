@@ -65,7 +65,7 @@ export class ProjectSwitcherContribution
   registerMenus(registry: IMenuRegistry) {
     registry.registerMenuItem(MenuId.MenubarFileMenu, {
       submenu: 'recentProjects',
-      label: '最近项目',
+      label: 'Open Recent',
       group: '1_open',
     });
 
@@ -84,13 +84,13 @@ export class ProjectSwitcherContribution
     registry.registerMenuItems(MenuId.MenubarFileMenu, [
       {
         command: WORKSPACE_COMMANDS.ADD_WORKSPACE_FOLDER.id,
-        label: '添加文件夹至工作区',
+        label: 'Add Folder to Workspace...',
         group: '2_new',
       },
       {
         command: {
           id: WORKSPACE_COMMANDS.SAVE_WORKSPACE_AS_FILE.id,
-          label: '保存工作区',
+          label: 'Save Workspace As...',
         },
         group: '3_save',
       },

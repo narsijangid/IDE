@@ -21,7 +21,7 @@ import {
   SymbolOccurrence,
 } from './scip-lite';
 import { buildTrigramSignature, signatureMayContain } from './trigram';
-import { ripgrepSearch } from './ripgrep';
+import { invalidateRipgrepCache, ripgrepSearch } from './ripgrep';
 
 const INDEX_VERSION = 7;
 const MAX_FILE_BYTES = 1_200_000;
@@ -122,6 +122,10 @@ interface IndexState {
   phase: RepositoryIndexStatus['state'];
   documents: Map<string, IndexedDocument>;
   inverted: Map<string, Map<string, number>>;
+  /** basename → document keys (extreme-fast find_files / module seed) */
+  basenameIndex: Map<string, string[]>;
+  /** path token → document keys */
+  pathTokenIndex: Map<string, string[]>;
   graph: Map<string, GraphEdge[]>;
   symbolDefinitions: Map<string, SymbolHit[]>;
   symbolReferences: Map<string, SymbolHit[]>;
@@ -563,6 +567,43 @@ function gitIgnoreMatcher(root: string): (absolute: string, directory: boolean) 
  */
 export class RepositoryIndexService {
   private readonly states = new Map<string, IndexState>();
+  /** Sticky query → hits (agent loops re-issue identical searches). */
+  private readonly stickySearch = new Map<string, { at: number; value: any }>();
+  private readonly STICKY_TTL_MS = 60_000;
+  private readonly STICKY_MAX = 200;
+
+  private stickyGet<T>(key: string): T | undefined {
+    const hit = this.stickySearch.get(key);
+    if (!hit) return undefined;
+    if (Date.now() - hit.at > this.STICKY_TTL_MS) {
+      this.stickySearch.delete(key);
+      return undefined;
+    }
+    return hit.value as T;
+  }
+
+  private stickySet(key: string, value: unknown): void {
+    if (this.stickySearch.size >= this.STICKY_MAX) {
+      const oldest = this.stickySearch.keys().next().value;
+      if (oldest !== undefined) this.stickySearch.delete(oldest);
+    }
+    this.stickySearch.set(key, { at: Date.now(), value });
+  }
+
+  private invalidateSticky(root?: string): void {
+    if (!root) {
+      this.stickySearch.clear();
+      this.rankCache.clear();
+      invalidateRipgrepCache();
+      return;
+    }
+    const prefix = root.toLowerCase();
+    for (const key of [...this.stickySearch.keys()]) {
+      if (key.includes(prefix)) this.stickySearch.delete(key);
+    }
+    invalidateRipgrepCache(root);
+    this.rankCache.clear();
+  }
 
   async ensure(rootInput: string): Promise<RepositoryIndexStatus> {
     const root = normalizeRoot(rootInput);
@@ -573,6 +614,8 @@ export class RepositoryIndexService {
         phase: 'loading',
         documents: new Map(),
         inverted: new Map(),
+        basenameIndex: new Map(),
+        pathTokenIndex: new Map(),
         graph: new Map(),
         symbolDefinitions: new Map(),
         symbolReferences: new Map(),
@@ -585,6 +628,10 @@ export class RepositoryIndexService {
       } else {
         state.build = this.build(state);
       }
+    }
+    // Extreme: if we already have docs, serve NOW — don't await background reconcile.
+    if (state.documents.size > 0) {
+      return this.status(state);
     }
     if (state.phase !== 'ready' && state.build) {
       await state.build;
@@ -604,12 +651,19 @@ export class RepositoryIndexService {
     const root = normalizeRoot(rootInput);
     await this.ensure(root);
     const state = this.states.get(root)!;
+    const stickyKey = `search|${root}|${state.indexedAt || 0}|${limit}|${query.slice(0, 300)}`;
+    const cached = this.stickyGet<RepositorySearchResult>(stickyKey);
+    if (cached) return cached;
     const hits = this.rank(state, query, Math.max(1, Math.min(40, limit)));
-    return {
+    const result = {
       status: this.status(state),
       query,
-      hits: hits.map((item) => this.toSearchHit(state, item.path, item.score, item.reason, query)),
+      hits: hits.map((item) =>
+        this.toSearchHit(state, item.path, item.score, item.reason, query, false),
+      ),
     };
+    this.stickySet(stickyKey, result);
+    return result;
   }
 
   async exactSearch(rootInput: string, query: string, limit = 20): Promise<RepositorySearchResult> {
@@ -619,9 +673,16 @@ export class RepositoryIndexService {
     const needle = query.trim();
     if (needle.length < 3) return this.search(root, needle, limit);
 
-    // Fast path: native ripgrep (livegrep-style) verifies real contents in
-    // milliseconds. Bloom-signature scan below is only the fallback.
-    const rg = await ripgrepSearch(root, needle, { maxResults: Math.max(40, limit * 4) });
+    const stickyKey = `exact|${root}|${limit}|${needle.slice(0, 400)}`;
+    const cached = this.stickyGet<RepositorySearchResult>(stickyKey);
+    if (cached) return cached;
+
+    // Fast path: native ripgrep (livegrep-style) — use rg line text as excerpt
+    // (no sync re-read of every hit file).
+    const rg = await ripgrepSearch(root, needle, {
+      maxResults: Math.max(40, limit * 4),
+      timeoutMs: 2200,
+    });
     if (rg.engine === 'ripgrep') {
       const byFile = new Map<string, { count: number; firstLine: number; sample: string }>();
       for (const match of rg.matches) {
@@ -639,25 +700,38 @@ export class RepositoryIndexService {
           const doc = state.documents.get(fileKey);
           const pathMatch = fileKey.includes(lowerNeedleRg);
           const symbolMatch = !!doc?.symbols.some((s) => s.toLowerCase().includes(lowerNeedleRg));
+          const frontendBoost = /frontend|src\/app|components?\//i.test(fileKey) ? 18 : 0;
+          const backendPenalty = /backend|migrations?|models?\//i.test(fileKey) ? -12 : 0;
           return {
             path: fileKey,
-            score: 100 + Math.min(30, info.count * 3) + (pathMatch ? 45 : 0) + (symbolMatch ? 35 : 0),
+            score:
+              100 +
+              Math.min(30, info.count * 3) +
+              (pathMatch ? 45 : 0) +
+              (symbolMatch ? 35 : 0) +
+              frontendBoost +
+              backendPenalty,
             reason: [
               `exact match ×${info.count} (line ${info.firstLine})`,
               `e.g. ${info.sample.slice(0, 120)}`,
               ...(pathMatch ? ['path match'] : []),
               ...(symbolMatch ? ['symbol definition'] : []),
             ],
+            sample: `${info.firstLine}|${info.sample}`,
           };
         })
         .sort((a, b) => b.score - a.score);
-      return {
+      const result = {
         status: this.status(state),
         query,
-        hits: ranked
-          .slice(0, Math.max(1, Math.min(80, limit)))
-          .map((item) => this.toSearchHit(state, item.path, item.score, item.reason, query)),
+        hits: ranked.slice(0, Math.max(1, Math.min(80, limit))).map((item) => {
+          const hit = this.toSearchHit(state, item.path, item.score, item.reason, query, false);
+          hit.excerpt = item.sample;
+          return hit;
+        }),
       };
+      this.stickySet(stickyKey, result);
+      return result;
     }
 
     const lowerNeedle = needle.toLowerCase();
@@ -706,13 +780,78 @@ export class RepositoryIndexService {
       }
     }
     matches.sort((a, b) => b.score - a.score);
-    return {
+    const bloomResult = {
       status: this.status(state),
       query,
       hits: matches
         .slice(0, Math.max(1, Math.min(80, limit)))
-        .map((item) => this.toSearchHit(state, item.path, item.score, item.reason, query)),
+        .map((item) => this.toSearchHit(state, item.path, item.score, item.reason, query, false)),
     };
+    this.stickySet(stickyKey, bloomResult);
+    return bloomResult;
+  }
+
+  /**
+   * Extreme-fast path finder from basename / path-token indexes (no FS walk).
+   */
+  async findFilesByName(
+    rootInput: string,
+    query: string,
+    limit = 40,
+  ): Promise<{ files: string[]; engine: 'index' | 'empty'; elapsedMs: number }> {
+    const started = Date.now();
+    const root = normalizeRoot(rootInput);
+    await this.ensure(root);
+    const state = this.states.get(root)!;
+    const needle = (query || '').trim().toLowerCase().replace(/\*/g, '');
+    if (!needle) {
+      return { files: [], engine: 'empty', elapsedMs: 0 };
+    }
+    const stickyKey = `findfiles|${root}|${state.indexedAt || 0}|${needle}|${limit}`;
+    const cached = this.stickyGet<{ files: string[]; engine: 'index' | 'empty'; elapsedMs: number }>(
+      stickyKey,
+    );
+    if (cached) return { ...cached, elapsedMs: Date.now() - started };
+
+    const scored = new Map<string, number>();
+    const bump = (key: string, score: number) => {
+      scored.set(key, Math.max(scored.get(key) || 0, score));
+    };
+
+    const baseHit = state.basenameIndex.get(needle);
+    if (baseHit) {
+      for (const key of baseHit) bump(key, 100);
+    }
+    for (const [base, keys] of state.basenameIndex) {
+      if (base.includes(needle) || needle.includes(base)) {
+        for (const key of keys) bump(key, base === needle ? 100 : 70);
+      }
+    }
+    for (const token of tokenize(needle)) {
+      const keys = state.pathTokenIndex.get(token);
+      if (!keys) continue;
+      for (const key of keys) bump(key, 40);
+    }
+    // Path substring fallback on candidate set only (not full FS)
+    if (scored.size < limit) {
+      for (const key of state.documents.keys()) {
+        if (key.toLowerCase().includes(needle)) bump(key, 55);
+        if (scored.size > limit * 8) break;
+      }
+    }
+
+    const files = [...scored.entries()]
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, Math.max(1, Math.min(200, limit)))
+      .map(([key]) => state.documents.get(key)?.path || key);
+
+    const result = {
+      files,
+      engine: (files.length ? 'index' : 'empty') as 'index' | 'empty',
+      elapsedMs: Date.now() - started,
+    };
+    this.stickySet(stickyKey, result);
+    return result;
   }
 
   async symbolDefinitions(
@@ -758,16 +897,39 @@ export class RepositoryIndexService {
     const root = normalizeRoot(rootInput);
     await this.ensure(root);
     const state = this.states.get(root)!;
+    const stickyKey = `modules|${root}|${state.indexedAt || 0}|${limit}|${query.slice(0, 300)}`;
+    const cached = this.stickyGet<RepositorySearchResult>(stickyKey);
+    if (cached) return cached;
+
     const phrases = extractModulePhrases(query);
     const effectivePhrases = phrases.length ? phrases : [query];
     const scores = new Map<string, { score: number; reason: string[] }>();
 
-    // Prepare phrase spellings ONCE — the doc loop below must stay string-op only.
     const preparedPhrases = effectivePhrases
       .map((phrase) => ({ phrase, prepared: preparePhrase(phrase) }))
       .filter((item): item is { phrase: string; prepared: PreparedPhrase } => !!item.prepared);
 
-    for (const doc of state.documents.values()) {
+    // Extreme: seed from pathTokenIndex / basenameIndex instead of full doc scan when possible.
+    const candidateKeys = new Set<string>();
+    for (const { prepared } of preparedPhrases) {
+      for (const token of prepared.tokens) {
+        for (const key of state.pathTokenIndex.get(token) || []) candidateKeys.add(key);
+      }
+      for (const key of state.basenameIndex.get(prepared.kebab) || []) candidateKeys.add(key);
+      for (const key of state.basenameIndex.get(prepared.compact) || []) candidateKeys.add(key);
+      for (const [base, keys] of state.basenameIndex) {
+        if (base.includes(prepared.compact) || prepared.compact.includes(base.replace(/\.[^.]+$/, ''))) {
+          for (const key of keys) candidateKeys.add(key);
+        }
+      }
+    }
+    // Fallback: if index sparse, scan (still capped)
+    const docsToScan =
+      candidateKeys.size >= 3
+        ? [...candidateKeys].map((k) => state.documents.get(k)!).filter(Boolean)
+        : [...state.documents.values()];
+
+    for (const doc of docsToScan) {
       const info = docPathInfo(doc.path);
       for (const { prepared } of preparedPhrases) {
         const pathHit = modulePathScorePrepared(info, prepared);
@@ -796,7 +958,6 @@ export class RepositoryIndexService {
       }
     }
 
-    // Blend lexical search so content-only modules still surface.
     for (const phrase of effectivePhrases.slice(0, 4)) {
       for (const item of this.rank(state, phrase, Math.max(limit * 2, 24))) {
         const current = scores.get(item.path) || { score: 0, reason: [] };
@@ -813,13 +974,15 @@ export class RepositoryIndexService {
       .sort((a, b) => b.score - a.score)
       .slice(0, Math.max(1, Math.min(40, limit)));
 
-    return {
+    const result = {
       status: this.status(state),
       query,
       hits: ranked.map((item) =>
-        this.toSearchHit(state, item.path, item.score, item.reason, query),
+        this.toSearchHit(state, item.path, item.score, item.reason, query, false),
       ),
     };
+    this.stickySet(stickyKey, result);
+    return result;
   }
 
   /**
@@ -833,6 +996,14 @@ export class RepositoryIndexService {
     const root = normalizeRoot(rootInput);
     await this.ensure(root);
     const state = this.states.get(root)!;
+    const stickyKey = `inv|${root}|${state.indexedAt || 0}|${limit}|${query.slice(0, 350)}`;
+    const cached = this.stickyGet<InvestigationResult>(stickyKey);
+    if (cached) return cached;
+
+    const started = Date.now();
+    const DEADLINE_MS = 1800; // soft budget — partial dossier beats timeout empty
+    const timeLeft = () => DEADLINE_MS - (Date.now() - started);
+
     const intent = analyzeIntent(query);
     const budget = Math.max(8, Math.min(50, limit));
     const expandedQuery = `${query} ${intent.expandedConcepts.join(' ')}`;
@@ -846,16 +1017,14 @@ export class RepositoryIndexService {
         ),
       ),
     ].slice(0, 4);
-    // One rg spawn with alternation instead of N spawns — Windows process
-    // startup dominates short searches.
     const escapedTerms = exactTerms.map((term) => term.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
     const [moduleSeeds, combinedExact] = await Promise.all([
       this.findModules(root, query, 12),
       escapedTerms.length
         ? ripgrepSearch(root, `(${escapedTerms.join('|')})`, {
-            maxResults: 80,
+            maxResults: 60,
             regex: true,
-            timeoutMs: 4000,
+            timeoutMs: Math.min(1800, Math.max(600, timeLeft())),
           })
         : Promise.resolve(undefined),
     ]);
@@ -938,8 +1107,10 @@ export class RepositoryIndexService {
     const best = new Map<string, QueueItem>();
     const parents = new Map<string, { from: string; label: string }>();
     const maxSeed = Math.max(1, ...queue.map((item) => item.score));
+    const largeRepo = state.documents.size > 8_000;
+    let clueExpansions = 0;
 
-    while (queue.length && best.size < budget) {
+    while (queue.length && best.size < budget && timeLeft() > 120) {
       queue.sort((a, b) => b.score - a.score);
       const current = queue.shift()!;
       const previous = best.get(current.key);
@@ -950,7 +1121,7 @@ export class RepositoryIndexService {
       if (current.from) {
         parents.set(current.key, { from: current.from, label: current.label });
       }
-      if (current.depth >= 4) continue;
+      if (current.depth >= (largeRepo ? 2 : 4)) continue;
 
       for (const edge of state.graph.get(current.key) || []) {
         const target = state.documents.get(edge.to);
@@ -970,20 +1141,24 @@ export class RepositoryIndexService {
         });
       }
 
-      // When the explicit graph is sparse, retrieve files sharing the newly
-      // discovered symbols/calls/endpoints. This is the detective's next clue.
-      // Only for weakly-connected nodes: rank() is the BFS's costliest step,
-      // and well-connected nodes already expand through typed edges above.
       const edgeCount = state.graph.get(current.key)?.length || 0;
-      if (current.depth < 3 && edgeCount < 6) {
+      // Skip expensive clue rank on large repos / past deadline / after a few expansions.
+      if (
+        !largeRepo &&
+        clueExpansions < 6 &&
+        timeLeft() > 400 &&
+        current.depth < 2 &&
+        edgeCount < 4
+      ) {
+        clueExpansions++;
         const clueQuery = [
-          ...intent.expandedConcepts,
-          ...doc.symbols.slice(0, 10),
-          ...doc.calls.slice(0, 10),
-          ...doc.apiCalls,
-          ...doc.routeDefs,
+          ...intent.expandedConcepts.slice(0, 6),
+          ...doc.symbols.slice(0, 6),
+          ...doc.calls.slice(0, 6),
+          ...doc.apiCalls.slice(0, 4),
+          ...doc.routeDefs.slice(0, 4),
         ].join(' ');
-        for (const neighbor of this.rank(state, clueQuery, 5)) {
+        for (const neighbor of this.rank(state, clueQuery, 4)) {
           if (neighbor.path === current.key) continue;
           const nextScore = current.score * 0.34 + neighbor.score * 0.5;
           if (nextScore < maxSeed * 0.06) continue;
@@ -1000,7 +1175,7 @@ export class RepositoryIndexService {
     }
 
     const ordered = [...best.values()].sort((a, b) => b.score - a.score);
-    const evidence = ordered.map((item) => {
+    const evidence = ordered.map((item, index) => {
       const doc = state.documents.get(item.key)!;
       return {
         path: doc.path,
@@ -1015,7 +1190,8 @@ export class RepositoryIndexService {
         symbols: doc.symbols.slice(0, 18),
         calls: doc.calls.slice(0, 18),
         apiEndpoints: [...doc.apiCalls, ...doc.routeDefs].slice(0, 16),
-        excerpt: this.excerpt(root, doc.path, expandedQuery),
+        // Only top evidence gets disk excerpts — biggest I/O win.
+        excerpt: index < 6 ? this.excerpt(root, doc.path, expandedQuery) : '',
       };
     });
 
@@ -1068,8 +1244,9 @@ export class RepositoryIndexService {
       gaps.push('No frontend-to-backend API route match was proven; inspect dynamic URL construction.');
     }
     if (confidence < 80) gaps.push('Confidence below 80%; read top evidence and continue searching from discovered symbols.');
+    if (timeLeft() <= 0) gaps.push('Investigation soft-deadline reached; continuing with partial evidence.');
 
-    return {
+    const result: InvestigationResult = {
       status: this.status(state),
       query,
       intent,
@@ -1078,6 +1255,8 @@ export class RepositoryIndexService {
       trails,
       gaps,
     };
+    this.stickySet(stickyKey, result);
+    return result;
   }
 
   async related(rootInput: string, fileInput: string, limit = 16): Promise<RepositorySearchResult> {
@@ -1174,6 +1353,7 @@ export class RepositoryIndexService {
     }
     this.rebuildDerived(state);
     state.indexedAt = Date.now();
+    this.invalidateSticky(root);
     this.persist(state);
   }
 
@@ -1199,9 +1379,9 @@ export class RepositoryIndexService {
 
       // Small parallel batches saturate SSD reads without flooding Electron's
       // shared node process on huge monorepos.
-      for (let i = 0; i < pending.length; i += 48) {
+      for (let i = 0; i < pending.length; i += 64) {
         const docs = await Promise.all(
-          pending.slice(i, i + 48).map((item) => this.indexFile(state.root, item.absolute, item.stat)),
+          pending.slice(i, i + 64).map((item) => this.indexFile(state.root, item.absolute, item.stat)),
         );
         for (const doc of docs) {
           if (doc) next.set(doc.key, doc);
@@ -1458,6 +1638,8 @@ export class RepositoryIndexService {
     state.symbolReferences = symbolTables.references;
 
     state.inverted = new Map();
+    state.basenameIndex = new Map();
+    state.pathTokenIndex = new Map();
     for (const doc of documents.values()) {
       for (const [term, frequency] of Object.entries(doc.terms)) {
         let postings = state.inverted.get(term);
@@ -1466,6 +1648,22 @@ export class RepositoryIndexService {
           state.inverted.set(term, postings);
         }
         postings.set(doc.key, frequency);
+      }
+      const base = path.basename(doc.path).toLowerCase();
+      const baseList = state.basenameIndex.get(base) || [];
+      baseList.push(doc.key);
+      state.basenameIndex.set(base, baseList);
+      const stem = base.replace(/\.[^.]+$/, '');
+      if (stem !== base) {
+        const stemList = state.basenameIndex.get(stem) || [];
+        stemList.push(doc.key);
+        state.basenameIndex.set(stem, stemList);
+      }
+      for (const token of pathTokens(doc.path)) {
+        if (token.length < 2) continue;
+        const list = state.pathTokenIndex.get(token) || [];
+        list.push(doc.key);
+        state.pathTokenIndex.set(token, list);
       }
     }
   }
@@ -1537,11 +1735,25 @@ export class RepositoryIndexService {
       }
     }
 
-    const lowerQuery = query.toLowerCase();
+    // Extreme: path/symbol boosts only on BM25 candidates + path-token hits — never full corpus.
+    const boostKeys = new Set<string>(scores.keys());
+    for (const term of queryTerms) {
+      for (const key of state.pathTokenIndex.get(term) || []) boostKeys.add(key);
+      for (const key of state.basenameIndex.get(term) || []) boostKeys.add(key);
+    }
     const preparedRankPhrases = (phrases.length ? phrases : [query])
       .map((phrase) => preparePhrase(phrase))
       .filter((prepared): prepared is PreparedPhrase => !!prepared);
-    for (const doc of state.documents.values()) {
+    for (const prepared of preparedRankPhrases) {
+      for (const token of prepared.tokens) {
+        for (const key of state.pathTokenIndex.get(token) || []) boostKeys.add(key);
+      }
+    }
+
+    const lowerQuery = query.toLowerCase();
+    for (const fileKey of boostKeys) {
+      const doc = state.documents.get(fileKey);
+      if (!doc) continue;
       const current = scores.get(doc.key) || { score: 0, reason: [] };
       const info = docPathInfo(doc.path);
       const base = path.basename(doc.path).toLowerCase();
@@ -1550,7 +1762,13 @@ export class RepositoryIndexService {
         current.score += 8;
         if (!current.reason.includes('path match')) current.reason.unshift('path match');
       }
-      // Folder modules: score EVERY file under a matching directory, not just basename.
+      // Recency boost — recently touched files rank higher (Cursor-class).
+      if (doc.mtimeMs && state.indexedAt) {
+        const ageHours = Math.max(0, (state.indexedAt - doc.mtimeMs) / 3_600_000);
+        if (ageHours < 24) current.score += 6;
+        else if (ageHours < 168) current.score += 2;
+      }
+      if (/frontend|src\/app|components?\//i.test(doc.path)) current.score += 3;
       for (const prepared of preparedRankPhrases) {
         const pathHit = modulePathScorePrepared(info, prepared);
         if (pathHit) {
@@ -1572,8 +1790,6 @@ export class RepositoryIndexService {
       if (current.score > 0) scores.set(doc.key, current);
     }
 
-    // First graph expansion: architecture-adjacent files become visible even
-    // when they do not repeat the user's words.
     const lexical = [...scores.entries()].sort((a, b) => b[1].score - a[1].score).slice(0, limit * 2);
     for (const [fileKey, source] of lexical) {
       const doc = state.documents.get(fileKey);
@@ -1608,6 +1824,7 @@ export class RepositoryIndexService {
     score: number,
     reason: string[],
     query: string,
+    withExcerpt = true,
   ): RepositorySearchHit {
     const doc = state.documents.get(fileKey) || state.documents.get(normalizeRelative(fileKey));
     if (!doc) {
@@ -1628,7 +1845,7 @@ export class RepositoryIndexService {
       language: doc.language,
       reason: reason.slice(0, 6),
       symbols: doc.symbols.slice(0, 20),
-      excerpt: this.excerpt(state.root, doc.path, query),
+      excerpt: withExcerpt ? this.excerpt(state.root, doc.path, query) : '',
       dependencies: doc.dependencies.slice(0, 10),
       dependents: doc.dependents.slice(0, 10),
     };
@@ -1638,22 +1855,24 @@ export class RepositoryIndexService {
     try {
       const text = fs.readFileSync(path.join(root, filePath), 'utf8');
       const lines = text.split(/\r?\n/);
-      const terms = tokenize(query).filter((term) => !term.includes('_'));
+      const terms = tokenize(query).filter((term) => !term.includes('_')).slice(0, 8);
       let bestLine = 0;
       let bestScore = -1;
-      for (let i = 0; i < lines.length; i++) {
+      const scanLimit = Math.min(lines.length, 4_000);
+      for (let i = 0; i < scanLimit; i++) {
         const lower = lines[i].toLowerCase();
         let score = 0;
         for (const term of terms) if (lower.includes(term)) score++;
         if (score > bestScore) {
           bestScore = score;
           bestLine = i;
+          if (terms.length && score >= terms.length) break;
         }
       }
-      const start = Math.max(0, bestLine - 3);
+      const start = Math.max(0, bestLine - 2);
       return lines
-        .slice(start, Math.min(lines.length, start + 10))
-        .map((line, index) => `${start + index + 1}|${line.slice(0, 240)}`)
+        .slice(start, Math.min(lines.length, start + 8))
+        .map((line, index) => `${start + index + 1}|${line.slice(0, 200)}`)
         .join('\n');
     } catch {
       return '';

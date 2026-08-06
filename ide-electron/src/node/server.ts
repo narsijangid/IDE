@@ -28,6 +28,8 @@ function getServerAppOpts() {
   let opts: IServerAppOpts = {
     webSocketHandler: [],
     marketplace: {
+      // Open VSX live registry (not Alipay Cloud default)
+      endpoint: 'https://open-vsx.org',
       showBuiltinExtensions: true,
       extensionDir: getDataFolder('extensions'),
     },
@@ -41,8 +43,11 @@ function getServerAppOpts() {
       ...newOpts,
       marketplace: {
         showBuiltinExtensions: true,
-        ...newOpts.marketplace,
+        endpoint: 'https://open-vsx.org',
         ...opts.marketplace,
+        ...newOpts.marketplace,
+        // Always keep local install dir on this machine
+        extensionDir: getDataFolder('extensions'),
       },
     };
   } catch (error) {}
