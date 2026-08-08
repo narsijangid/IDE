@@ -77,7 +77,7 @@ jobs:
           node scripts/apply-product.js
 
       - name: Install dependencies
-        run: yarn install --frozen-lockfile
+        run: yarn install --frozen-lockfile --ignore-scripts
         env:
           HUSKY: '0'
 
