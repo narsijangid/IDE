@@ -119,13 +119,15 @@ jobs:
 
   release:
     needs: build
-    if: github.event_name == 'push' || github.event.inputs.publish_release == 'true'
+    if: always() && (github.event_name == 'push' || github.event.inputs.publish_release == 'true')
     runs-on: ubuntu-latest
     steps:
       - name: Download all artifacts
         uses: actions/download-artifact@v4
         with:
           path: artifacts
+          merge-multiple: false
+        continue-on-error: true
 
       - name: Resolve tag
         id: tag
