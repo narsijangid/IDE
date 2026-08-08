@@ -23,9 +23,6 @@ ide-electron/build/ollama/
 ide-electron/src/modules/olkil-ai/node/embedded-secrets.ts
 olkil-updates_*.zip
 olkil-site_*.zip
-# Root GH Actions need Workflows:write on fine-grained PAT
-.github/workflows/
-
 # Large local archives / installers
 *.zip
 *.exe
@@ -57,5 +54,5 @@ ide-electron/.git.upstream-backup/
 # Misc
 tools/workspace/
 
-# GitHub Actions (need Workflows: write on fine-grained PAT to push)
+# Nested OpenSumi GH Actions (root workflows are tracked)
 ide-electron/.github/workflows/

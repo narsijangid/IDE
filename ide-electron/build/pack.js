@@ -28,8 +28,14 @@ if (targetPlatforms.includes('win32')) {
 
 if (targetPlatforms.includes('darwin')) {
   const archMap = new Map(targetArches.map((v) => [electronBuilder.Arch[v], ['dmg']]));
-  // archMap.set(electronBuilder.Arch.universal, ['dmg']);
   targets.set(electronBuilder.Platform.MAC, archMap);
+}
+
+if (targetPlatforms.includes('linux')) {
+  const archMap = new Map(
+    targetArches.map((v) => [electronBuilder.Arch[v], ['deb', 'AppImage']]),
+  );
+  targets.set(electronBuilder.Platform.LINUX, archMap);
 }
 
 const outputPath = path.join(__dirname, '../out');
@@ -114,6 +120,13 @@ electronBuilder
       appId: 'com.olkil.ide',
       npmArgs: useNpmMirror ? ['--registry=https://registry.npmmirror.com'] : [],
       electronVersion: rootPackage.devDependencies.electron,
+      // Register olkil:// so website auth can deep-link back into the IDE
+      protocols: [
+        {
+          name: 'OLKIL',
+          schemes: ['olkil'],
+        },
+      ],
       extraResources,
       directories: {
         output: outputPath,
@@ -152,9 +165,14 @@ electronBuilder
       linux: {
         artifactName: '${productName}-${version}.${ext}',
         icon: 'build/icon/sumi.png',
+        category: 'Development',
         target: [
           {
             target: 'deb',
+            arch: ['x64'],
+          },
+          {
+            target: 'AppImage',
             arch: ['x64'],
           },
         ],
