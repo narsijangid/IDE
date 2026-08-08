@@ -42,7 +42,7 @@
     "playwright:install": "playwright install chromium",
     "rebuild-native": "node ./scripts/rebuild-native.js --target=electron",
     "download-extension": "cross-env DEBUG=InstallExtension node scripts/download-extensions.js",
-    "prepare": "husky install"
+    "prepare": "node -e \"const fs=require('fs');const {execSync}=require('child_process');if(fs.existsSync('.git')||fs.existsSync('../.git')){try{execSync('husky install',{stdio:'inherit'})}catch(e){}}\""
   },
   "repository": {
     "type": "git",
