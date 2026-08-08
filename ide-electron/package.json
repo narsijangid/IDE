@@ -154,5 +154,6 @@
     "@opensumi/ide-design": "3.2.1",
     "electron-updater": "^6.3.9",
     "playwright": "1.49.1"
-  }
+  },
+  "author": "OLKIL <hello@olkil.com>"
 }

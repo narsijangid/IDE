@@ -3,6 +3,7 @@
   "version": "1.3.13",
   "main": "main/index.js",
   "description": "OpenSumi Desktop",
+  "author": "OLKIL <hello@olkil.com>",
   "private": true,
   "dependencies": {
     "@opensumi/ripgrep": "^1.4.0",

@@ -166,6 +166,10 @@ electronBuilder
         artifactName: '${productName}-${version}.${ext}',
         icon: 'build/icon/sumi.png',
         category: 'Development',
+        maintainer: 'OLKIL <hello@olkil.com>',
+        vendor: 'OLKIL',
+        synopsis: 'OLKIL AI Code Editor',
+        description: 'Free AI-powered IDE for Windows, macOS, and Linux.',
         target: [
           {
             target: 'deb',
