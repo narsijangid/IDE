@@ -82,6 +82,44 @@ function mergeStreamedToolName(current: string, incoming: string): string {
   return sanitizeToolName(cur + next) || cur;
 }
 
+/**
+ * Merge streamed tool-argument deltas without doubling.
+ * DeepSeek/Poolside sometimes re-send the FULL JSON args every SSE chunk;
+ * naïve `+=` corrupts paths into `string=` / duplicated JSON.
+ */
+function mergeStreamedToolArguments(current: string, incoming: string): string {
+  const next = incoming || '';
+  if (!next) return current || '';
+  const cur = current || '';
+  if (!cur) return next;
+  if (next === cur) return cur;
+  // Full JSON resent / growing JSON object
+  if (/^\s*\{/.test(next)) {
+    if (next.startsWith(cur)) return next;
+    if (cur.startsWith(next)) return cur;
+    try {
+      JSON.parse(cur);
+      // cur already valid — incoming is likely a full resend (or start of new)
+      try {
+        JSON.parse(next);
+        return next;
+      } catch {
+        // next incomplete replacement
+        return next;
+      }
+    } catch {
+      // cur incomplete — keep appending unless next is a fresh start that supersedes
+      if (/^\s*\{/.test(cur) && next.length >= cur.length && next.startsWith(cur.slice(0, Math.min(12, cur.length)))) {
+        return next.length > cur.length ? next : cur + next;
+      }
+      return cur + next;
+    }
+  }
+  if (cur.endsWith(next)) return cur;
+  if (next.startsWith(cur)) return next;
+  return cur + next;
+}
+
 /** Collapse read_fileread_file → read_file using known catalog names. */
 function sanitizeToolName(raw: string): string {
   const name = (raw || '').trim();
@@ -382,6 +420,10 @@ export class OlkilAiNodeService implements IOlkilAiNodeService {
 
   browserType(request: BrowserActionRequest): Promise<BrowserActionResult> {
     return this.browserTest.type(request);
+  }
+
+  browserUpload(request: BrowserActionRequest): Promise<BrowserActionResult> {
+    return this.browserTest.upload(request);
   }
 
   browserPress(key: string): Promise<BrowserActionResult> {
@@ -992,6 +1034,10 @@ export class OlkilAiNodeService implements IOlkilAiNodeService {
       } else {
         body.max_tokens = Math.min(Math.max(tokenBudget, 1600), 4096);
       }
+      // Steer away from DSML text dumps when tools are present.
+      if (request.tools?.length && request.toolChoice !== 'none') {
+        body.tool_choice = request.toolChoice || 'auto';
+      }
     }
 
     // Providers reject histories containing tool messages unless `tools` is also
@@ -1158,7 +1204,10 @@ export class OlkilAiNodeService implements IOlkilAiNodeService {
                   );
                 }
                 if (tc.function?.arguments) {
-                  toolCalls[idx].function.arguments += tc.function.arguments;
+                  toolCalls[idx].function.arguments = mergeStreamedToolArguments(
+                    toolCalls[idx].function.arguments,
+                    tc.function.arguments,
+                  );
                 }
               }
               this.streams.set(streamId, {

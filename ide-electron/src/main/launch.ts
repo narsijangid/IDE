@@ -90,6 +90,10 @@ async function init() {
     injector,
     browserNodeIntegrated: true,
     browserUrl: URI.file(join(__dirname, '../browser/index.html')).toString(),
+    // Do NOT pass uriScheme here — OpenSumi registers process.argv[1] which breaks
+    // under `electron --inspect .` (System32 error). We register olkil:// ourselves
+    // in main/index.ts with an absolute app path. Packaged builds still get the
+    // protocol via electron-builder `protocols` in pack.js.
     modules: [MainModule, WebviewElectronMainModule, OpenSumiDesktopMainModule],
     nodeEntry: join(__dirname, '../node/index.js'),
     extensionEntry: join(__dirname, '../extension/index.js'),

@@ -264,6 +264,9 @@ export interface BrowserActionRequest {
   value?: string;
   key?: string;
   timeoutMs?: number;
+  /** File upload: image | pdf | document | spreadsheet | any */
+  kind?: string;
+  accept?: string;
 }
 
 export interface BrowserConsoleEntry {
@@ -310,6 +313,8 @@ export interface BrowserActionResult {
   networkRequests?: BrowserNetworkRequest[];
   /** Whether the visible DevTools dock is currently open. */
   devtoolsOpen?: boolean;
+  /** Last auto/manual file upload from Downloads (live test). */
+  lastUpload?: { path: string; kind: string };
   error?: string;
 }
 
@@ -398,6 +403,7 @@ export interface IOlkilAiNodeService {
   browserClick(request: BrowserActionRequest): Promise<BrowserActionResult>;
   browserFill(request: BrowserActionRequest): Promise<BrowserActionResult>;
   browserType(request: BrowserActionRequest): Promise<BrowserActionResult>;
+  browserUpload(request: BrowserActionRequest): Promise<BrowserActionResult>;
   browserPress(key: string): Promise<BrowserActionResult>;
   browserSnapshot(): Promise<BrowserActionResult>;
   browserScreenshot(): Promise<BrowserActionResult>;
@@ -540,7 +546,11 @@ export interface IOlkilChatService {
   checkpoints: Array<{ id: string; label: string; createdAt: number }>;
   onDidChange: any;
   init(): Promise<void>;
-  send(text: string, attachments?: ChatAttachment[]): Promise<void>;
+  send(
+    text: string,
+    attachments?: ChatAttachment[],
+    opts?: { historyText?: string },
+  ): Promise<void>;
   /** Fuzzy file/folder list for @mention picker. */
   listMentionCandidates(query: string, limit?: number): Promise<ChatAttachment[]>;
   setModel(modelId: string): void;

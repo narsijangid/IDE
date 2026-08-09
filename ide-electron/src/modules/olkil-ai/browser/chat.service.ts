@@ -165,6 +165,8 @@ export class OlkilChatService extends Disposable implements IOlkilChatService {
 
   private history: ChatMessage[] = [];
   private cancelRequested = false;
+  /** Silent auto-resume after provider stall (max 1 per user turn). */
+  private stallAutoRetries = 0;
   /** Files the agent has actually read — edits to unread files are blocked. */
   private filesReadThisSession = new Set<string>();
   /** Snapshots needed to revert agent edits */
@@ -470,25 +472,28 @@ export class OlkilChatService extends Disposable implements IOlkilChatService {
     this.fire();
   }
 
-  /** One-click: agent starts app → headed browser → test → fix → retest. */
+  /** Live browser verify — UI shows the user's goal; agent gets the full test loop. */
   async startLiveTest(goal?: string) {
     if (this.busy) {
       return;
     }
     this.chatMode = 'agent';
-    const focus = (goal || '').trim();
-    const prompt = `LIVE TEST MODE — Verify this project in a real browser (headed Chromium on my screen).
+    const focus = (goal || '').trim() || 'Test the application';
+    const agentPrompt = `LIVE TEST MODE — Verify this project in a real browser (headed Chromium on my screen).
 
-${focus ? `Focus / bug report:\n${focus}\n` : ''}
+User test goal:
+${focus}
+
 Required loop:
-1. Call live_test (start_app true, headed true)${focus ? ` with goal set to the focus above` : ''}.
-2. Read the snapshot. Exercise the main UI (and the reported bug if any) via browser_click / browser_fill using role+name.
-3. Call browser_console + browser_network + browser_screenshot. Treat pageerror / 4xx–5xx as bugs.
-4. Only if you need the visible inspector: browser_devtools panel=console|network (right dock). Close it when done — do NOT leave DevTools open by default.
-5. If broken: investigate_codepath / read_file → search_replace fix → browser_reload → retest the SAME flow.
-6. Max 5 fix rounds. End with PASS/FAIL, evidence (console/network), and files changed.
-7. Do not claim success without a successful retest in this turn. Start now.`;
-    await this.send(prompt);
+1. Call live_test (start_app true, headed true) with goal set to the user test goal above.
+2. Read the snapshot. Exercise the goal via browser_click / browser_fill using role+name.
+3. File uploads: click Upload OR call browser_upload — OS dialogs are auto-handled (latest matching file from Downloads/Desktop: image→newest image, pdf→newest pdf). Never wait on a file picker.
+4. Call browser_console + browser_network. Use browser_screenshot only when needed (not every click). Treat pageerror / 4xx–5xx as bugs.
+5. Only if you need the visible inspector: browser_devtools panel=console|network (right dock). Close it when done.
+6. If broken: investigate_codepath / read_file → search_replace fix → browser_reload → retest the SAME goal.
+7. Max 5 fix rounds. End with PASS/FAIL, evidence (console/network), and files changed.
+8. Do not claim success without a successful retest in this turn. Start now.`;
+    await this.send(focus, [], { historyText: agentPrompt });
   }
 
   clear() {
@@ -844,7 +849,11 @@ Required loop:
     }
   }
 
-  async send(userText: string, attachments: ChatAttachment[] = []) {
+  async send(
+    userText: string,
+    attachments: ChatAttachment[] = [],
+    opts?: { historyText?: string },
+  ) {
     const text = userText.trim();
     if (!text && !attachments.length) {
       return;
@@ -888,6 +897,7 @@ Required loop:
     }
 
     this.cancelRequested = false;
+    this.stallAutoRetries = 0;
     this.busy = true;
 
     const display =
@@ -905,7 +915,8 @@ Required loop:
     }
     this.fire();
 
-    const enriched = await this.buildUserContentWithAttachments(text, attachments);
+    const forAgent = (opts?.historyText || text).trim() || text;
+    const enriched = await this.buildUserContentWithAttachments(forAgent, attachments);
     this.history.push({ role: 'user', content: enriched });
 
     const pendingId = nextId();
@@ -914,19 +925,68 @@ Required loop:
 
     try {
       const reply = await this.runAgentLoop(pendingId);
-      const finalText = (reply || '').trim() || this.fallbackSummary();
+      let finalText = this.sanitizeUserFacingReply((reply || '').trim());
+      // Empty / stall dump → silent auto-resume once (Cursor never asks "resend").
+      if (
+        (!finalText || this.looksLikeStallFallback(finalText)) &&
+        this.stallAutoRetries < 1 &&
+        !this.cancelRequested
+      ) {
+        this.stallAutoRetries += 1;
+        this.setStatus('Provider stall — auto-resuming…');
+        this.setStatus('Auto-resuming…');
+        await sleep(450);
+        const resumed = await this.runAgentLoop(pendingId);
+        finalText = this.sanitizeUserFacingReply((resumed || '').trim());
+      }
+      if (!finalText || this.looksLikeStallFallback(finalText)) {
+        finalText = this.friendlyCompletionMessage();
+      } else {
+        this.stallAutoRetries = 0;
+      }
       const suggestions = this.extractSuggestions(finalText);
       await this.typeOut(pendingId, finalText);
       this.patchUi(pendingId, { suggestions: suggestions.length ? suggestions : undefined });
       this.history.push({ role: 'assistant', content: finalText });
       this.setStatus('');
     } catch (e: any) {
-      // If the outer loop still blows up on a transient 500 but edits already
-      // landed, don't leave a scary error bubble — show what was done.
+      // Transient provider errors: auto-resume once instead of dumping file lists.
+      if (
+        this.isTransientLlmError(e) &&
+        this.stallAutoRetries < 1 &&
+        !this.cancelRequested
+      ) {
+        this.stallAutoRetries += 1;
+        this.setStatus('Provider error — auto-resuming…');
+        this.setStatus('Auto-resuming…');
+        try {
+          await sleep(600);
+          const resumed = await this.runAgentLoop(pendingId);
+          let finalText = this.sanitizeUserFacingReply((resumed || '').trim());
+          if (!finalText || this.looksLikeStallFallback(finalText)) {
+            finalText = this.pendingChanges.length
+              ? this.fallbackSummary()
+              : this.friendlyCompletionMessage();
+          } else {
+            this.stallAutoRetries = 0;
+          }
+          await this.typeOut(pendingId, finalText);
+          this.history.push({ role: 'assistant', content: finalText });
+          this.setStatus('');
+          return;
+        } catch {
+          // fall through
+        }
+      }
       if (this.isTransientLlmError(e) && this.pendingChanges.length) {
         const summary = this.fallbackSummary();
         await this.typeOut(pendingId, summary);
         this.history.push({ role: 'assistant', content: summary });
+        this.setStatus('');
+      } else if (this.isTransientLlmError(e)) {
+        const msg = this.friendlyCompletionMessage();
+        await this.typeOut(pendingId, msg);
+        this.history.push({ role: 'assistant', content: msg });
         this.setStatus('');
       } else {
         this.patchUi(pendingId, {
@@ -1108,15 +1168,183 @@ Required loop:
 
   /** Instant finalize — fake typing only slows perceived speed vs Cursor. */
   private async typeOut(pendingId: string, full: string) {
-    const text = full || '';
+    const text = this.sanitizeUserFacingReply(full || '');
     if (!text) {
-      this.patchUi(pendingId, { content: this.fallbackSummary(), pending: false });
+      this.patchUi(pendingId, { content: this.friendlyCompletionMessage(), pending: false });
       return;
     }
     this.patchUi(pendingId, { content: text, pending: false });
   }
 
-  private fallbackSummary(exploredPaths: string[] = []): string {
+  /** Old stall dumps Cursor never shows — strip / replace. */
+  private looksLikeStallFallback(text: string): boolean {
+    const t = text || '';
+    return (
+      /Top match ready:/i.test(t) ||
+      /Resend the same request/i.test(t) ||
+      /Resend the same message/i.test(t) ||
+      /I’ll auto-resume/i.test(t) ||
+      /I hit a transient API stall/i.test(t) ||
+      /Most relevant files for your question:/i.test(t) ||
+      /provider dropped mid-turn/i.test(t) ||
+      /provider dropped before the full answer/i.test(t) ||
+      /provider connection dropped/i.test(t)
+    );
+  }
+
+  private sanitizeUserFacingReply(text: string): string {
+    const t = (text || '').trim();
+    if (!t) return '';
+    if (this.looksLikeStallFallback(t)) return '';
+    if (this.looksLikeGarbageToolDump(t)) {
+      const cleaned = this.bubbleSafeContent(t);
+      return cleaned || '';
+    }
+    // Truncated path dumps (sometimes leaked mid-stream)
+    if (/^[a-z0-9_./\\-]+\.(ts|tsx|js|html|scss)\s*$/i.test(t) && t.length < 200) {
+      return '';
+    }
+    return this.formatAnswerForUi(t);
+  }
+
+  /**
+   * Cursor-clean final polish: user sees ONLY the answer — never tool monologue.
+   */
+  private formatAnswerForUi(text: string): string {
+    let t = (text || '').replace(/\r\n/g, '\n').trim();
+    if (!t) return t;
+
+    t = this.stripAgentMonologue(t);
+
+    // Model sometimes writes "JS\nCopy\n" instead of a real fence
+    t = t.replace(/(^|\n)(?:JS|JavaScript|TypeScript|TS|tsx?)\nCopy\n/gi, '$1```js\n');
+    if ((t.match(/```/g) || []).length % 2 === 1) {
+      t = `${t}\n\`\`\``;
+    }
+
+    // Emoji section headers → markdown headings
+    t = t.replace(/^[❌✅⚠️]\s*/gm, '## ');
+    t = t.replace(/^#{1,3}\s*[❌✅⚠️]\s*/gm, (m) => m.replace(/[❌✅⚠️]\s*/, ''));
+
+    t = t.replace(/\n{3,}/g, '\n\n');
+
+    // Drop duplicated trailing blocks
+    const paras = t.split(/\n{2,}/);
+    if (paras.length >= 4) {
+      const last = paras[paras.length - 1].trim();
+      const prev = paras[paras.length - 2].trim();
+      if (
+        last.length > 40 &&
+        (prev.includes(last.slice(0, 60)) || last.includes(prev.slice(0, 60)))
+      ) {
+        paras.pop();
+        t = paras.join('\n\n');
+      }
+    }
+
+    const lines = t.split('\n');
+    if (lines.length > 8) {
+      const tail = lines.slice(-5).join('\n').trim();
+      const head = lines.slice(0, -5).join('\n');
+      if (tail.length > 50 && head.includes(tail.slice(0, Math.min(90, tail.length)))) {
+        t = head.trim();
+      }
+    }
+
+    return t.trim();
+  }
+
+  /** Drop "let me try tools / string= broken / tooling caveat" chatter — Cursor never shows this. */
+  private looksLikeAgentMonologue(para: string): boolean {
+    const p = (para || '').trim();
+    if (!p) return true;
+    // Real answer content — never treat as monologue
+    if (
+      /^#{1,3}\s+/.test(p) ||
+      /^\|/.test(p) ||
+      /^[-*•]\s+/.test(p) ||
+      /^```/.test(p) ||
+      /^(What |Based |When |Action\b|Note\b|Inactive|CLOSED|Entity status)/i.test(p)
+    ) {
+      return false;
+    }
+    if (
+      /^(actually[,.]?\s|let me\b|the tool\b|i have the\b|i already\b|tooling caveat\b|wait[,.]|ok[,.] I|alright[,.])/i.test(
+        p,
+      )
+    ) {
+      return true;
+    }
+    return /\b(tool is consistently broken|appends string=|injected string=|read_file kept failing|let me try list_dir|let me try |could not open the (two )?call-site|Recovered \d+ tool|Injected enforcement|then answer based on that code)\b/i.test(
+      p,
+    );
+  }
+
+  private stripAgentMonologue(text: string): string {
+    let t = (text || '').replace(/\r\n/g, '\n').trim();
+    if (!t) return t;
+
+    // Cut leading monologue paragraphs until real answer starts
+    const parts = t.split(/\n{2,}/);
+    let start = 0;
+    while (start < parts.length && this.looksLikeAgentMonologue(parts[start])) {
+      start++;
+    }
+    // Also skip a following "Actually..." bridge para
+    while (start < parts.length && this.looksLikeAgentMonologue(parts[start])) {
+      start++;
+    }
+    if (start > 0 && start < parts.length) {
+      t = parts.slice(start).join('\n\n');
+    } else if (start >= parts.length) {
+      // Entire message was monologue — try to salvage from first ## / What / Based on
+      const m = text.match(
+        /\n(?=#{1,3}\s+|What (a |an |the )?[A-Za-z]|Based (solely )?on |When (a |an |the )[A-Za-z])/i,
+      );
+      if (m && m.index != null) {
+        t = text.slice(m.index).trim();
+      }
+    }
+
+    // Drop trailing tooling caveat sections
+    t = t.replace(
+      /\n+(?:\*\*)?(?:Tooling caveat|Note on tooling|I could not open|The tool is consistently)[\s\S]*$/i,
+      '',
+    );
+
+    // Drop mid-body monologue lines
+    t = t
+      .split('\n')
+      .filter((line) => !this.looksLikeAgentMonologue(line) || /^#{1,3}\s+/.test(line) || /^\|/.test(line) || /^[-*•]/.test(line.trim()) || /^```/.test(line))
+      .join('\n');
+
+    // If still starts with process talk on first line, cut to first heading
+    if (/^(the tool|let me|actually|i have|i already)/i.test(t)) {
+      const idx = t.search(/\n(?=#{1,3}\s+|What |Based |When )/i);
+      if (idx > 0) t = t.slice(idx).trim();
+    }
+
+    return t.replace(/\n{3,}/g, '\n\n').trim();
+  }
+
+  private friendlyCompletionMessage(exploredPaths: string[] = [], userText = ''): string {
+    if (this.pendingChanges.length) {
+      return this.fallbackSummary(exploredPaths, userText);
+    }
+    const ranked = this.rankCandidatePaths(exploredPaths, userText);
+    if (ranked.length) {
+      return (
+        `I was working on \`${ranked[0]}\` when the provider connection dropped. ` +
+        `Please send the same message again — I’ll continue from that file automatically.`
+      );
+    }
+    return (
+      `The provider connection dropped mid-turn. ` +
+      `Please send the same message again and I’ll continue automatically.`
+    );
+  }
+
+  private fallbackSummary(exploredPaths: string[] = [], userText = ''): string {
     const pending = this.pendingChanges;
     if (pending.length) {
       const lines = pending.map(
@@ -1133,24 +1361,156 @@ Required loop:
         `• Run your usual build/test if this touched runtime behavior`
       );
     }
-    if (this.chatMode !== 'agent') {
-      return 'I do not have more to add yet. Tell me which part of the plan to apply.';
+    if (this.chatMode !== 'agent' && this.chatMode !== 'ask') {
+      return 'I do not have more to add yet — switch to Agent if you want me to apply the plan.';
     }
-    const ranked = this.rankCandidatePaths(exploredPaths);
-    if (ranked.length) {
-      return (
-        `I narrowed it to these files but the API stalled before a verified edit landed:\n` +
-        ranked
-          .slice(0, 5)
-          .map((p) => `• ${p}`)
-          .join('\n') +
-        `\n\nSend **continue** and I will read + patch the top match myself (I will not ask you to pick a file).`
-      );
+    // Never dump "Top match ready / Resend…" — that was the bug the user hit.
+    return this.friendlyCompletionMessage(exploredPaths, userText);
+  }
+
+  /** Last-chance finish: never dump "Send continue" or file-picker dumps. */
+  private async forceFinishWithoutAsking(
+    pendingId: string,
+    messages: ChatMessage[],
+    exploredPaths: Set<string>,
+    latestUser: string,
+    questionIntent: boolean,
+    opts?: { needsImplementation?: boolean },
+  ): Promise<string> {
+    const top = this.rankCandidatePaths(exploredPaths, latestUser).slice(0, 6);
+    if (this.pendingChanges.length) {
+      return this.fallbackSummary(top, latestUser);
     }
-    return (
-      'I could not locate a confident target yet (search noise / API stall). ' +
-      'Send **continue** with one exact UI label or open the file — I will keep searching and edit without asking you to pick.'
+
+    // Cursor: last-chance TOOL round for coding tasks — don't just narrate
+    if (opts?.needsImplementation && !questionIntent) {
+      this.setStatus('Last attempt — editing…');
+      this.pushActivity(pendingId, 'thinking', 'Last attempt — applying edit…');
+      const pick = top[0] || 'best matching file';
+      messages.push({
+        role: 'user',
+        content:
+          `LAST CHANCE — you MUST call tools now. Do NOT narrate. Do NOT ask which file.\n` +
+          `1) read_file \`${pick}\` (if not already read)\n` +
+          `2) search_replace with exact snippet from that file\n` +
+          `Targets:\n${top.map((p) => `- ${p}`).join('\n') || `- ${pick}`}\n` +
+          `Request: "${latestUser.slice(0, 400)}"`,
+      });
+      try {
+        const tools = selectAgentTools({
+          mode: 'agent',
+          madeEdits: false,
+          searchCount: 1,
+          readCount: 1,
+          hasSeedTargets: true,
+        });
+        const result = await this.invokeCompletionResilient(pendingId, {
+          messages,
+          tools,
+          toolChoice: 'auto',
+          modelId: this.modelId,
+          stream: true,
+          maxTokens: 2800,
+        });
+        let toolCalls = result.tool_calls;
+        let content = (result.content || '').trim();
+        if ((!toolCalls || !toolCalls.length) && this.looksLikeGarbageToolDump(content)) {
+          toolCalls = this.parseEmbeddedToolCalls(content);
+          content = this.stripGarbageToolDump(content);
+        }
+        if (toolCalls?.length) {
+          messages.push({
+            role: 'assistant',
+            content: content || null,
+            tool_calls: toolCalls,
+          });
+          const toolResults = await this.executeToolCallsParallel(pendingId, toolCalls);
+          let landed = false;
+          for (let i = 0; i < toolCalls.length; i++) {
+            const name = toolCalls[i].function?.name || '';
+            const toolResult = toolResults[i] || '';
+            messages.push({
+              role: 'tool',
+              tool_call_id: toolCalls[i].id,
+              content: toolResult.length > 4000 ? `${toolResult.slice(0, 4000)}\n/* truncated */` : toolResult,
+            });
+            if (MUTATING_TOOL_NAMES.has(name) && this.isSuccessfulMutation(toolResult)) {
+              landed = true;
+            }
+          }
+          if (landed || this.pendingChanges.length) {
+            return this.fallbackSummary(top, latestUser);
+          }
+        }
+      } catch {
+        // fall through to prose finish
+      }
+    }
+
+    this.setStatus(questionIntent ? 'Answering…' : 'Finishing…');
+    this.patchUi(pendingId, { content: '', pending: true });
+    this.pushActivity(
+      pendingId,
+      'thinking',
+      questionIntent ? 'Writing answer…' : 'Finishing…',
     );
+
+    for (let attempt = 0; attempt < 2; attempt++) {
+      if (this.cancelRequested) {
+        return 'Stopped by user.';
+      }
+      if (attempt > 0) {
+        messages.push({
+          role: 'user',
+          content:
+            `Previous finish attempt failed or was empty. Try again. ` +
+            `Plain markdown only. No tools. No "resend" / file-picker talk.`,
+        });
+        await sleep(350);
+      } else {
+        const flowAsk = questionIntent && this.isFlowQuestionIntent(latestUser);
+        messages.push({
+          role: 'user',
+          content: questionIntent
+            ? flowAsk
+              ? `Finish NOW with a GROUNDED project flow.\n` +
+                `Numbered steps (Entry → UI → Service → API → Backend). Cite a real path per step.\n` +
+                `Evidence files:\n${top.map((p) => `- ${p}`).join('\n') || '- (use dossier above)'}\n` +
+                `Never invent. Mark missing layers as not found in evidence. No tools. Plain markdown.`
+              : `Finish NOW with a clear user-facing answer.\n` +
+                `Evidence files:\n${top.map((p) => `- ${p}`).join('\n') || '- (use evidence pack above)'}\n` +
+                `Cite paths. Plain markdown only. No tools. Never ask continue, resend, or pick a file.`
+            : `Finish NOW. Auto-pick \`${top[0] || 'best frontend file'}\`. ` +
+              `If edits already happened, summarize briefly. If not, say what you were about to change on that file. ` +
+              `Never say "resend", "Top match ready", or ask which file. Paths:\n${top.map((p) => `- ${p}`).join('\n')}`,
+        });
+      }
+      try {
+        const result = await this.invokeCompletionResilient(pendingId, {
+          messages,
+          toolChoice: 'none',
+          modelId: this.modelId,
+          stream: true,
+          maxTokens: questionIntent ? 900 : 700,
+        });
+        const text = this.sanitizeUserFacingReply(
+          this.stripGarbageToolDump((result.content || '').trim()),
+        );
+        if (
+          text &&
+          this.isValidFinalAnswer(text, questionIntent) &&
+          !this.looksLikeStallFallback(text)
+        ) {
+          return text;
+        }
+        if (text && text.length >= 40 && !this.looksLikeStallFallback(text)) {
+          return text;
+        }
+      } catch {
+        // retry once
+      }
+    }
+    return this.friendlyCompletionMessage(top, latestUser);
   }
 
   /** Prefer frontend UI sources when the user asked for frontend-only work. */
@@ -1162,27 +1522,533 @@ Required loop:
 
   private rankCandidatePaths(paths: Iterable<string>, userText = ''): string[] {
     const frontendOnly = this.isFrontendOnlyIntent(userText);
+    const tokens = (userText.match(/[A-Za-z][A-Za-z0-9_-]{2,}/g) || []).map((t) =>
+      t.toLowerCase(),
+    );
     const scored = [...new Set([...paths].map((p) => p.replace(/\\/g, '/')))].map((p) => {
       const lower = p.toLowerCase();
       let score = 0;
       if (/\.(html|htm|tsx|jsx|vue|svelte|scss|css)$/i.test(p)) score += 40;
       if (/\.(ts|js)$/i.test(p) && !/\.(spec|test)\./i.test(p)) score += 20;
       if (/frontend|src\/app|components?\//i.test(lower)) score += 30;
-      if (/bulk-upload|upload/i.test(lower)) score += 15;
+      if (/bulk-upload|upload|relationship|limit|document/i.test(lower)) score += 25;
+      if (/routing|module\.ts|controller|service|resolver|interceptor/i.test(lower)) score += 22;
       if (/backend|migrations?|models?\//i.test(lower)) score -= 35;
       if (/\.spec\.|\.test\./i.test(lower)) score -= 20;
       if (frontendOnly && /backend|migrations?|models?\//i.test(lower)) score -= 80;
       if (frontendOnly && /\.(html|scss|css|tsx|jsx|vue)$/i.test(p)) score += 25;
+      for (const t of tokens.slice(0, 8)) {
+        if (t.length >= 4 && lower.includes(t)) score += 18;
+        if (t.length >= 4 && lower.includes(t.replace(/_/g, '-'))) score += 12;
+      }
       return { p, score };
     });
     scored.sort((a, b) => b.score - a.score);
     return scored.map((s) => s.p);
   }
 
+  /**
+   * Architecture / project-flow questions need Cursor-depth evidence:
+   * investigate trails + multi-file reads — not a 2-file guess.
+   */
+  private isFlowQuestionIntent(text: string): boolean {
+    const t = (text || '').toLowerCase();
+    if (!t.trim()) return false;
+    // Capability/behavior questions are handled separately (more precise).
+    if (this.isCapabilityQuestionIntent(text)) return false;
+    return (
+      /\b(flow|architecture|pipeline|end[-\s]?to[-\s]?end|how (does|do|is)|explain|overview|walkthrough|data flow|request flow|call chain|sequence|lifecycle|samjhao|samajhao|kaise (chalta|kaam)|project (flow|structure|overview))\b/i.test(
+        t,
+      ) ||
+      /\b(what (is|are) the (flow|steps|pipeline)|describe (the )?(flow|architecture|system))\b/i.test(t)
+    );
+  }
+
+  /**
+   * "What happens if X is deactivated / what can't they do?" —
+   * Cursor finds the enforcement Guard/middleware first; never guess from UI lists.
+   */
+  private isCapabilityQuestionIntent(text: string): boolean {
+    const t = (text || '').toLowerCase();
+    if (!t.trim()) return false;
+    return (
+      /\b(deactivat|activat|inactive|active|disable|enable|block|unblock|suspend|close[sd]?|lock(ed)?|unlock)\b/i.test(
+        t,
+      ) ||
+      /\b(can('?t|not)?|cannot|unable|allowed|forbidden|restrict|permission|access)\b/i.test(t) ||
+      /\b(what (happens|will happen)|if i (deactivate|disable|close|block)|kya (nahi|ni) (kar|ho) sakta)\b/i.test(
+        t,
+      ) ||
+      /\b(specific thing|kind of thing|operations? (blocked|allowed)|still (can|allowed)|remain(s)? (allowed|open))\b/i.test(
+        t,
+      )
+    );
+  }
+
+  private isEnforcementPath(p: string): boolean {
+    const lower = (p || '').toLowerCase();
+    return /guard|middleware|validator|policy|interceptor|auth|account.?status|tx.?action|block/i.test(
+      lower,
+    );
+  }
+
+  private hasEnforcementEvidence(candidates: Iterable<string>, context = ''): boolean {
+    const blob = `${context}\n${[...candidates].join('\n')}`.toLowerCase();
+    return /guard|middleware|validator|policy|account_status|isac_status|block_messages|tx_action|allowed:\s*false|new_txn|repayment/.test(
+      blob,
+    );
+  }
+
+  /**
+   * Capability pack: find the rule that ENFORCES behavior (Guard/middleware),
+   * not the UI that toggles a status dropdown.
+   */
+  private async buildCapabilityQuestionContext(query: string): Promise<{
+    context: string;
+    candidates: string[];
+    strongEvidence?: boolean;
+  }> {
+    const root = this.workspaceRoot();
+    if (!root || !query.trim()) {
+      return { context: '', candidates: [] };
+    }
+    try {
+      const stop = new Set(
+        'the and for with from this that which what where when how please about into only then than also just like will would could should after before let know kind thing specific'.split(
+          ' ',
+        ),
+      );
+      const tokens = (query.match(/[A-Za-z][A-Za-z0-9_-]{2,}/g) || [])
+        .map((t) => t.trim())
+        .filter((t) => t.length >= 3 && !stop.has(t.toLowerCase()));
+      const entity = tokens.find((t) =>
+        /dealer|anchor|buyer|seller|oem|user|vendor|customer|partner|account/i.test(t),
+      );
+      const entityLower = (entity || tokens[0] || '').toLowerCase();
+
+      // Cursor-style: hunt enforcement code first
+      const grepQueries = [
+        entity ? `${entity}AccountStatus` : '',
+        entity ? `${entity}AccountStatusGuard` : '',
+        'AccountStatusGuard',
+        'account_status',
+        'accountStatus',
+        'INACTIVE',
+        'NEW_TXN',
+        'BLOCK_MESSAGES',
+        'Dealer account is Inactive',
+        'is not Active',
+        entity ? `${entity}.*INACTIVE` : '',
+        'deactivat',
+        ...tokens.slice(0, 4),
+      ].filter(Boolean);
+
+      const [greps, modules, findGuard, investigation] = await Promise.all([
+        Promise.all(
+          grepQueries.slice(0, 10).map((q) =>
+            this.aiNode.grepRepository(root, q, { maxResults: 16 }).catch(() => null),
+          ),
+        ),
+        this.aiNode.findModules(root, entity || query, 10).catch(() => null),
+        this.aiNode.findFilesByName(root, 'Guard', 20).catch(() => null),
+        Promise.race([
+          this.aiNode.investigateRepository(root, query, 24),
+          new Promise<null>((resolve) => setTimeout(() => resolve(null), 2_800)),
+        ]),
+      ]);
+
+      const candidates: string[] = [];
+      const grepLines: string[] = [];
+      const push = (p?: string) => {
+        if (p && !candidates.includes(p)) candidates.push(p);
+      };
+
+      for (const g of greps) {
+        if (!g?.matches?.length) continue;
+        for (const m of g.matches.slice(0, 10)) {
+          push(m.path);
+          const text = (m.text || '').trim().slice(0, 200);
+          grepLines.push(`${m.path}:${m.line}: ${text}`);
+        }
+      }
+      for (const h of modules?.hits || []) push(h.path);
+      for (const f of findGuard?.files || []) push(f);
+      if (investigation?.evidence) {
+        for (const e of investigation.evidence) push(e.path);
+      }
+
+      // Rank: enforcement files first, UI list components last
+      const ranked = [...new Set(candidates)]
+        .map((p) => {
+          const lower = p.toLowerCase();
+          let score = 0;
+          if (/guard/i.test(lower)) score += 80;
+          if (/middleware|validator|policy/i.test(lower)) score += 60;
+          if (/account.?status|tx.?action|block/i.test(lower)) score += 50;
+          if (/service|controller|router|route/i.test(lower)) score += 35;
+          if (entityLower && lower.includes(entityLower)) score += 25;
+          if (/list\.component|dropdown|ui\//i.test(lower)) score -= 35;
+          if (/\.spec\.|\.test\./i.test(lower)) score -= 50;
+          if (/frontend/i.test(lower) && !/guard|interceptor/i.test(lower)) score -= 10;
+          if (/backend|common-service|server|api\//i.test(lower)) score += 20;
+          return { p, score };
+        })
+        .sort((a, b) => b.score - a.score)
+        .map((x) => x.p)
+        .slice(0, 16);
+
+      // Prefer reading enforcement files; fall back to top ranked
+      const enforceFirst = [
+        ...ranked.filter((p) => this.isEnforcementPath(p)),
+        ...ranked.filter((p) => !this.isEnforcementPath(p)),
+      ].slice(0, 6);
+
+      const fileSnippets: string[] = [];
+      for (const p of enforceFirst) {
+        try {
+          const body = await this.toolReadFile(p);
+          const clipped = body.length > 3200 ? `${body.slice(0, 3200)}\n/* clipped */` : body;
+          fileSnippets.push(clipped);
+        } catch {
+          // skip
+        }
+      }
+
+      const strongEvidence =
+        enforceFirst.some((p) => this.isEnforcementPath(p)) && fileSnippets.length >= 1;
+
+      const lines = [
+        'CURSOR-DEPTH CAPABILITY DOSSIER (what can / cannot — NO GUESSING):',
+        `Entity focus: ${entity || '(infer from query)'}`,
+        '',
+        '## Grep hits (enforcement-first)',
+        ...(grepLines.slice(0, 30).map((l) => `- ${l}`) || ['- (none)']),
+        '',
+        '## Ranked files (Guard/middleware first; UI lists last)',
+        ...ranked.slice(0, 12).map((p) => `- ${p}${this.isEnforcementPath(p) ? '  ← ENFORCEMENT' : ''}`),
+        '',
+        '## Auto-read file contents (source of truth)',
+        fileSnippets.join('\n\n---\n\n') || '(none — grep Guard / account_status next)',
+        '',
+        'CRITICAL ACCURACY RULES (match Cursor):',
+        '1. Find the Guard/middleware/validator that checks status BEFORE answering.',
+        '2. UI list / deactivate button is NOT proof of what is blocked — only the enforcement code is.',
+        '3. FORMAT (Cursor-clean): short intro → ## What they cannot do (bullets or a clean markdown table) → ## What they can still do → short code fence for the decisive if → ## Note.',
+        '4. Prefer bullets like **Raise new invoice** — blocked by `path` when INACTIVE+NEW_TXN. Tables are OK if well-formed GFM.',
+        '5. Distinguish different statuses (e.g. entity account_status vs user login status). Do NOT conflate them.',
+        '6. NEVER invent status values, login blocks, or modules not present in the files above.',
+        '7. If enforcement code says only NEW_TXN is blocked, do NOT claim full lockout / cannot login.',
+        '8. No emoji section headers (❌ ✅ ⚠️). No duplicate trailing paragraphs. Plain markdown. No DSML/XML. No edits.',
+      ];
+
+      return {
+        candidates: ranked,
+        strongEvidence,
+        context: lines.join('\n').slice(0, 22_000),
+      };
+    } catch (error: any) {
+      return {
+        candidates: [],
+        context: `Capability investigation unavailable: ${error?.message || error}. Grep Guard/account_status then answer.`,
+      };
+    }
+  }
+
+  /** Deep flow pack: investigation dossier + 5–6 file reads along trails. */
+  private async buildFlowQuestionContext(query: string): Promise<{
+    context: string;
+    candidates: string[];
+    strongEvidence?: boolean;
+  }> {
+    const root = this.workspaceRoot();
+    if (!root || !query.trim()) {
+      return { context: '', candidates: [] };
+    }
+    try {
+      const [investigation, quick] = await Promise.all([
+        Promise.race([
+          this.aiNode.investigateRepository(root, query, 28),
+          new Promise<null>((resolve) => setTimeout(() => resolve(null), 3_500)),
+        ]),
+        this.buildQuickQuestionContext(query),
+      ]);
+
+      const candidates: string[] = [];
+      const push = (p?: string) => {
+        if (p && !candidates.includes(p)) candidates.push(p);
+      };
+
+      for (const p of quick.candidates || []) push(p);
+      if (investigation?.evidence) {
+        for (const e of investigation.evidence) push(e.path);
+      }
+      if (investigation?.trails) {
+        for (const trail of investigation.trails.slice(0, 8)) {
+          for (const p of trail) push(p);
+        }
+      }
+
+      // Prefer entry/routing/service/controller for flow accuracy
+      const flowRanked = [...new Set(candidates)]
+        .map((p) => {
+          const lower = p.toLowerCase();
+          let score = 0;
+          if (/app-routing|routes?\./i.test(lower)) score += 50;
+          if (/routing\.module/i.test(lower)) score += 40;
+          if (/\.module\.ts$/i.test(lower)) score += 25;
+          if (/service|controller|resolver|facade|store|api/i.test(lower)) score += 35;
+          if (/component\.(ts|tsx|html)$/i.test(lower)) score += 20;
+          if (/interceptor|guard|middleware/i.test(lower)) score += 28;
+          if (/\.spec\.|\.test\./i.test(lower)) score -= 40;
+          for (const t of (query.match(/[A-Za-z][A-Za-z0-9_-]{3,}/g) || []).slice(0, 6)) {
+            if (lower.includes(t.toLowerCase())) score += 15;
+          }
+          return { p, score };
+        })
+        .sort((a, b) => b.score - a.score)
+        .map((x) => x.p);
+
+      const ranked = this.rankCandidatePaths(
+        flowRanked.length ? flowRanked : candidates,
+        query,
+      ).slice(0, 14);
+
+      // Related files for top 3 seeds
+      for (const seed of ranked.slice(0, 3)) {
+        try {
+          const rel = await this.aiNode.getRelatedFiles(root, seed, 6);
+          for (const h of rel?.hits || []) push(h.path);
+        } catch {
+          // ignore
+        }
+      }
+      const finalRanked = this.rankCandidatePaths([...candidates, ...ranked], query).slice(0, 14);
+
+      const fileSnippets: string[] = [];
+      const readTargets = finalRanked.slice(0, 6);
+      for (const p of readTargets) {
+        try {
+          const body = await this.toolReadFile(p);
+          const clipped = body.length > 2800 ? `${body.slice(0, 2800)}\n/* clipped */` : body;
+          fileSnippets.push(clipped);
+        } catch {
+          // skip
+        }
+      }
+
+      const trails = investigation?.trails?.length
+        ? investigation.trails
+            .slice(0, 8)
+            .map((trail, i) => `T${i + 1}: ${trail.join(' → ')}`)
+            .join('\n')
+        : '(no multi-hop trail yet — use file contents below)';
+
+      const evidenceBlock =
+        investigation?.evidence
+          ?.slice(0, 12)
+          .map((item, index) => {
+            const link = item.from ? `${item.from} --${item.via}--> ${item.path}` : `seed → ${item.path}`;
+            return `### E${index + 1} ${link} [${item.score}%]
+why: ${(item.reasons || []).join(' | ')}
+symbols: ${(item.symbols || []).slice(0, 8).join(', ') || '(none)'}
+calls: ${(item.calls || []).slice(0, 8).join(', ') || '(none)'}
+API/routes: ${(item.apiEndpoints || []).join(', ') || '(none)'}
+${(item.excerpt || '').slice(0, 600)}`;
+          })
+          .join('\n\n') || quick.context;
+
+      const confidence = investigation?.confidence ?? 0;
+      const strongEvidence =
+        fileSnippets.length >= 4 ||
+        confidence >= 45 ||
+        (investigation?.trails?.length || 0) >= 1;
+
+      const lines = [
+        'CURSOR-DEPTH FLOW DOSSIER (ACCURACY > SPEED — ground every claim):',
+        `Investigation confidence: ${confidence}/100`,
+        `Concepts: ${(investigation?.intent?.expandedConcepts || []).slice(0, 12).join(', ') || '(n/a)'}`,
+        '',
+        '## Proven / likely trails (UI → handler → service → API)',
+        trails,
+        '',
+        '## Evidence graph',
+        evidenceBlock,
+        '',
+        '## Auto-read file contents (primary source of truth)',
+        fileSnippets.join('\n\n---\n\n') || '(none)',
+        '',
+        '## Candidate paths',
+        ...finalRanked.slice(0, 12).map((p) => `- ${p}`),
+        '',
+        'GROUNDING RULES (CRITICAL — Cursor-level accuracy):',
+        '- Describe ONLY what appears in trails / evidence / file contents above.',
+        '- Structure answer as numbered flow: Entry → UI/Component → Service → API/HTTP → Backend (skip missing layers; say "not found in evidence").',
+        '- Every step MUST cite a real path from the dossier.',
+        '- NEVER invent modules, endpoints, DB tables, or steps not in evidence.',
+        '- If confidence is low or trails are thin, say what is verified vs uncertain.',
+        '- Plain markdown. No DSML/XML/tool dumps. Do NOT edit files.',
+      ];
+
+      return {
+        candidates: finalRanked,
+        strongEvidence,
+        context: lines.join('\n').slice(0, 22_000),
+      };
+    } catch (error: any) {
+      return {
+        candidates: [],
+        context: `Flow investigation unavailable: ${error?.message || error}. Use investigate_codepath then answer.`,
+      };
+    }
+  }
+
+  /** Cursor Ask-speed: parallel greps + excerpts + auto-read top files before first LLM call. */
+  private async buildQuickQuestionContext(query: string): Promise<{
+    context: string;
+    candidates: string[];
+    strongEvidence?: boolean;
+  }> {
+    const root = this.workspaceRoot();
+    if (!root || !query.trim()) {
+      return { context: '', candidates: [] };
+    }
+    try {
+      const stop = new Set(
+        'the and for with from this that which what where when how please project open hai hota hogi etc konsa kaunsa about into onto only there their they then than also just like will would could should into under over after before'.split(
+          ' ',
+        ),
+      );
+      const tokens = (query.match(/[A-Za-z][A-Za-z0-9_-]{2,}/g) || [])
+        .map((t) => t.trim())
+        .filter((t) => t.length >= 3 && !stop.has(t.toLowerCase()));
+      const terms = [...new Set(tokens)].slice(0, 6);
+      // Multi-word phrases Cursor would search first ("relationship limit")
+      const phrases: string[] = [];
+      for (let i = 0; i < tokens.length - 1 && phrases.length < 3; i++) {
+        phrases.push(`${tokens[i]} ${tokens[i + 1]}`);
+        phrases.push(`${tokens[i]}-${tokens[i + 1]}`);
+      }
+      if (/document|format|upload|accept|mime/i.test(query)) {
+        phrases.push('accept=');
+        phrases.push('application/pdf');
+      }
+
+      const grepQueries = [
+        ...phrases.slice(0, 4),
+        ...terms.slice(0, 3),
+        /format|document|upload/i.test(query) ? 'accept=' : '',
+      ].filter(Boolean);
+
+      const [greps, modules, ...exact] = await Promise.all([
+        Promise.all(
+          grepQueries.slice(0, 5).map((q) =>
+            this.aiNode.grepRepository(root, q, { maxResults: 12 }).catch(() => null),
+          ),
+        ),
+        this.aiNode.findModules(root, query, 8).catch(() => null),
+        ...terms.slice(0, 3).map((t) =>
+          this.aiNode.exactRepositorySearch(root, t, 6).catch(() => null),
+        ),
+      ]);
+
+      const candidates: string[] = [];
+      const grepLines: string[] = [];
+      let strongEvidence = false;
+
+      for (const g of greps) {
+        if (!g?.matches?.length) continue;
+        for (const m of g.matches.slice(0, 8)) {
+          if (m.path && !candidates.includes(m.path)) candidates.push(m.path);
+          const text = (m.text || '').trim().slice(0, 180);
+          grepLines.push(`${m.path}:${m.line}: ${text}`);
+          if (
+            /\b(accept\s*=|application\/pdf|\.pdf|\.docx?|\.xlsx?|\.csv|image\/|mime|fileTypes?|allowedFormats?)\b/i.test(
+              text,
+            )
+          ) {
+            strongEvidence = true;
+          }
+        }
+      }
+
+      for (const result of [modules, ...exact]) {
+        if (!result?.hits) continue;
+        for (const hit of result.hits.slice(0, 5)) {
+          const p = hit.path;
+          if (p && !candidates.includes(p)) candidates.push(p);
+          if (hit.excerpt && /accept=|\.pdf|document|format/i.test(hit.excerpt)) {
+            strongEvidence = true;
+            grepLines.push(`${p}: ${(hit.excerpt || '').trim().slice(0, 160)}`);
+          }
+        }
+      }
+
+      const ranked = this.rankCandidatePaths(candidates, query).slice(0, 10);
+
+      // Auto-read top 2 files (Cursor injects snippets before answering)
+      const fileSnippets: string[] = [];
+      for (const p of ranked.slice(0, 2)) {
+        try {
+          const body = await this.toolReadFile(p);
+          const clipped = body.length > 3500 ? `${body.slice(0, 3500)}\n/* clipped */` : body;
+          fileSnippets.push(clipped);
+          if (
+            /\b(accept\s*=|application\/pdf|\.pdf|\.docx?|fileTypes?|allowedFormats?)\b/i.test(body)
+          ) {
+            strongEvidence = true;
+          }
+        } catch {
+          // skip unreadable
+        }
+      }
+
+      const lines: string[] = [
+        'CURSOR-ASK EVIDENCE PACK (answer from this — do not invent):',
+        '',
+        '## Grep hits',
+        ...(grepLines.slice(0, 24).map((l) => `- ${l}`) || ['- (none)']),
+        '',
+        '## Top files',
+        ...ranked.slice(0, 8).map((p) => `- ${p}`),
+        '',
+        '## File contents (auto-read)',
+        fileSnippets.join('\n\n---\n\n') || '(none — use grep/read_file once)',
+        '',
+        'ANSWER RULES:',
+        '- Write a clear user-facing answer in plain markdown (bullets OK).',
+        '- Cite real paths. List allowed document formats / fields if present in evidence.',
+        '- If evidence already has accept=/mime/.pdf — ANSWER NOW. No more tools.',
+        '- NEVER output DSML, XML, <invoke>, toolcalls text. Tools only via tool_calls API.',
+        '- Do NOT edit files. Do NOT call update_todos.',
+      ];
+
+      return {
+        candidates: ranked,
+        strongEvidence,
+        context: lines.join('\n').slice(0, 14_000),
+      };
+    } catch (error: any) {
+      return {
+        candidates: [],
+        context: `Quick search unavailable: ${error?.message || error}. Use exact_code_search then answer.`,
+      };
+    }
+  }
+
   private async buildRepositoryContext(query: string): Promise<{
     context: string;
     candidates: string[];
+    strongEvidence?: boolean;
   }> {
+    if (this.isQuestionIntent(query)) {
+      if (this.isCapabilityQuestionIntent(query)) {
+        return this.buildCapabilityQuestionContext(query);
+      }
+      if (this.isFlowQuestionIntent(query)) {
+        return this.buildFlowQuestionContext(query);
+      }
+      return this.buildQuickQuestionContext(query);
+    }
     const root = this.workspaceRoot();
     if (!root || !query.trim()) {
       return { context: '', candidates: [] };
@@ -1262,50 +2128,97 @@ Read the highest-scoring evidence in trail order. For a bug, trace UI → handle
   private async runAgentLoop(pendingId: string): Promise<string> {
     const latestUser = [...this.history].reverse().find((m) => m.role === 'user')?.content || '';
     const liveTestIntent = this.isLiveTestIntent(latestUser);
-    const maxSteps =
-      this.chatMode === 'ask' ? 16 : this.chatMode === 'agent' ? (liveTestIntent ? 48 : 36) : 12;
+    const needsImplementation =
+      this.chatMode === 'agent' && this.requiresImplementation(latestUser);
+    // Implement tasks are never Ask — "can you fix…?" must mutate
+    const questionIntent = this.isQuestionIntent(latestUser) && !needsImplementation;
+    const capabilityQuestion =
+      questionIntent && this.isCapabilityQuestionIntent(latestUser);
+    const flowQuestion =
+      questionIntent && !capabilityQuestion && this.isFlowQuestionIntent(latestUser);
+    const maxSteps = capabilityQuestion
+      ? 12
+      : flowQuestion
+        ? 12
+        : questionIntent
+          ? 5
+          : this.chatMode === 'ask'
+            ? 8
+            : this.chatMode === 'agent'
+              ? liveTestIntent
+                ? 48
+                : 36
+              : 12;
     const active = this.editorService.currentResource?.uri.codeUri.fsPath;
     const casual = this.isCasualMessage(latestUser);
 
-    // Auto checkpoint at start of agent work
-    if (this.chatMode === 'agent' && !casual) {
+    // Auto checkpoint only when we may mutate files
+    if (this.chatMode === 'agent' && !casual && needsImplementation) {
       this.createCheckpoint('Before turn');
     }
 
     const projectRules = this.getProjectRules();
 
-    // Cursor-class: never block first token. Soft-wait ~180ms for warm cache;
-    // otherwise start LLM immediately and inject dossier when ready.
+    // Cursor Ask: wait for evidence pack (greps + file reads). Agent: soft-start faster.
     let repositoryContext = '';
     let candidatePaths: string[] = [];
     let researchInjected = false;
-    let lateResearch: { context: string; candidates: string[] } | null = null;
-    let researchPromise: Promise<{ context: string; candidates: string[] }> | null = null;
+    let strongQuestionEvidence = false;
+    let lateResearch: {
+      context: string;
+      candidates: string[];
+      strongEvidence?: boolean;
+    } | null = null;
+    let researchPromise: Promise<{
+      context: string;
+      candidates: string[];
+      strongEvidence?: boolean;
+    }> | null = null;
     if (!casual) {
-      this.pushActivity(pendingId, 'indexing', 'Scanning workspace…');
+      this.pushActivity(
+        pendingId,
+        'indexing',
+        capabilityQuestion
+          ? 'Finding enforcement rules…'
+          : flowQuestion
+            ? 'Tracing project flow…'
+            : questionIntent
+              ? 'Searching codebase…'
+              : 'Scanning workspace…',
+      );
       researchPromise = this.buildRepositoryContext(latestUser);
       researchPromise.then((r) => {
         lateResearch = r;
       }).catch(() => {
         lateResearch = { context: '', candidates: [] };
       });
+      // Capability/Flow: wait for dossier. Fact Q: ~1.2s. Agent: soft-start.
+      const softMs =
+        capabilityQuestion || flowQuestion ? 3000 : questionIntent ? 1200 : 220;
       const soft = await Promise.race([
         researchPromise.then((r) => ({ ready: true as const, r })),
-        sleep(180).then(() => ({ ready: false as const, r: null })),
+        sleep(softMs).then(() => ({ ready: false as const, r: null })),
       ]);
       if (soft.ready && soft.r) {
         repositoryContext = soft.r.context;
         candidatePaths = [...soft.r.candidates];
+        strongQuestionEvidence = Boolean(soft.r.strongEvidence);
         researchInjected = true;
         lateResearch = soft.r;
         this.completeLastActivity(
           pendingId,
           candidatePaths.length
-            ? `Found ${candidatePaths.length} likely targets`
+            ? questionIntent
+              ? capabilityQuestion
+                ? `Enforcement evidence · ${candidatePaths.length} files`
+                : flowQuestion
+                  ? `Flow dossier ready · ${candidatePaths.length} files`
+                  : `Found ${candidatePaths.length} files · evidence ready`
+              : `Found ${candidatePaths.length} likely targets`
             : 'Index ready — exploring with tools',
         );
       } else {
-        this.setStatus('Agent thinking…');
+        this.setStatus(questionIntent ? 'Answering…' : 'Agent thinking…');
       }
     }
 
@@ -1358,6 +2271,42 @@ Read the highest-scoring evidence in trail order. For a bug, trace UI → handle
       });
     }
 
+    if (questionIntent) {
+      messages.push({
+        role: 'system',
+        content: capabilityQuestion
+          ? `CAPABILITY / BEHAVIOR QUESTION (Cursor-depth — NO GUESSING):\n` +
+            `- User asks what someone CAN or CANNOT do after a status change (activate/deactivate/etc).\n` +
+            `- Source of truth = Guard / middleware / validator that checks status — NOT the UI list screen.\n` +
+            `- FORMAT like Cursor: short intro; ## What they cannot do; ## What they can still do; code fence for decisive if; ## Note.\n` +
+            `- Prefer clean bullets (**Action** — reason + \`path\`). Well-formed GFM tables OK. No emoji headers.\n` +
+            `- Quote the decisive condition (e.g. INACTIVE && NEW_TXN).\n` +
+            `- Distinguish entity status vs user/login status — do NOT conflate them.\n` +
+            `- NEVER invent statuses (e.g. DELETE) or claim login is blocked unless evidence shows it.\n` +
+            `- If no Guard found yet: grep AccountStatusGuard / account_status / INACTIVE, read that file, THEN answer.\n` +
+            `- CRITICAL: Final reply = user-facing answer ONLY. Never narrate tools, string=, list_dir, failures, or "let me try". No tooling caveats.\n` +
+            `- No edits. No DSML/XML. No duplicate trailing text.`
+          : flowQuestion
+            ? `FLOW / ARCHITECTURE QUESTION (Cursor-depth accuracy):\n` +
+              `- User wants the REAL project flow — not a generic guess.\n` +
+              `- Use the FLOW DOSSIER above. Prefer trails + auto-read files.\n` +
+              `- Answer as numbered steps: Entry → UI → Service → API → Backend.\n` +
+              `- Cite a real path for EVERY step. If a layer is missing, say "not found in evidence".\n` +
+              `- NEVER invent endpoints, modules, DB tables, or steps.\n` +
+              `- If dossier is thin: 1–2 more tools (investigate_codepath / read_file along trail) then answer.\n` +
+              `- No edits. No DSML/XML. Plain markdown for humans.`
+            : `QUESTION TASK (Cursor Ask):\n` +
+              `- User wants a clear ANSWER, not code changes.\n` +
+              `- Evidence pack above already has greps + file contents when available.\n` +
+              `- If evidence is enough → answer NOW in plain markdown (no tools).\n` +
+              `- Else max 1–2 tools: grep / exact_code_search → read_file → ANSWER.\n` +
+              `- Cite real paths. Do NOT invent facts not in evidence.\n` +
+              `- NEVER call search_replace, write_file, create_file, update_todos, run_command.\n` +
+              `- NEVER output DSML, XML, <invoke>, <parameter>, or fake toolcall text.\n` +
+              `- Tools only via API tool_calls. Final reply = readable markdown for humans.`,
+      });
+    }
+
     // Greetings / chitchat: no tools, no edits, ignore prior task momentum
     if ((this.chatMode === 'agent' || this.chatMode === 'ask') && casual) {
       const lightHistory: ChatMessage[] = this.history
@@ -1396,14 +2345,64 @@ Read the highest-scoring evidence in trail order. For a bug, trace UI → handle
     let implementNudges = 0;
     let rejectNudges = 0;
     let autoContinues = 0;
-    const maxAutoContinues = 12;
-    const maxResearchNudges = 4;
-    const maxImplementNudges = 8;
+    let diagnosticsInjected = false;
+    let lastChanceTools = false;
+    const maxAutoContinues = 16;
+    const maxResearchNudges = capabilityQuestion || flowQuestion ? 3 : questionIntent ? 2 : 4;
+    const maxImplementNudges = needsImplementation ? 8 : 0;
     const maxRejectNudges = 6;
     const frontendOnly = this.isFrontendOnlyIntent(latestUser);
     const exploredPaths = new Set<string>(
       this.rankCandidatePaths(candidatePaths.slice(0, 12), latestUser).slice(0, 8),
     );
+    if (active) {
+      exploredPaths.add(normPath(active));
+    }
+
+    // Cursor speed: prefetch-read top targets so search_replace is not EDIT BLOCKED on round 1
+    const hasSeedTargets =
+      needsImplementation &&
+      (Boolean(active) || candidatePaths.length > 0 || exploredPaths.size > 0);
+    if (needsImplementation && hasSeedTargets) {
+      const prefetchPaths = this.rankCandidatePaths(
+        [...(active ? [active] : []), ...candidatePaths, ...exploredPaths],
+        latestUser,
+      ).slice(0, 2);
+      const prefetched: string[] = [];
+      for (const p of prefetchPaths) {
+        try {
+          const filePath = this.resolvePath(p);
+          if (!fs.existsSync(filePath) || !fs.statSync(filePath).isFile()) {
+            continue;
+          }
+          const content = await this.readText(filePath);
+          this.filesReadThisSession.add(normPath(filePath));
+          readCount++;
+          exploredPaths.add(normPath(filePath));
+          const lines = content.split('\n');
+          const end = Math.min(lines.length, 120);
+          const slice = lines.slice(0, end).join('\n');
+          prefetched.push(
+            `FILE: ${filePath}\nLINES: 1-${end} of ${lines.length}\n\n${this.numberLines(slice, 1)}`,
+          );
+        } catch {
+          // skip unreadable
+        }
+      }
+      if (prefetched.length) {
+        messages.push({
+          role: 'system',
+          content:
+            `PREFETCHED TARGETS (already read — you MAY search_replace these immediately):\n\n` +
+            prefetched.join('\n\n---\n\n').slice(0, 14_000),
+        });
+        this.pushActivity(
+          pendingId,
+          'reading',
+          `Prefetched ${prefetched.length} target${prefetched.length > 1 ? 's' : ''} for edit`,
+        );
+      }
+    }
 
     if (frontendOnly) {
       messages.push({
@@ -1420,6 +2419,7 @@ Read the highest-scoring evidence in trail order. For a bug, trace UI → handle
       }
       researchInjected = true;
       repositoryContext = lateResearch.context;
+      if (lateResearch.strongEvidence) strongQuestionEvidence = true;
       for (const p of this.rankCandidatePaths(lateResearch.candidates, latestUser)) {
         candidatePaths.push(p);
         exploredPaths.add(p);
@@ -1429,11 +2429,93 @@ Read the highest-scoring evidence in trail order. For a bug, trace UI → handle
         this.completeLastActivity(
           pendingId,
           lateResearch.candidates.length
-            ? `Mapped ${lateResearch.candidates.length} module targets`
+            ? questionIntent
+              ? `Evidence ready · ${lateResearch.candidates.length} files`
+              : `Mapped ${lateResearch.candidates.length} module targets`
             : 'Workspace scan complete',
         );
       }
     };
+
+    // One-shot only when evidence is truly strong (capability needs Guard/middleware).
+    const canInstantAnswer =
+      questionIntent &&
+      !casual &&
+      strongQuestionEvidence &&
+      (capabilityQuestion
+        ? this.hasEnforcementEvidence(candidatePaths, repositoryContext)
+        : flowQuestion
+          ? repositoryContext.includes('FLOW DOSSIER') || repositoryContext.length > 4000
+          : true);
+    if (canInstantAnswer) {
+      tryInjectLateResearch();
+      this.setStatus('Answering…');
+      this.pushActivity(
+        pendingId,
+        'thinking',
+        capabilityQuestion
+          ? 'Writing grounded capability answer…'
+          : flowQuestion
+            ? 'Writing grounded flow answer…'
+            : 'Writing answer…',
+      );
+      try {
+        const instant = await this.invokeCompletionResilient(pendingId, {
+          messages: [
+            ...messages,
+            {
+              role: 'user',
+              content: capabilityQuestion
+                ? `Answer from the CAPABILITY DOSSIER only. Cursor-clean format:\n` +
+                  `1) 2–3 sentence intro with the source file\n` +
+                  `2) ## What they cannot do — bullets or a clean GFM table\n` +
+                  `3) ## What they can still do — bullets\n` +
+                  `4) Short \`\`\`js fence with the decisive if\n` +
+                  `5) ## Note — status distinctions\n` +
+                  `Output ONLY that answer in plain, friendly language a non-developer can skim. ` +
+                  `No tool talk, no "string=", no "let me try", no tooling caveats, no duplicate ending.`
+                : flowQuestion
+                  ? `Write the accurate project FLOW now from the dossier only. ` +
+                    `Numbered steps with a real path cited per step. Mark gaps as "not found in evidence". ` +
+                    `No tools. No invention. No DSML/XML.`
+                  : `Answer the question now using ONLY the evidence pack above. ` +
+                    `Clear markdown. Bullet the allowed formats/fields if present. Cite paths. ` +
+                    `No tools. No DSML/XML. Do not invent.`,
+            },
+          ],
+          toolChoice: 'none',
+          modelId: this.modelId,
+          stream: true,
+          maxTokens: capabilityQuestion || flowQuestion ? 1400 : 900,
+        });
+        const answer = this.stripGarbageToolDump((instant.content || '').trim());
+        if (
+          this.isValidFinalAnswer(answer, true) &&
+          !this.looksLikeGarbageToolDump(answer) &&
+          this.isGroundedAnswer(answer, candidatePaths, flowQuestion || capabilityQuestion) &&
+          (!capabilityQuestion ||
+            this.isCapabilityAnswerGrounded(answer, candidatePaths, repositoryContext))
+        ) {
+          this.setStatus('');
+          return answer;
+        }
+        if (answer) {
+          messages.push({ role: 'assistant', content: answer });
+          messages.push({
+            role: 'user',
+            content: capabilityQuestion
+              ? `That answer guessed from UI or conflated statuses. Find/read the AccountStatus Guard (or equivalent), ` +
+                `then rewrite Cannot/Can tables citing only that enforcement code.`
+              : flowQuestion
+                ? `That answer was not grounded enough (missing real paths / invented steps). ` +
+                  `Read 1–2 more files along the trail if needed, then rewrite a verified flow.`
+                : `That reply was incomplete or ungrounded. Use 1 grep or read_file if needed, then give a complete markdown answer citing real paths.`,
+          });
+        }
+      } catch {
+        // fall through to tool loop
+      }
+    }
 
     for (let step = 0; step < maxSteps; step++) {
       if (this.cancelRequested) {
@@ -1456,24 +2538,34 @@ Read the highest-scoring evidence in trail order. For a bug, trace UI → handle
       }
 
       const tools = selectAgentTools({
-        mode: this.chatMode,
-        liveTest: liveTestIntent,
+        mode: questionIntent ? 'ask' : this.chatMode,
+        liveTest: liveTestIntent && !questionIntent,
         madeEdits,
         searchCount,
         readCount,
+        hasSeedTargets: hasSeedTargets || exploredPaths.size > 0 || readCount > 0,
       });
 
       let result;
       try {
-        // Stream tool rounds for live Cursor-like activity (Poolside/Ollama SSE).
-        // Fall back to non-stream inside invokeCompletion if provider breaks.
+        // Capability: never force-answer until enforcement evidence or enough reads.
+        const forceAnswer =
+          questionIntent &&
+          (capabilityQuestion
+            ? (this.hasEnforcementEvidence(exploredPaths, repositoryContext) &&
+                (readCount >= 1 || step >= 2)) ||
+              step >= 4
+            : readCount >= 1 ||
+              searchCount >= 2 ||
+              (step >= 1 && strongQuestionEvidence) ||
+              step >= 3);
         result = await this.invokeCompletionResilient(pendingId, {
           messages,
-          tools,
-          toolChoice: 'auto',
+          tools: forceAnswer ? undefined : tools,
+          toolChoice: forceAnswer ? 'none' : 'auto',
           modelId: this.modelId,
           stream: true,
-          maxTokens: routingMaxTokens(step, madeEdits),
+          maxTokens: questionIntent ? 900 : routingMaxTokens(step, madeEdits),
         });
       } catch (e: any) {
         // Transient API failures: auto-continue like Cursor (never dump "pick a file").
@@ -1507,7 +2599,7 @@ Read the highest-scoring evidence in trail order. For a bug, trace UI → handle
           continue;
         }
         if (madeEdits) {
-          return this.fallbackSummary([...exploredPaths]);
+          return this.fallbackSummary([...exploredPaths], latestUser);
         }
         // Still no edits — keep trying once more with forced non-stream path via continue budget
         if (autoContinues < maxAutoContinues && step < maxSteps - 1 && !this.cancelRequested) {
@@ -1515,30 +2607,89 @@ Read the highest-scoring evidence in trail order. For a bug, trace UI → handle
           this.shrinkAgentMessages(messages, autoContinues + 2);
           messages.push({
             role: 'user',
-            content:
-              `Provider error — recover and FINISH with tools. Never ask the user to pick a file. ` +
-              `read_file the best frontend HTML/TS hit → search_replace. Request: "${latestUser.slice(0, 320)}"`,
+            content: questionIntent
+              ? `Provider error — recover and ANSWER now. Never ask continue/pick file. ` +
+                `read_file top hit if needed, then answer. Request: "${latestUser.slice(0, 320)}"`
+              : `Provider error — recover and FINISH with tools. Never ask the user to pick a file. ` +
+                `read_file the best frontend HTML/TS hit → search_replace. Request: "${latestUser.slice(0, 320)}"`,
           });
-          this.pushActivity(pendingId, 'info', `Recovering from provider error (${autoContinues})`);
+          this.setStatus(`Recovering (${autoContinues})…`);
           await sleep(500);
           continue;
         }
-        throw e;
+        return await this.forceFinishWithoutAsking(
+          pendingId,
+          messages,
+          exploredPaths,
+          latestUser,
+          questionIntent,
+          { needsImplementation },
+        );
       }
 
       if (this.cancelRequested) {
         return 'Stopped by user.';
       }
 
-      const content = (result.content || '').trim();
-      const toolCalls = result.tool_calls;
+      let content = (result.content || '').trim();
+      let toolCalls = result.tool_calls;
+
+      // DeepSeek sometimes dumps tool calls as DSML/XML text instead of tool_calls[].
+      // Recover those into real tools — never show the dump as the final answer.
+      if ((!toolCalls || !toolCalls.length) && this.looksLikeGarbageToolDump(content)) {
+        const recovered = this.parseEmbeddedToolCalls(content);
+        if (recovered.length) {
+          toolCalls = recovered;
+          content = this.stripGarbageToolDump(content);
+          this.setStatus('Recovering tools…');
+        } else if (capabilityQuestion && step < maxSteps - 1) {
+          // Empty DSML dumps → inject Cursor-style enforcement searches (never "string=")
+          const entity =
+            (latestUser.match(/\b(dealer|anchor|buyer|seller|oem|vendor|customer|partner)\b/i) || [])[0] ||
+            'account';
+          toolCalls = [
+            {
+              id: `auto_guard_${Date.now()}`,
+              type: 'function',
+              function: {
+                name: 'grep',
+                arguments: JSON.stringify({ query: 'AccountStatusGuard', maxResults: 20 }),
+              },
+            },
+            {
+              id: `auto_status_${Date.now()}`,
+              type: 'function',
+              function: {
+                name: 'grep',
+                arguments: JSON.stringify({
+                  query: `${entity} account_status INACTIVE`,
+                  maxResults: 20,
+                }),
+              },
+            },
+            {
+              id: `auto_block_${Date.now()}`,
+              type: 'function',
+              function: {
+                name: 'grep',
+                arguments: JSON.stringify({ query: 'NEW_TXN', maxResults: 16 }),
+              },
+            },
+          ];
+          content = this.stripGarbageToolDump(content);
+          this.setStatus('Searching enforcement rules…');
+        }
+      }
 
       if (toolCalls?.length) {
         usedTools = true;
         this.completeLastActivity(pendingId);
-        if (content) {
+        // Clear any accidental DSML from the answer bubble while tools run (Cursor-style)
+        this.patchUi(pendingId, { content: '', pending: true });
+        const thoughtClean = this.bubbleSafeContent(content);
+        if (thoughtClean && thoughtClean.length > 40) {
           this.pushActivity(pendingId, 'thinking', 'Thought', undefined, true, {
-            resultPreview: content.slice(0, 4000),
+            resultPreview: thoughtClean.slice(0, 1200),
           });
         }
         messages.push({
@@ -1548,6 +2699,8 @@ Read the highest-scoring evidence in trail order. For a bug, trace UI → handle
         });
 
         const toolResults = await this.executeToolCallsParallel(pendingId, toolCalls);
+        let rejectedThisRound = 0;
+        const mutatedPathsThisRound: string[] = [];
 
         for (let i = 0; i < toolCalls.length; i++) {
           const call = toolCalls[i];
@@ -1578,8 +2731,20 @@ Read the highest-scoring evidence in trail order. For a bug, trace UI → handle
           if (MUTATING_TOOL_NAMES.has(name)) {
             if (this.isSuccessfulMutation(toolResult)) {
               madeEdits = true;
+              try {
+                const a = call.function?.arguments
+                  ? JSON.parse(call.function.arguments)
+                  : {};
+                const p = a.path || a.file_path || a.file;
+                if (p) {
+                  mutatedPathsThisRound.push(String(p));
+                }
+              } catch {
+                // ignore
+              }
             } else if (/EDIT (REJECTED|BLOCKED)|search_replace failed|failed:/i.test(toolResult)) {
               editRejected++;
+              rejectedThisRound++;
             }
           }
 
@@ -1602,12 +2767,10 @@ Read the highest-scoring evidence in trail order. For a bug, trace UI → handle
           });
         }
 
-        // If the last round only produced rejected edits, force a retry nudge
-        // before the model can invent a fake "done" reply.
+        // Cursor-style: any rejected edit must be retried — even if earlier edits succeeded
         if (
-          editRejected > 0 &&
-          !madeEdits &&
-          this.requiresImplementation(latestUser) &&
+          rejectedThisRound > 0 &&
+          needsImplementation &&
           rejectNudges < maxRejectNudges &&
           step < maxSteps - 1
         ) {
@@ -1615,7 +2778,7 @@ Read the highest-scoring evidence in trail order. For a bug, trace UI → handle
           messages.push({
             role: 'user',
             content:
-              `Your last edit(s) were REJECTED by the syntax/structure verifier — nothing was saved. ` +
+              `Your last edit(s) were REJECTED by the syntax/structure verifier — nothing was saved for those. ` +
               `Re-read the file region, write COMPLETE balanced code (every {([<> quote closed), ` +
               `and retry search_replace. Retry ${rejectNudges}/${maxRejectNudges}. Request: "${latestUser.slice(0, 320)}"`,
           });
@@ -1626,15 +2789,44 @@ Read the highest-scoring evidence in trail order. For a bug, trace UI → handle
             `Edit rejected — fixing syntax (${rejectNudges}/${maxRejectNudges})`,
           );
         }
+
+        // Auto-inject diagnostics after successful mutations (Cursor verify step)
+        if (
+          madeEdits &&
+          mutatedPathsThisRound.length > 0 &&
+          !diagnosticsInjected &&
+          needsImplementation &&
+          step < maxSteps - 1
+        ) {
+          diagnosticsInjected = true;
+          const pathHint = mutatedPathsThisRound[0];
+          const diag = this.toolGetDiagnostics(pathHint, 'error', 30);
+          messages.push({
+            role: 'user',
+            content:
+              `POST-EDIT VERIFY (auto):\n${diag}\n` +
+              `If these errors are from your edit, fix with search_replace now. ` +
+              `Otherwise write a short 1–3 sentence summary + Suggested checks. Do not invent new scope.`,
+          });
+          this.pushActivity(pendingId, 'info', 'Checked diagnostics after edit');
+        }
         continue;
       }
 
-      const minimumReads = candidatePaths.length >= 4 ? 2 : 1;
+      const minimumReads = capabilityQuestion
+        ? 2
+        : flowQuestion
+          ? 3
+          : questionIntent
+            ? 1
+            : candidatePaths.length >= 4
+              ? 2
+              : 1;
       const needsResearch =
-        this.chatMode === 'agent' &&
         !casual &&
-        this.isWorkRequest(latestUser) &&
         !madeEdits &&
+        (questionIntent || this.chatMode === 'agent') &&
+        this.isWorkRequest(latestUser) &&
         (readCount < minimumReads || searchCount + readCount < 1);
 
       const looksLost =
@@ -1643,37 +2835,127 @@ Read the highest-scoring evidence in trail order. For a bug, trace UI → handle
         this.looksLikeCannotFind(content) ||
         this.looksLikeAskUserToPickFile(content);
 
-      // Force Cursor-style research: don't accept "can't find / done" until files were read.
+      // Force light research; for questions never push edits.
       if (needsResearch && researchNudges < maxResearchNudges && step < maxSteps - 1) {
         researchNudges++;
         if (content) {
           messages.push({ role: 'assistant', content });
         }
-        const hintPaths = this.rankCandidatePaths(exploredPaths, latestUser).slice(0, 6);
+        const hintPaths = this.rankCandidatePaths(exploredPaths, latestUser).slice(0, 4);
         const pathHint = hintPaths.length
-          ? `Start by read_file on these ranked candidates:\n${hintPaths.map((p) => `- ${p}`).join('\n')}`
-          : `Call exact_code_search with the user's exact UI labels, then read the top hits.`;
+          ? `read_file these:\n${hintPaths.map((p) => `- ${p}`).join('\n')}`
+          : `exact_code_search key nouns from the question, then read_file the top hit.`;
         messages.push({
           role: 'user',
-          content:
-            `Stop. You have not finished research. ${pathHint}\n` +
-            `Then apply the requested changes with search_replace/write_file. ` +
-            `Read at least ${minimumReads} evidence files. NEVER ask which file is correct. ` +
-            `Retry ${researchNudges}/${maxResearchNudges}. Request: "${latestUser.slice(0, 400)}"`,
+          content: questionIntent
+            ? `Need evidence. ${pathHint}\nThen ANSWER (docs/format/fields + paths). Do NOT edit. ${researchNudges}/${maxResearchNudges}.`
+            : `Stop. You have not finished research. ${pathHint}\n` +
+              `Then apply the requested changes with search_replace/write_file. ` +
+              `Read at least ${minimumReads} evidence files. NEVER ask which file is correct. ` +
+              `Retry ${researchNudges}/${maxResearchNudges}. Request: "${latestUser.slice(0, 400)}"`,
         });
-        this.setStatus('Digging deeper…');
+        this.setStatus(questionIntent ? 'Checking code…' : 'Digging deeper…');
         this.pushActivity(
           pendingId,
           'searching',
-          `Still researching… (${researchNudges}/${maxResearchNudges})`,
+          questionIntent
+            ? `Gathering answer… (${researchNudges}/${maxResearchNudges})`
+            : `Still researching… (${researchNudges}/${maxResearchNudges})`,
         );
         continue;
       }
 
+      // Question answered after tools/reads → stop only if grounded.
       if (
-        this.chatMode === 'agent' &&
-        !casual &&
-        this.requiresImplementation(latestUser) &&
+        questionIntent &&
+        this.isValidFinalAnswer(content, true) &&
+        (usedTools ||
+          readCount >= 1 ||
+          searchCount >= 1 ||
+          strongQuestionEvidence ||
+          researchNudges >= maxResearchNudges ||
+          step >= 1)
+      ) {
+        const grounded =
+          this.isGroundedAnswer(content, exploredPaths, flowQuestion || capabilityQuestion) &&
+          (!capabilityQuestion ||
+            this.isCapabilityAnswerGrounded(content, exploredPaths, repositoryContext));
+        if (grounded) {
+          this.setStatus('');
+          return content;
+        }
+        if (step < maxSteps - 1) {
+          messages.push({ role: 'assistant', content });
+          messages.push({
+            role: 'user',
+            content: capabilityQuestion
+              ? `Rewrite with GROUNDED Cannot/Can tables from the Guard/middleware only. ` +
+                `Do not invent login lockout or fake statuses. Enforcement paths:\n` +
+                `${this.rankCandidatePaths(exploredPaths, latestUser)
+                  .filter((p) => this.isEnforcementPath(p))
+                  .slice(0, 6)
+                  .map((p) => `- ${p}`)
+                  .join('\n') ||
+                  this.rankCandidatePaths(exploredPaths, latestUser)
+                    .slice(0, 6)
+                    .map((p) => `- ${p}`)
+                    .join('\n')}`
+              : flowQuestion
+                ? `Rewrite with GROUNDED flow steps. Cite real paths from evidence for each step. ` +
+                  `Do not invent. If unsure, say not found in evidence. Paths:\n` +
+                  `${this.rankCandidatePaths(exploredPaths, latestUser)
+                    .slice(0, 6)
+                    .map((p) => `- ${p}`)
+                    .join('\n')}`
+                : `Rewrite citing real file paths from evidence. Do not invent.`,
+          });
+          this.setStatus('Improving answer…');
+          continue;
+        }
+        this.setStatus('');
+        return content;
+      }
+
+      // Model dumped broken tool XML as "answer" — force a clean prose reply.
+      if (
+        questionIntent &&
+        content &&
+        this.looksLikeGarbageToolDump(content) &&
+        step < maxSteps - 1
+      ) {
+        messages.push({
+          role: 'assistant',
+          content: this.stripGarbageToolDump(content) || null,
+        });
+        messages.push({
+          role: 'user',
+          content:
+            `STOP. You outputted broken tool XML/DSML — that is invalid. ` +
+            `Answer in plain markdown NOW using evidence you already have. ` +
+            `Be specific (formats, fields, paths). Never output toolcalls/invoke/DSML/XML.`,
+        });
+        this.setStatus('Writing answer…');
+        try {
+          const answer = await this.invokeCompletionResilient(pendingId, {
+            messages,
+            toolChoice: 'none',
+            modelId: this.modelId,
+            stream: true,
+            maxTokens: 900,
+          });
+          const a = this.stripGarbageToolDump((answer.content || '').trim());
+          if (this.isValidFinalAnswer(a, true)) {
+            this.setStatus('');
+            return a;
+          }
+        } catch {
+          // continue loop
+        }
+        continue;
+      }
+
+      if (
+        needsImplementation &&
         !madeEdits &&
         implementNudges < maxImplementNudges &&
         step < maxSteps - 1 &&
@@ -1706,14 +2988,10 @@ Read the highest-scoring evidence in trail order. For a bug, trace UI → handle
       // Never treat "please pick a file" / empty research dump as a completed agent turn.
       if (
         content &&
-        (madeEdits ||
-          !this.requiresImplementation(latestUser) ||
-          this.chatMode !== 'agent' ||
-          this.looksLikeAskUserToPickFile(content) === false)
+        (madeEdits || !needsImplementation || this.chatMode !== 'agent' || questionIntent)
       ) {
         if (
-          this.chatMode === 'agent' &&
-          this.requiresImplementation(latestUser) &&
+          needsImplementation &&
           !madeEdits &&
           implementNudges < maxImplementNudges &&
           step < maxSteps - 1
@@ -1732,15 +3010,45 @@ Read the highest-scoring evidence in trail order. For a bug, trace UI → handle
           this.pushActivity(pendingId, 'thinking', `Forcing edit… (${implementNudges}/${maxImplementNudges})`);
           continue;
         }
-        this.pushActivity(pendingId, 'done', 'Completed', undefined, true);
+        if (this.looksLikeAskUserToPickFile(content) || this.looksLikeGarbageToolDump(content)) {
+          return await this.forceFinishWithoutAsking(
+            pendingId,
+            messages,
+            exploredPaths,
+            latestUser,
+            questionIntent,
+            { needsImplementation },
+          );
+        }
+        if (!this.isValidFinalAnswer(content, questionIntent)) {
+          // Incomplete / garbage — keep going if budget remains
+          if (step < maxSteps - 1) {
+            messages.push({ role: 'assistant', content });
+            messages.push({
+              role: 'user',
+              content: questionIntent
+                ? `That reply was incomplete or invalid. Answer clearly in markdown with formats + file paths. No tool XML.`
+                : `That reply was incomplete. Continue with tools and finish the task. Never ask continue.`,
+            });
+            continue;
+          }
+          return await this.forceFinishWithoutAsking(
+            pendingId,
+            messages,
+            exploredPaths,
+            latestUser,
+            questionIntent,
+            { needsImplementation },
+          );
+        }
+        this.setStatus('');
         return content;
       }
 
       if (usedTools || madeEdits) {
         if (
           !madeEdits &&
-          this.chatMode === 'agent' &&
-          this.requiresImplementation(latestUser) &&
+          needsImplementation &&
           implementNudges < maxImplementNudges &&
           step < maxSteps - 1
         ) {
@@ -1760,40 +3068,98 @@ Read the highest-scoring evidence in trail order. For a bug, trace UI → handle
           );
           continue;
         }
-        this.setStatus('Writing summary…');
-        this.pushActivity(pendingId, 'thinking', 'Writing summary…');
+        if (questionIntent && !(content || '').trim()) {
+          messages.push({
+            role: 'user',
+            content:
+              'You have enough tool evidence. Answer NOW: required documents/formats/fields with file paths. No more tools.',
+          });
+          try {
+            const answer = await this.invokeCompletionResilient(pendingId, {
+              messages,
+              toolChoice: 'none',
+              modelId: this.modelId,
+              stream: true,
+              maxTokens: 700,
+            });
+            const a = (answer.content || '').trim();
+            if (a) {
+              this.setStatus('');
+              return a;
+            }
+          } catch {
+            // fall through
+          }
+        }
+        this.setStatus(questionIntent ? 'Answering…' : 'Writing summary…');
+        this.pushActivity(pendingId, 'thinking', questionIntent ? 'Writing answer…' : 'Writing summary…');
+        this.patchUi(pendingId, { content: '', pending: true });
         messages.push({
           role: 'user',
-          content:
-            'Tools finished. Write a Cursor-style completion: (1) 1–3 sentences on what changed and why, ' +
-            '(2) a short **Suggested checks** list (2–3 concrete steps). Do not call tools. Never reply empty.',
+          content: questionIntent
+            ? 'Write the final answer now: required documents/formats/fields + file paths. No tools.'
+            : 'Tools finished. Write a Cursor-style completion: (1) 1–3 sentences on what changed and why, ' +
+              '(2) a short **Suggested checks** list (2–3 concrete steps). Do not call tools. Never reply empty.',
         });
         try {
           const summary = await this.invokeCompletionResilient(pendingId, {
             messages,
-            tools: AGENT_TOOLS,
             toolChoice: 'none',
             modelId: this.modelId,
             stream: true,
-            maxTokens: 500,
+            maxTokens: questionIntent ? 700 : 500,
           });
           const s = (summary.content || '').trim();
           if (s) {
             this.completeLastActivity(pendingId, 'Done', true);
-            this.pushActivity(pendingId, 'done', 'Completed', undefined, true);
+            this.setStatus('');
             return s;
           }
         } catch {
           // Summary is optional once edits landed.
         }
-        this.pushActivity(pendingId, 'done', 'Completed', undefined, true);
-        return this.fallbackSummary(this.rankCandidatePaths(exploredPaths, latestUser));
+        this.setStatus('');
+        return this.fallbackSummary(this.rankCandidatePaths(exploredPaths, latestUser), latestUser);
       }
 
-      return this.fallbackSummary(this.rankCandidatePaths(exploredPaths, latestUser));
+      // Prefer one more in-loop implement nudge before last-chance tools
+      if (
+        needsImplementation &&
+        !madeEdits &&
+        !lastChanceTools &&
+        implementNudges < maxImplementNudges
+      ) {
+        lastChanceTools = true;
+        implementNudges++;
+        const top = this.rankCandidatePaths(exploredPaths, latestUser).slice(0, 4);
+        messages.push({
+          role: 'user',
+          content:
+            `FINAL TOOL ROUND — call read_file → search_replace NOW on:\n` +
+            `${(top.length ? top : ['(best match)']).map((p) => `- ${p}`).join('\n')}\n` +
+            `Do not narrate. Request: "${latestUser.slice(0, 320)}"`,
+        });
+        this.pushActivity(pendingId, 'thinking', 'Final edit attempt…');
+        continue;
+      }
+      return await this.forceFinishWithoutAsking(
+        pendingId,
+        messages,
+        exploredPaths,
+        latestUser,
+        questionIntent,
+        { needsImplementation },
+      );
     }
 
-    return this.fallbackSummary(this.rankCandidatePaths(exploredPaths, latestUser));
+    return await this.forceFinishWithoutAsking(
+      pendingId,
+      messages,
+      exploredPaths,
+      latestUser,
+      questionIntent,
+      { needsImplementation },
+    );
   }
 
   /**
@@ -1877,10 +3243,55 @@ Read the highest-scoring evidence in trail order. For a bug, trace UI → handle
           resultPreview = out;
         }
       }
+      // Cursor-like: search expand shows top hits, not raw JSON wall
+      if (Array.isArray(parsed?.matches) && parsed.matches.length) {
+        resultPreview = parsed.matches
+          .slice(0, 8)
+          .map((m: any) => `${m.file || m.path || '?'}:${m.line || '?'}  ${(m.text || '').trim().slice(0, 100)}`)
+          .join('\n');
+      } else if (Array.isArray(parsed?.hits) && parsed.hits.length) {
+        resultPreview = parsed.hits
+          .slice(0, 8)
+          .map((h: any) => `${h.path || '?'}  ${(h.excerpt || h.reason || '').toString().slice(0, 100)}`)
+          .join('\n');
+      }
     } catch {
       // plain text result
     }
-    this.completeLastActivity(pendingId, undefined, ok, { resultPreview, exitCode });
+    if (this.looksLikeGarbageToolDump(resultPreview)) {
+      resultPreview = '';
+    }
+    this.completeLastActivity(pendingId, undefined, ok, {
+      resultPreview: resultPreview.slice(0, 1800),
+      exitCode: ok ? undefined : exitCode,
+    });
+  }
+
+  /** Cursor past-tense activity labels when a step finishes. */
+  private toPastActivityLabel(label: string): string {
+    let l = (label || '').replace(/…/g, '').trim();
+    if (!l) return l;
+    l = l
+      .replace(/^Reading\b/i, 'Read')
+      .replace(/^Searching\b/i, 'Searched')
+      .replace(/^Editing\b/i, 'Edited')
+      .replace(/^Patching\b/i, 'Patched')
+      .replace(/^Creating\b/i, 'Created')
+      .replace(/^Writing\b/i, 'Wrote')
+      .replace(/^Deleting\b/i, 'Deleted')
+      .replace(/^Running\b/i, 'Ran')
+      .replace(/^Updating\b/i, 'Updated')
+      .replace(/^Finding\b/i, 'Found')
+      .replace(/^Planning\b/i, 'Planned')
+      .replace(/^Tracing\b/i, 'Traced')
+      .replace(/^Gathering\b/i, 'Gathered')
+      .replace(/^Listing\b/i, 'Listed')
+      .replace(/^Resolving\b/i, 'Resolved')
+      .replace(/^Following\b/i, 'Followed')
+      .replace(/^Mapping\b/i, 'Mapped')
+      .replace(/^Exact-searching\b/i, 'Exact-searched')
+      .replace(/^Grepping\b/i, 'Grepped');
+    return l;
   }
 
   private describeToolCall(call: ChatToolCall): {
@@ -1903,7 +3314,18 @@ Read the highest-scoring evidence in trail order. For a bug, trace UI → handle
       args = {};
     }
     const pathHint = args.path || args.query || args.symbol || args.command || '';
-    const short = typeof pathHint === 'string' ? pathHint.slice(0, 72) : '';
+    let short =
+      typeof pathHint === 'string' && pathHint.trim().length >= 2
+        ? pathHint.trim().slice(0, 72)
+        : '';
+    // Hide broken DeepSeek args like "string=" / "true" / empty
+    if (
+      !short ||
+      /^(string|number|boolean|true|false|null|undefined)=?$/i.test(short) ||
+      /^string=/i.test(short)
+    ) {
+      short = '';
+    }
     let argsPreview: string | undefined;
     try {
       argsPreview = JSON.stringify(args, null, 2).slice(0, 1200);
@@ -1944,8 +3366,13 @@ Read the highest-scoring evidence in trail order. For a bug, trace UI → handle
         return {
           ...base,
           kind: 'searching',
-          label: short ? `Searching ${short}` : `Running ${name}…`,
-          detail: short,
+          label: short
+            ? name === 'grep' || name === 'exact_code_search'
+              ? `Searching \`${short}\``
+              : `Searching ${short}`
+            : 'Searching codebase…',
+          detail: short || undefined,
+          argsPreview: short ? argsPreview : undefined,
         };
       case 'search_replace':
       case 'write_file':
@@ -1975,6 +3402,7 @@ Read the highest-scoring evidence in trail order. For a bug, trace UI → handle
       case 'browser_snapshot':
       case 'browser_click':
       case 'browser_fill':
+      case 'browser_upload':
       case 'browser_type':
       case 'browser_press':
       case 'browser_console':
@@ -2024,11 +3452,12 @@ Read the highest-scoring evidence in trail order. For a bug, trace UI → handle
         continue;
       }
       if (m.role === 'activity' && m.activity && !m.activity.done) {
+        const nextLabel = label || (done ? this.toPastActivityLabel(m.activity.label) : m.activity.label);
         m.activity = {
           ...m.activity,
           ...extra,
           done,
-          label: label || m.activity.label,
+          label: nextLabel,
         };
         m.content = m.activity.label;
         this.fire();
@@ -2099,8 +3528,222 @@ Read the highest-scoring evidence in trail order. For a bug, trace UI → handle
       /which (one|file|path).{0,40}(correct|should i|do you mean)/i.test(lower) ||
       /could not finish a verified edit/i.test(lower) ||
       /likely targets but could not/i.test(lower) ||
-      /rephrase the change/i.test(lower)
+      /rephrase the change/i.test(lower) ||
+      /send\s*\*?\*?continue\*?\*?/i.test(lower) ||
+      /narrowed it to these files/i.test(lower)
     );
+  }
+
+  /** DeepSeek/etc sometimes emit tool XML/DSML into content instead of tool_calls. */
+  /** DeepSeek/etc sometimes emit tool XML/DSML into content instead of tool_calls. */
+  private looksLikeGarbageToolDump(content: string): boolean {
+    const t = content || '';
+    if (!t.trim()) return false;
+    return (
+      /DSML/i.test(t) ||
+      /tool[_]?calls/i.test(t) ||
+      /<\/?invoke\b/i.test(t) ||
+      /\binvoke\s+name=/i.test(t) ||
+      /parameter\s+name=/i.test(t) ||
+      /\|+DSML\|+/i.test(t) ||
+      /｜+DSML｜+/i.test(t) || // fullwidth pipes DeepSeek uses
+      /<\|[^|>]*tool[^|>]*\|>/i.test(t) ||
+      /```(?:xml|tool)?\s*<invoke/i.test(t) ||
+      (/name=["']grep["']|name=["']read_file["']|name=["']exact_code_search["']/i.test(t) &&
+        /parameter|invoke|toolcall/i.test(t))
+    );
+  }
+
+  private stripGarbageToolDump(content: string): string {
+    let t = content || '';
+    t = t.replace(/<\|[^|>]*\|>/g, '');
+    t = t.replace(/｜+[^｜\n]*｜+/g, ''); // fullwidth DSML markers
+    t = t.replace(/<\/?DSML[^>]*>/gi, '');
+    t = t.replace(/<\/?tool[_]?calls?>/gi, '');
+    t = t.replace(/<invoke[\s\S]*?<\/invoke>/gi, '');
+    t = t.replace(/<\/?parameter[^>]*>[\s\S]*?<\/parameter>/gi, '');
+    t = t.replace(/\|+DSML\|+/gi, '');
+    t = t.replace(/tool[_]?calls/gi, '');
+    t = t.replace(/\binvoke\s+name=["'][^"']+["'][^\n]*/gi, '');
+    return t.replace(/\n{3,}/g, '\n\n').trim();
+  }
+
+  /** Safe text for the assistant bubble — never DSML / tool XML. */
+  private bubbleSafeContent(text: string): string {
+    const raw = text || '';
+    if (this.looksLikeGarbageToolDump(raw)) {
+      const cleaned = this.stripGarbageToolDump(raw);
+      if (!cleaned || this.looksLikeGarbageToolDump(cleaned) || cleaned.length < 24) {
+        return '';
+      }
+      return this.formatAnswerForUi(cleaned);
+    }
+    return this.formatAnswerForUi(raw);
+  }
+
+  /** Best-effort parse of DSML/XML-ish tool dumps into OpenAI tool_calls. */
+  private parseEmbeddedToolCalls(content: string): ChatToolCall[] {
+    const out: ChatToolCall[] = [];
+    const text = content || '';
+    const isUsefulArgs = (name: string, args: Record<string, unknown>): boolean => {
+      if (name === 'grep' || name === 'exact_code_search' || name === 'find_files' || name === 'find_module') {
+        const q = String(args.query || args.pattern || '').trim();
+        return q.length >= 2;
+      }
+      if (name === 'read_file') {
+        return String(args.path || '').trim().length >= 2;
+      }
+      return Object.keys(args).length > 0;
+    };
+    // <invoke name="grep"> ... <parameter name="query">...</parameter>
+    const invokeRe = /<invoke\b[^>]*\bname=["']([^"']+)["'][^>]*>([\s\S]*?)<\/invoke>/gi;
+    let m: RegExpExecArray | null;
+    while ((m = invokeRe.exec(text)) && out.length < 8) {
+      const name = this.normalizeToolName(m[1] || '');
+      if (!name) continue;
+      const body = m[2] || '';
+      const args: Record<string, unknown> = {};
+      const paramRe = /<parameter\b[^>]*\bname=["']([^"']+)["'][^>]*>([\s\S]*?)<\/parameter>/gi;
+      let p: RegExpExecArray | null;
+      while ((p = paramRe.exec(body))) {
+        const key = String(p[1] || '').trim();
+        const rawVal = String(p[2] || '').trim();
+        if (!key || !rawVal) continue;
+        const mapped =
+          key.toLowerCase() === 'maxresults'
+            ? 'maxResults'
+            : key.toLowerCase() === 'filepath'
+              ? 'path'
+              : key;
+        const num = Number(rawVal);
+        args[mapped] = Number.isFinite(num) && /^-?\d+(\.\d+)?$/.test(rawVal) ? num : rawVal;
+      }
+      if (!isUsefulArgs(name, args)) continue;
+      out.push({
+        id: `recovered_${out.length}_${Date.now()}`,
+        type: 'function',
+        function: { name, arguments: JSON.stringify(args) },
+      });
+    }
+    // Fallback: name="grep" with query=/path= nearby
+    if (!out.length) {
+      const loose = /name=["'](grep|read_file|exact_code_search|find_files)["']([\s\S]{0,500})/gi;
+      let lm: RegExpExecArray | null;
+      while ((lm = loose.exec(text)) && out.length < 4) {
+        const name = this.normalizeToolName(lm[1]);
+        const chunk = lm[2] || '';
+        const args: Record<string, unknown> = {};
+        const q = /(?:query|pattern)["'\s:=]+([^"'<\n]+)/i.exec(chunk);
+        const pathM = /(?:path|file)["'\s:=]+([^"'<\n]+)/i.exec(chunk);
+        if (q && q[1].trim().length >= 2) args.query = q[1].trim();
+        if (pathM && pathM[1].trim().length >= 2) args.path = pathM[1].trim();
+        if (!isUsefulArgs(name, args)) continue;
+        out.push({
+          id: `recovered_loose_${out.length}`,
+          type: 'function',
+          function: { name, arguments: JSON.stringify(args) },
+        });
+      }
+    }
+    return out;
+  }
+
+  private isValidFinalAnswer(content: string, questionIntent: boolean): boolean {
+    const t = this.formatAnswerForUi(content || '');
+    if (t.length < 40) return false;
+    if (this.looksLikeAskUserToPickFile(t)) return false;
+    if (this.looksLikeGarbageToolDump(t)) return false;
+    if (this.looksLikeAgentMonologue(t.split(/\n{2,}/)[0] || '')) return false;
+    if (/^(let me |i'll |i will |looking |searching |i need to |i'll check|the tool )/i.test(t) && t.length < 200) {
+      return false;
+    }
+    if (questionIntent) {
+      // Real answer: substance + structure, not "let me look…"
+      return (
+        t.length >= 100 ||
+        (t.length >= 60 &&
+          (/\b(pdf|docx?|xlsx?|csv|png|jpg|jpeg|accept|\.pdf|format|allowed|document|required|field)\b/i.test(
+            t,
+          ) ||
+            /[•\-*]\s+\S+/.test(t) ||
+            /`[^`]+`/.test(t) ||
+            /\.(html|ts|tsx|js|scss)\b/i.test(t)))
+      );
+    }
+    return true;
+  }
+
+  /**
+   * Cursor-level grounding: answers must cite real workspace paths from evidence.
+   * Flow/capability answers need ≥2 path citations; fact answers need ≥1 when candidates exist.
+   */
+  private isGroundedAnswer(
+    content: string,
+    candidates: Iterable<string>,
+    deepQuestion: boolean,
+  ): boolean {
+    const text = content || '';
+    if (!text.trim()) return false;
+    const cand = [...candidates].map((p) => p.replace(/\\/g, '/'));
+    if (!cand.length) {
+      if (!deepQuestion) return true;
+      return /[`/][\w.-]+\/[\w./-]+\.\w{1,5}/.test(text);
+    }
+    const lower = text.toLowerCase().replace(/\\/g, '/');
+    let hits = 0;
+    for (const p of cand.slice(0, 20)) {
+      const base = p.split('/').pop() || '';
+      if (p.length >= 8 && lower.includes(p.toLowerCase())) {
+        hits += 1;
+        continue;
+      }
+      if (base.length >= 6 && lower.includes(base.toLowerCase())) {
+        hits += 1;
+      }
+    }
+    const pathMentions = (text.match(/[\w.-]+\/[\w./-]+\.\w{1,5}/g) || []).length;
+    if (deepQuestion) {
+      return hits >= 2 || (hits >= 1 && pathMentions >= 2) || pathMentions >= 3;
+    }
+    return hits >= 1 || pathMentions >= 1 || text.length >= 200;
+  }
+
+  /** Capability answers must cite enforcement code and not invent full lockout without evidence. */
+  private isCapabilityAnswerGrounded(
+    content: string,
+    candidates: Iterable<string>,
+    context = '',
+  ): boolean {
+    const text = content || '';
+    const lower = text.toLowerCase();
+    const cand = [...candidates];
+    const citesEnforce =
+      cand.some((p) => this.isEnforcementPath(p) && lower.includes((p.split(/[/\\]/).pop() || '').toLowerCase())) ||
+      /guard|middleware|validator|account_status|new_txn|block_messages/i.test(text);
+    if (!citesEnforce && this.hasEnforcementEvidence(cand, context)) {
+      return false;
+    }
+    // Reject common hallucination: claims cannot login when evidence has no auth+status link
+    const claimsLoginBlock =
+      /\b(cannot|can't|unable to)\s+(log\s*in|login|sign\s*in)\b/i.test(text) ||
+      /\blogin\s*\/\s*access blocked\b/i.test(text) ||
+      /\blocked out of the (entire )?system\b/i.test(text);
+    if (claimsLoginBlock) {
+      const evidence = `${context}\n${cand.join('\n')}`.toLowerCase();
+      const loginEnforced =
+        /login.*inactive|inactive.*login|isac_status|auth.*account_status|account_status.*auth/i.test(
+          evidence,
+        );
+      if (!loginEnforced) return false;
+    }
+    // Invented DELETE status without evidence
+    if (/\bDELETE\b/.test(text) && !/\bDELETE\b/.test(context) && !cand.some((p) => /delete/i.test(p))) {
+      // soft: only fail if they present DELETE as a status enum
+      if (/status.*DELETE|DELETE\s*→|DELETE\s*—/i.test(text) && !/DELETE/.test(context)) {
+        return false;
+      }
+    }
+    return citesEnforce || /cannot do|can still do|blocked|allowed/i.test(text);
   }
 
   private looksLikeCannotFind(content: string): boolean {
@@ -2218,22 +3861,92 @@ Read the highest-scoring evidence in trail order. For a bug, trace UI → handle
     );
   }
 
-  /** Looks like the user wants code/file work done. */
+  /** Coding / file work — used to distinguish chitchat from real tasks. */
   private isWorkRequest(text: string): boolean {
     const t = (text || '').toLowerCase();
     if (t.length < 2) {
       return false;
+    }
+    if (this.isQuestionIntent(t)) {
+      return true; // research/answer still counts as work for research nudges
     }
     return /\b(fix|edit|change|update|rename|create|add|remove|delete|seo|keyword|meta|title|refactor|bug|error|implement|build|make|write|patch|file|code|css|html|js|ts|react|project|folder|readme|feature|module|timeline|analyze|analyse|understand|inspect|investigate|architecture|performance|optimize|banao|bana|karo|karna|likho|badlo|samjho|samajh|dekho|hatana|hatao)\b/i.test(
       t,
     );
   }
 
+  /** Cursor Ask-class: pure Q&A — NOT "can you fix/add/update…". */
+  private isQuestionIntent(text: string): boolean {
+    const raw = String(text || '');
+    const t = raw.toLowerCase();
+    if (!t.trim()) return false;
+    // Imperative coding wins — even with a trailing "?"
+    if (
+      /\b(fix|add|create|implement|build|update|edit|change|remove|delete|refactor|patch|banao|badlo|hatao|likh|karo|karna)\b/i.test(
+        t,
+      ) &&
+      !/\b(which|what|konsa|kaunsa|document format|required docs?|allowed formats?)\b/i.test(t)
+    ) {
+      // "what should I fix" is still a question; "fix the title" is work
+      if (!/\b(what|which|konsa|kaunsa|kya|batao|samjhao|explain|describe)\b/i.test(t)) {
+        return false;
+      }
+      if (
+        /\b(can you|could you|please|pls|kindly)\b/i.test(t) &&
+        /\b(fix|add|update|create|implement|change|edit)\b/i.test(t)
+      ) {
+        return false;
+      }
+    }
+    if (
+      /\b(please (fix|add|create|implement|build)|banao|badlo|hatao|likh do|add karo|fix karo|implement karo|update karo)\b/i.test(
+        t,
+      )
+    ) {
+      return false;
+    }
+    if (/\?/.test(raw)) {
+      // "?" alone with implement verbs → still work
+      if (/\b(fix|add|update|create|implement|change|edit|banao|karo)\b/i.test(t)) {
+        return false;
+      }
+      return true;
+    }
+    if (
+      /\b(what|which|where|how|why|when|who|explain|describe|list|tell me|show me|does|is there|are there|konsa|kaunsa|kya|kahan|kahaan|kaise|kyu|kyun|batao|batana|samjhao|kitne|kitna|lagta|chahiye|required|needed|format)\b/i.test(
+        t,
+      )
+    ) {
+      if (
+        /\b(how (do i|to|can i)|kaise)\b/i.test(t) &&
+        /\b(fix|add|create|implement|build|banao)\b/i.test(t) &&
+        !/\b(which|what|konsa|document|docs?|format|required|needed|lagta|field|upload)\b/i.test(t)
+      ) {
+        return false;
+      }
+      return true;
+    }
+    return false;
+  }
+
   private requiresImplementation(text: string): boolean {
     const t = (text || '').toLowerCase();
-    return /\b(fix|change|update|edit|add|remove|delete|create|implement|build|make|patch|refactor|optimi[sz]e|not working|broken|bug|error|issue|problem|nahi|nahin|karo|karna|banao|badlo|hatao)\b/i.test(
-      t,
-    );
+    // Coding verbs always mean implement — even if also phrased as a question
+    if (
+      /\b(fix|change|update|edit|add|remove|delete|create|implement|build|make|patch|refactor|optimi[sz]e|not working|broken|bug|error|issue|problem|karo|karna|banao|badlo|hatao|likh)\b/i.test(
+        t,
+      )
+    ) {
+      // Pure "what is the bug" / "which error" without asking to fix
+      if (
+        this.isQuestionIntent(text) &&
+        !/\b(fix|add|update|create|implement|change|edit|banao|karo|please fix|can you fix)\b/i.test(t)
+      ) {
+        return false;
+      }
+      return true;
+    }
+    return false;
   }
 
   /** True when the model is stalling (asks permission) or claims edits without tools. */
@@ -2321,12 +4034,26 @@ Read the highest-scoring evidence in trail order. For a bug, trace UI → handle
           }
           if (state.text && state.text !== last) {
             last = state.text;
-            // Only paint into the bubble for final prose (no tools). During tool
-            // rounds, show Thought activity instead so the timeline stays clean.
-            if (request.toolChoice === 'none') {
-              this.patchUi(pendingId, { content: state.text, pending: true });
-            } else if (state.text.trim().length > 8) {
-              this.setStatus('Thinking…');
+            const prose = state.text.trim();
+            // Live final answer into the assistant bubble — NEVER paint DSML / tool XML.
+            if (this.looksLikeGarbageToolDump(state.text)) {
+              this.setStatus('Working…');
+            } else {
+              const painted = this.bubbleSafeContent(state.text);
+              // Cursor: during tool rounds, NEVER paint into the answer bubble — activity only.
+              if (request.tools?.length && request.toolChoice === 'auto') {
+                if (painted.trim().length > 8) {
+                  this.setStatus('Thinking…');
+                }
+              } else if (!painted) {
+                this.setStatus('Writing…');
+              } else {
+                this.patchUi(pendingId, { content: painted, pending: true });
+                if (painted.trim().length > 8) {
+                  this.setStatus('Replying…');
+                  this.completeLastActivity(pendingId, undefined, true);
+                }
+              }
             }
           }
           if (state.toolNames?.length) {
@@ -2334,9 +4061,7 @@ Read the highest-scoring evidence in trail order. For a bug, trace UI → handle
               const name = this.normalizeToolName(raw);
               if (name && !announcedTools.has(name)) {
                 announcedTools.add(name);
-                this.pushActivity(pendingId, 'info', `Planning ${name}…`, name, false, {
-                  toolName: name,
-                });
+                // Cursor: status only — don't spam "Planning grep…" into the timeline
                 this.setStatus(`Planning ${name}…`);
               }
             }
@@ -2395,6 +4120,7 @@ Read the highest-scoring evidence in trail order. For a bug, trace UI → handle
     } catch {
       return `Invalid JSON arguments for ${name || rawName}`;
     }
+    args = this.sanitizeToolArgs(args);
 
     try {
       switch (name) {
@@ -2469,12 +4195,18 @@ Read the highest-scoring evidence in trail order. For a bug, trace UI → handle
             args.max_results != null ? Number(args.max_results) : 30,
           );
         case 'grep':
+          if (!String(args.query || '').trim()) {
+            return 'query is required';
+          }
           this.setStatus(`Grepping ${args.query}…`);
           return await this.toolGrep(
             String(args.query || ''),
             args.max_results != null ? Number(args.max_results) : 40,
           );
         case 'read_file':
+          if (!String(args.path || '').trim()) {
+            return 'path is required';
+          }
           this.setStatus(`Reading ${args.path}…`);
           return await this.toolReadFile(
             String(args.path || ''),
@@ -2570,6 +4302,20 @@ Read the highest-scoring evidence in trail order. For a bug, trace UI → handle
               testid: args.testid ? String(args.testid) : undefined,
             }),
           );
+        case 'browser_upload':
+          this.setStatus('Uploading file…');
+          return this.fmtJson(
+            await this.aiNode.browserUpload({
+              value: args.value ? String(args.value) : undefined,
+              role: args.role ? String(args.role) : undefined,
+              name: args.name ? String(args.name) : undefined,
+              text: args.text ? String(args.text) : undefined,
+              selector: args.selector ? String(args.selector) : undefined,
+              testid: args.testid ? String(args.testid) : undefined,
+              kind: args.kind ? String(args.kind) : undefined,
+              accept: args.accept ? String(args.accept) : undefined,
+            }),
+          );
         case 'browser_type':
           this.setStatus('Typing in browser…');
           return this.fmtJson(
@@ -2655,6 +4401,28 @@ Read the highest-scoring evidence in trail order. For a bug, trace UI → handle
       }
     }
     return name;
+  }
+
+  /** Strip DeepSeek/DSML `string=` / `path=` prefixes that break read_file / grep. */
+  private cleanToolArgValue(value: unknown): string {
+    let s = String(value ?? '').trim();
+    if (!s) return '';
+    s = s.replace(/^(?:string|number|boolean|path|query|pattern|file|filepath)\s*=\s*/i, '');
+    s = s.replace(/^["']|["']$/g, '');
+    return s.trim();
+  }
+
+  private sanitizeToolArgs(args: Record<string, unknown>): Record<string, unknown> {
+    const out: Record<string, unknown> = { ...args };
+    for (const key of ['path', 'query', 'pattern', 'symbol', 'new_path', 'command', 'url']) {
+      if (key in out) {
+        out[key] = this.cleanToolArgValue(out[key]);
+      }
+    }
+    // Drop empty search keys so we don't run "Searching string="
+    if (typeof out.query === 'string' && !out.query) delete out.query;
+    if (typeof out.path === 'string' && !out.path) delete out.path;
+    return out;
   }
 
   private displayPath(filePath: string): string {

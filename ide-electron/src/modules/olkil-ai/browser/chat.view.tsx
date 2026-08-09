@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState, startTransition } from 'react';
+import { createPortal } from 'react-dom';
 import { useInjectable } from '@opensumi/ide-core-browser';
 import {
   AgentTodoItem,
@@ -18,6 +19,14 @@ import logoUrl from './olkil-logo.png';
 /** How long the composer confirms a finished turn before offering Send again. */
 const DONE_HINT_MS = 1800;
 const INPUT_MAX_HEIGHT = 168;
+
+const LIVE_TEST_SUGGESTIONS = [
+  'Test the application',
+  'Login and test',
+  'Test the workflow',
+  'Find UI bugs and report them',
+  'Verify the happy path end-to-end',
+] as const;
 
 function activityGlyph(kind: string, done?: boolean): string {
   if (done) {
@@ -66,9 +75,22 @@ function ActivityRow({
   if (!a) {
     return null;
   }
+  const previewRaw = a.resultPreview || '';
+  const previewIsJunk = /DSML|tool_calls|｜DSML｜|<invoke\b|parameter\s+name=/i.test(previewRaw);
+  const safePreview = previewIsJunk ? '' : previewRaw;
+  const argsIsJunk =
+    !a.argsPreview ||
+    /"query"\s*:\s*""|"path"\s*:\s*""|string=|"true"/i.test(a.argsPreview) ||
+    a.argsPreview.trim().length < 5;
+  const safeArgs = argsIsJunk ? '' : a.argsPreview;
   const expandable = Boolean(
-    a.resultPreview || a.argsPreview || a.command || a.kind === 'thinking' || a.kind === 'running',
+    safePreview || safeArgs || a.command || (a.kind === 'running' && a.resultPreview),
   );
+  // Don't show a dead "open" chip for missing/junk paths
+  const openPath =
+    a.filePath && !/^(string=|true|false)$/i.test(a.filePath) && a.filePath.length > 2
+      ? a.filePath
+      : undefined;
   return (
     <div
       className={`${styles.activityCard} ${a.done ? styles.activityDone : styles.activityLive} ${
@@ -90,19 +112,19 @@ function ActivityRow({
             exit {a.exitCode}
           </span>
         ) : null}
-        {a.filePath ? (
+        {openPath ? (
           <span
             className={styles.activityPathBtn}
             role="link"
             tabIndex={0}
             onClick={(e) => {
               e.stopPropagation();
-              onOpenPath(a.filePath!);
+              onOpenPath(openPath);
             }}
             onKeyDown={(e) => {
               if (e.key === 'Enter') {
                 e.stopPropagation();
-                onOpenPath(a.filePath!);
+                onOpenPath(openPath);
               }
             }}
           >
@@ -125,18 +147,18 @@ function ActivityRow({
               </button>
             </div>
           ) : null}
-          {a.argsPreview ? (
+          {safeArgs ? (
             <pre className={styles.activityPre}>
               <div className={styles.activityPreLabel}>Args</div>
-              {a.argsPreview}
+              {safeArgs}
             </pre>
           ) : null}
-          {a.resultPreview ? (
+          {safePreview ? (
             <pre className={styles.activityPre}>
               <div className={styles.activityPreLabel}>
                 {a.kind === 'thinking' ? 'Thought' : 'Output'}
               </div>
-              {a.resultPreview}
+              {safePreview}
             </pre>
           ) : null}
         </div>
@@ -603,6 +625,9 @@ export const OlkilAiChatView = ({ dormant = false }: OlkilAiChatViewProps) => {
   };
 
   const [modelMenuOpen, setModelMenuOpen] = useState(false);
+  const [liveTestOpen, setLiveTestOpen] = useState(false);
+  const [liveTestPrompt, setLiveTestPrompt] = useState('');
+  const liveTestInputRef = useRef<HTMLTextAreaElement>(null);
   const modelMenuRef = useRef<HTMLDivElement>(null);
   const selectedModel = models.find((m) => m.id === modelId) || models[0];
   const modelSelectDisabled =
@@ -629,6 +654,41 @@ export const OlkilAiChatView = ({ dormant = false }: OlkilAiChatViewProps) => {
       document.removeEventListener('keydown', onKey);
     };
   }, [modelMenuOpen]);
+
+  useEffect(() => {
+    if (!liveTestOpen) {
+      return;
+    }
+    const t = window.setTimeout(() => {
+      liveTestInputRef.current?.focus();
+      liveTestInputRef.current?.select();
+    }, 40);
+    const onKey = (ev: KeyboardEvent) => {
+      if (ev.key === 'Escape') {
+        setLiveTestOpen(false);
+      }
+    };
+    document.addEventListener('keydown', onKey);
+    return () => {
+      window.clearTimeout(t);
+      document.removeEventListener('keydown', onKey);
+    };
+  }, [liveTestOpen]);
+
+  const openLiveTestModal = useCallback(() => {
+    setLiveTestPrompt(input.trim() || 'Test the application');
+    setLiveTestOpen(true);
+  }, [input]);
+
+  const runLiveTest = useCallback(() => {
+    const goal = liveTestPrompt.trim();
+    if (!goal || busy) {
+      return;
+    }
+    setLiveTestOpen(false);
+    setInput('');
+    void chat.startLiveTest(goal);
+  }, [liveTestPrompt, busy, chat]);
 
   const renderModelLabel = (m?: { displayName?: string; badge?: string; label: string }) => {
     if (!m) {
@@ -743,11 +803,8 @@ export const OlkilAiChatView = ({ dormant = false }: OlkilAiChatViewProps) => {
             type="button"
             className={styles.liveTestBtn}
             disabled={busy || ollamaBlocked}
-            title="Start app, open live browser, test UI, capture errors, fix & retest"
-            onClick={() => {
-              void chat.startLiveTest(input.trim() || undefined);
-              setInput('');
-            }}
+            title="Open live browser test — choose what to verify"
+            onClick={openLiveTestModal}
           >
             Live Test
           </button>
@@ -944,6 +1001,29 @@ export const OlkilAiChatView = ({ dormant = false }: OlkilAiChatViewProps) => {
           if (m.role === 'assistant' && m.pending && !(m.content || '').trim()) {
             return null;
           }
+          // Never show raw DSML / tool XML in the answer bubble
+          const rawContent = m.content || '';
+          const looksToolDump =
+            /DSML|tool_calls|｜DSML｜|<invoke\b|parameter\s+name=/i.test(rawContent);
+          if (m.role === 'assistant' && looksToolDump) {
+            if (m.pending) {
+              return null;
+            }
+            // Final message somehow still garbage — show friendly placeholder
+            return (
+              <div key={m.id} className={`${styles.row} ${styles.rowLeft}`}>
+                <div className={`${styles.bubble} ${styles.bubbleAssistant}`}>
+                  <div className={styles.roleRow}>
+                    <img className={styles.roleAvatar} src={logoUrl} alt="" width={14} height={14} draggable={false} />
+                    <span className={styles.role}>
+                      {chatMode === 'plan' ? 'Plan' : chatMode === 'ask' ? 'Ask' : 'Agent'}
+                    </span>
+                  </div>
+                  <div className={styles.content}>Working on your answer…</div>
+                </div>
+              </div>
+            );
+          }
 
           const isUser = m.role === 'user';
           const isSystem = m.role === 'system' || m.role === 'status';
@@ -1048,7 +1128,8 @@ export const OlkilAiChatView = ({ dormant = false }: OlkilAiChatViewProps) => {
             </div>
           );
         })}
-        {status ? <div className={styles.status}>{status}</div> : null}
+        {status && !busy ? <div className={styles.status}>{status}</div> : null}
+        {status && busy ? <div className={styles.statusQuiet}>{status}</div> : null}
       </div>
 
       <div
@@ -1208,6 +1289,103 @@ export const OlkilAiChatView = ({ dormant = false }: OlkilAiChatViewProps) => {
           </div>
         </div>
       </div>
+
+      {liveTestOpen
+        ? createPortal(
+            <div
+              className={styles.liveTestBackdrop}
+              role="presentation"
+              onMouseDown={(e) => {
+                if (e.target === e.currentTarget) {
+                  setLiveTestOpen(false);
+                }
+              }}
+            >
+              <div
+                className={styles.liveTestModal}
+                role="dialog"
+                aria-modal="true"
+                aria-labelledby="olkil-live-test-title"
+              >
+                <div className={styles.liveTestModalHeader}>
+                  <div className={styles.liveTestModalTitleBlock}>
+                    <span className={styles.liveTestModalEyebrow}>Browser verify</span>
+                    <h2 id="olkil-live-test-title" className={styles.liveTestModalTitle}>
+                      Live Test
+                    </h2>
+                    <p className={styles.liveTestModalSub}>
+                      Tell OLKIL what to exercise in a real headed browser — then it will start the
+                      app, test, capture errors, fix, and retest.
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    className={styles.liveTestModalClose}
+                    aria-label="Close"
+                    onClick={() => setLiveTestOpen(false)}
+                  >
+                    <span className={styles.liveTestModalCloseIcon} aria-hidden />
+                  </button>
+                </div>
+
+                <label className={styles.liveTestLabel} htmlFor="olkil-live-test-prompt">
+                  Custom prompt
+                </label>
+                <textarea
+                  id="olkil-live-test-prompt"
+                  ref={liveTestInputRef}
+                  className={styles.liveTestTextarea}
+                  value={liveTestPrompt}
+                  onChange={(e) => setLiveTestPrompt(e.target.value)}
+                  placeholder="e.g. Login with demo credentials and complete the main workflow…"
+                  rows={4}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
+                      e.preventDefault();
+                      runLiveTest();
+                    }
+                  }}
+                />
+
+                <div className={styles.liveTestSuggestionsLabel}>Suggestions</div>
+                <div className={styles.liveTestSuggestions} role="list">
+                  {LIVE_TEST_SUGGESTIONS.map((s) => (
+                    <button
+                      key={s}
+                      type="button"
+                      role="listitem"
+                      className={`${styles.liveTestChip} ${
+                        liveTestPrompt.trim() === s ? styles.liveTestChipActive : ''
+                      }`}
+                      onClick={() => setLiveTestPrompt(s)}
+                    >
+                      {s}
+                    </button>
+                  ))}
+                </div>
+
+                <div className={styles.liveTestModalFooter}>
+                  <button
+                    type="button"
+                    className={styles.liveTestCancel}
+                    onClick={() => setLiveTestOpen(false)}
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="button"
+                    className={styles.liveTestStart}
+                    disabled={!liveTestPrompt.trim() || busy || ollamaBlocked}
+                    onClick={runLiveTest}
+                  >
+                    Start Live Test
+                  </button>
+                </div>
+              </div>
+            </div>,
+            document.body,
+          )
+        : null}
     </div>
   );
 };

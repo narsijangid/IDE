@@ -1,0 +1,114 @@
+Version 1.0.24 - 20-05-2026
+- Fix: Use library-correct package name in file headers.
+
+Version 1.0.23 - 19-05-2026
+- Fix: WordPress.org compliance — use WP_Error and rest_ensure_response in REST callbacks, sanitize_key for slug params, and align JS response handling with REST format.
+
+Version 1.0.22 - 27-04-2026
+- Fix: Self-host the Figtree font used by the survey dialog instead of fetching from fonts.googleapis.com. Required for WordPress.org compliance.
+
+Version 1.0.21 - 24-03-2026
+- Improvement:
+  - Updated build process to add ABSPATH guards to generated .asset.php files.
+  - Added README.md documenting external service usage (metrics.brainstormforce.com).
+
+Version 1.0.20 - 20-03-2026
+- Fix:
+  - Updated variable names, error codes, and file loading to comply with WordPress.org plugin review guidelines.
+
+Version 1.0.19 - 16-03-2026
+- Fix:
+  - Added ABSPATH guards and conditional core file loading to prevent direct file access.
+  - Fixed first_name fallback not triggering when user has no first name set, now correctly falls back to display_name.
+- Security:
+  - Strengthen security and harden against potential vulnerabilities.
+
+Version 1.0.18 - 12-03-2026
+- Improvement:
+  - Added support for late loading when `wp_loaded` has already fired, allowing consuming plugins to defer library inclusion to hooks like `current_screen` for better performance.
+
+Version 1.0.17 - 02-03-2026
+- Fix:
+  - Added ABSPATH guards and conditional core file loading to prevent direct file access.
+
+Version 1.0.16 - 20-01-2026
+- Improvement:
+  - Made comment field mandatory for ratings of 6 or below to ensure actionable feedback.
+  - Enforced minimum feedback length of 50 characters for low ratings to prevent short or low-effort responses.
+
+Version 1.0.15 - 11-09-2025
+- New:
+  - Added `privacy_policy` option with configurable link and custom content.
+  - Added `popup.placement` option to customize popup position.
+
+Version 1.0.14 - 18-08-2025
+- Improvement:
+  - Added `rating_min_label` and `rating_max_label` text options for customizable rating labels.
+
+Version 1.0.13 - 18-08-2025
+- Fix:
+  - Fixed issue where incorrect Content-Type header caused NPS survey close and rating submission requests to fail.
+- Dev:
+  - Added filters to ensure compatibility with internal WP NPS Survey plugin on marketing sites.
+
+Version 1.0.12 - 16-07-2025
+- Improvement:
+  - Refactored rating prompt logic to allow disabling the WordPress rating functionality, ensuring a non-discriminatory and guideline-compliant user experience.
+
+Version 1.0.11 - 27-06-2025
+- Improvement:
+  - Improved core class loading to avoid duplicate declarations and ensure stability.
+
+Version 1.0.10 - 26-06-2025
+- Improvement:
+  - Updated rating submission endpoint.
+
+Version 1.0.9 - 24-06-2025
+- Improvement:
+  - Improved library loading conditions to prevent conflicts.
+
+Version 1.0.8 - 18-06-2025
+- Dev:
+  - Updated API domain to 'https://metrics.brainstormforce.com/' for improved performance and reliability.
+
+Version 1.0.7 - 13-01-2025
+- Improvement:
+  - Enhanced core loading mechanism to prevent potential plugin conflicts.
+	-	Refactored codebase to adhere to core coding standards, improving overall readability and maintainability.
+	-	Updated popup UI to prevent external overlapping issues, ensuring better user experience.
+- New:
+  - Introduced internal filters to provide flexibility in customizing rating submission data.
+
+Version 1.0.6 - 31-12-2024
+- Improvement:
+  - Optimized performance by preventing unnecessary markup loading on screens where specific screen IDs are provided.
+- Fix:
+  - Resolved console errors that occurred during popup dismissal, ensuring smoother user interaction.
+
+Version 1.0.5 - 19-12-2024
+- New:
+  - Introduced a configuration option to display pop-up on the dashboards of specific plugins.
+- Improvement:
+  - Enhanced mobile responsiveness of the popup.
+- Fix:
+  - Corrected popup positioning in RTL (Right-to-Left) layouts.
+  - Resolved overlap issues between the popup and other elements in Spectra.
+
+Version 1.0.4 - 13-12-2024  
+- Improvement: Optimized file loading to prevent duplicate loads, enhancing performance.
+
+Version 1.0.3 - 10-12-2024
+- Fix: Fixed library update issue.
+
+Version 1.0.2 - 09-12-2024
+- Improvement: NPS popup will now be permanently dismissed when closed for the second time.
+- Improvement: Added an option to customize the rate button text for plugins/themes.
+- Fix: Resolved CSS conflicts with other plugins.
+
+Version 1.0.1 - 20-11-2024
+- New: Added filter to 'nps_survey_allowed_screens' to allow custom screens.
+- New: Added filter to 'nps_survey_build_url' update build url for themes.
+
+Version 1.0.0 - 23-09-2024
+- New: Initial release.  
+ 

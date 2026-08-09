@@ -2,8 +2,8 @@ import React, { useState } from 'react';
 
 /**
  * Lightweight safe markdown renderer (no raw HTML).
- * Supports: fenced code, inline code, **bold**, *italic*, lists, headings, links-as-text,
- * clickable file paths, copy on code blocks.
+ * Supports: fenced code, inline code, **bold**, *italic*, lists, headings,
+ * GFM tables, links-as-text, clickable file paths, copy on code blocks.
  */
 export function MarkdownMessage({
   text,
@@ -22,6 +22,30 @@ export function MarkdownMessage({
           return (
             <div key={i}>
               <CodeBlock lang={block.lang} text={block.text} />
+            </div>
+          );
+        }
+        if (block.type === 'table') {
+          return (
+            <div key={i} className="md-table-wrap">
+              <table className="md-table">
+                <thead>
+                  <tr>
+                    {block.headers.map((h, j) => (
+                      <th key={j}>{renderInline(h, onOpenPath)}</th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {block.rows.map((row, r) => (
+                    <tr key={r}>
+                      {row.map((cell, c) => (
+                        <td key={c}>{renderInline(cell, onOpenPath)}</td>
+                      ))}
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
             </div>
           );
         }
@@ -90,10 +114,11 @@ function CodeBlock({ lang, text }: { lang?: string; text: string }) {
       // ignore
     }
   };
+  const label = (lang || 'code').replace(/^javascript$/i, 'js').replace(/^typescript$/i, 'ts');
   return (
     <pre className="md-code-block">
       <div className="md-code-toolbar">
-        {lang ? <span className="md-code-lang">{lang}</span> : <span className="md-code-lang">code</span>}
+        <span className="md-code-lang">{label}</span>
         <button type="button" className="md-code-copy" onClick={() => void onCopy()}>
           {copied ? 'Copied' : 'Copy'}
         </button>
@@ -109,7 +134,25 @@ type Block =
   | { type: 'ul'; items: string[] }
   | { type: 'ol'; items: string[] }
   | { type: 'h'; level: number; text: string }
-  | { type: 'hr' };
+  | { type: 'hr' }
+  | { type: 'table'; headers: string[]; rows: string[][] };
+
+function splitTableRow(line: string): string[] {
+  let s = line.trim();
+  if (s.startsWith('|')) s = s.slice(1);
+  if (s.endsWith('|')) s = s.slice(0, -1);
+  return s.split('|').map((c) => c.trim());
+}
+
+function isTableSeparator(line: string): boolean {
+  const cells = splitTableRow(line);
+  return cells.length > 0 && cells.every((c) => /^:?-{3,}:?$/.test(c));
+}
+
+function isTableRow(line: string): boolean {
+  const t = line.trim();
+  return t.includes('|') && !/^```/.test(t);
+}
 
 function parseBlocks(src: string): Block[] {
   const lines = src.replace(/\r\n/g, '\n').split('\n');
@@ -148,6 +191,26 @@ function parseBlocks(src: string): Block[] {
       continue;
     }
 
+    // GFM table: header | sep | rows
+    if (
+      isTableRow(line) &&
+      i + 1 < lines.length &&
+      isTableSeparator(lines[i + 1])
+    ) {
+      const headers = splitTableRow(line);
+      i += 2;
+      const rows: string[][] = [];
+      while (i < lines.length && isTableRow(lines[i]) && !isTableSeparator(lines[i])) {
+        const cells = splitTableRow(lines[i]);
+        // Pad / trim to header width
+        while (cells.length < headers.length) cells.push('');
+        rows.push(cells.slice(0, headers.length));
+        i++;
+      }
+      out.push({ type: 'table', headers, rows });
+      continue;
+    }
+
     if (/^\s*[-*+]\s+/.test(line)) {
       const items: string[] = [];
       while (i < lines.length && /^\s*[-*+]\s+/.test(lines[i])) {
@@ -182,7 +245,8 @@ function parseBlocks(src: string): Block[] {
       !/^#{1,3}\s+/.test(lines[i]) &&
       !/^\s*[-*+]\s+/.test(lines[i]) &&
       !/^\s*\d+[.)]\s+/.test(lines[i]) &&
-      !/^(-{3,}|\*{3,}|_{3,})\s*$/.test(lines[i])
+      !/^(-{3,}|\*{3,}|_{3,})\s*$/.test(lines[i]) &&
+      !(isTableRow(lines[i]) && i + 1 < lines.length && isTableSeparator(lines[i + 1]))
     ) {
       buf.push(lines[i]);
       i++;
@@ -200,7 +264,7 @@ function renderInline(
   const nodes: React.ReactNode[] = [];
   // `code`, **bold**, *italic*, backtick paths, bare path:line
   const re =
-    /(`[^`]+`|\*\*[^*]+\*\*|__[^_]+__|\*[^*]+\*|_[^_]+_|`?(?:[A-Za-z]:)?[A-Za-z0-9_./\\-]+\.[A-Za-z0-9]+(?::\d+)?`?)/g;
+    /(`[^`]+`|\*\*[^*]+\*\*|__[^_]+__|\*[^*]+\*|_[^_]+_|`?(?:[A-Za-z]:)?[A-Za-z0-9_./\\-]+\.[A-Za-z0-9]+(?::\d+(?:-\d+)?)?`?)/g;
   let last = 0;
   let m: RegExpExecArray | null;
   let key = 0;
@@ -276,7 +340,7 @@ function looksLikePath(s: string): boolean {
 }
 
 function splitPathLine(s: string): { path: string; line?: number } {
-  const m = /^(.*):(\d+)$/.exec(s);
+  const m = /^(.*):(\d+)(?:-\d+)?$/.exec(s);
   if (m) {
     return { path: m[1], line: Number(m[2]) };
   }

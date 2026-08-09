@@ -59,6 +59,7 @@ import { TaskModule } from '@opensumi/ide-task/lib/browser';
 import { DemoModule } from 'modules/demo';
 import { LocalBasicModule } from 'modules/basic/browser';
 import { OlkilAiModule } from 'modules/olkil-ai/browser';
+import { OlkilAuthModule } from 'modules/olkil-auth/browser';
 
 import { customLayoutConfig } from './layout';
 import { MiniDesktopModule } from './module';
@@ -108,6 +109,7 @@ export const CommonBrowserModules: ConstructorOf<BrowserModule>[] = [
   MiniDesktopModule,
   LocalBasicModule,
   OlkilAiModule,
+  OlkilAuthModule,
 ];
 
 renderApp({

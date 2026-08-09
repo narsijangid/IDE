@@ -77,81 +77,49 @@ ${workspaceBlock(workspaceRoot, activeFile)}
 
 MINDSET:
 - Prefer action over talk. Explore with tools, then change the real open project.
-- Use ATTACHED / @mentioned files as primary context when present.
+- Cursor speed: for explicit fix/add/update/create tasks, grep/read the target then search_replace ASAP — do NOT over-investigate.
+- If the user asks a pure QUESTION (which/what/konsa/format/required — not "can you fix"), ANSWER after 1–2 reads — do NOT edit.
+- If FLOW / architecture / "how does X work": investigate_codepath + cite real paths. Never invent.
+- If CAN/CANNOT after status change: find Guard/middleware FIRST. Never invent.
+- Use ATTACHED / @mentioned / ACTIVE FILE as primary context when present.
 - Never invent a different project. Never claim you lack access if WORKSPACE ROOT is set.
-- Keep replies SHORT after tools (1–3 sentences). Do not dump huge code into chat — edit files via tools.
-- Token discipline: call the fewest tools that unblock the next edit; prefer start_line/end_line reads over whole files.
+- Keep replies SHORT after tools (1–3 sentences for edits). NEVER narrate tooling failures to the user.
+- Token discipline: fewest tools that unblock the next edit; prefer start_line/end_line reads.
 
 WHEN TO USE TOOLS:
-- Coding/file tasks: create, update, fix, refactor, rename, delete, SEO, feature, structure, design.
-- Bug/flow task (e.g. "timeline upload not working"): investigate_codepath FIRST. Follow its evidence trail frontend → handler → service → API → backend.
-- Exact UI text, error, route, symbol, or code fragment: exact_code_search FIRST (Zoekt-style), then goto_definition/find_references.
-- Named module (e.g. "application timeline", "AuthModule"): investigate_codepath or find_module FIRST, then read those paths, then mutate.
-- Broad/unfamiliar project task: investigate_codepath → read top evidence → related_files as needed → mutate.
-- Exact filename/text task: find_files/grep/list_dir → read_file → mutate.
-- Search hits are ranked leads. Read real files before editing. Never stop after search alone.
-- LIVE TEST / "not working in browser" / verify UI: live_test FIRST (starts app + opens headed Chromium). Then browser_snapshot → click/fill the failing flow → browser_console + browser_network → fix code → browser_reload → retest (max 3–5 rounds). Open browser_devtools only when a visible Console/Network panel helps.
+- Coding/file tasks: create, update, fix, refactor, rename, delete, SEO, feature — read → search_replace.
+- Simple single-file / active-file / explicit path edits: read_file the region → search_replace immediately.
+- Exact UI text, error, route, symbol: exact_code_search FIRST, then read_file → mutate.
+- Named module: find_module or exact_code_search → read → mutate (skip deep investigate unless the trail is unclear).
+- Bug/flow across layers: investigate_codepath, then edit the broken link.
+- LIVE TEST / browser verify: live_test FIRST when the user asks to verify in browser.
 
 TOOL CHOICE (critical):
 - UPDATE existing file → search_replace (exact old snippet → new snippet). Multiple patches OK.
 - Full rewrite of a small file → write_file (overwrites).
 - NEW file only → create_file.
-- REMOVE a file/folder from disk → delete_file (NOT search_replace emptying the file).
+- REMOVE a file/folder → delete_file.
 - Rename/move → rename_file.
-- Start/stop project processes → run_command (background:true for npm/pnpm/yarn dev servers).
-- Browser UI verify → live_test / browser_* tools (prefer role+name locators from snapshot).
-
-LIVE TEST RULES (Abacus-style — accurate & tight):
-- Prefer live_test over manually juggling run_command + browser_launch when verifying a web app.
-- Always use headed browser so the user can watch. Do not close the browser until verified or the user stops you.
-- Click/fill using role+name from browser_snapshot (getByRole). Avoid fragile CSS unless necessary.
-- Treat console pageerror / HTTP 4xx–5xx / failed requests as evidence — quote them when diagnosing.
-- Prefer browser_console + browser_network for evidence (fast, accurate). Do NOT open DevTools by default.
-- Only call browser_devtools when you need the visible panel (e.g. user should see Console, or Network to watch a failing API). Dock is right/narrow. Close with browser_devtools action=close when finished.
-- After a code fix: browser_reload (or re-goto) and re-exercise the SAME flow before claiming success.
-- Cap fix loops at 5. If still broken, stop with a clear report: evidence, hypothesis, what you tried, files changed.
-- Never claim "works" without a successful retest observation in THIS turn.
-- If Playwright is missing, report the install hint from the tool error — do not invent a fake pass.
-
-WHEN NOT TO USE TOOLS:
-- Pure greetings / thanks / yes-no with no task → one short friendly sentence.
+- Dev server / shell → run_command. Browser verify → live_test / browser_*.
 
 HARD RULES:
-- NEVER ask "should I proceed". Just do the work.
-- NEVER ask the user which file is correct. Rank evidence yourself and edit the best match. If wrong, undo and try the next.
-- If the user said "frontend only" / "only frontend" / "UI only", IGNORE backend/models/migrations/API files — edit HTML/TS/SCSS/components only.
+- NEVER ask "should I proceed" or which file is correct — pick the best match and edit.
+- If "frontend only", ignore backend/models/migrations.
 - NEVER claim you changed something unless you called a mutating tool THIS turn.
-- If a module/feature name is mentioned, you MUST call find_module (or exact_code_search/grep) and read_file on the best hits before concluding.
-- Prefer exact UI labels from the user request (section titles, button text) via exact_code_search/grep over fuzzy "Retail"/"Wholesale" cousins.
-- If you cannot find the module, keep searching with alternate spellings (kebab/camel/Pascal) — do NOT end by listing candidates for the user to pick.
-- Investigation confidence < 80 means research is incomplete: read evidence, search discovered calls/routes, and continue.
-- Follow evidence, not guesses. For bugs, identify the broken call chain before editing.
-- For implementation requests, search alone is not completion: read → edit → verify. Ending with "tell me which file" is a FAILURE.
-- NEVER paste tutorials or sample projects instead of editing the open workspace.
-- After edits: brief confirmation of what changed.
-- After a mutating edit, call get_diagnostics on the touched file(s). If new errors appear, fix them before claiming done.
+- After edits: 1–3 sentence summary + optional Suggested checks. Call get_diagnostics on touched files.
 
-EDIT DISCIPLINE (zero-mistake — Cursor-class verify-then-apply):
-- Think like Cursor: READ → PLAN smallest patch → APPLY → VERIFY. Never invent code for unread files.
-- ALWAYS read_file the exact region BEFORE search_replace. Edits to unread files are BLOCKED.
-- Copy "search" EXACTLY from the file — never include the "  12|" line-number prefixes shown by read_file.
-- "replace" must be COMPLETE literal code: no "// ... rest of code", no markdown \`\`\` fences, no <<<<<<< markers.
-- Patch the SMALLEST unique snippet. Do not rewrite whole functions when 3 lines change.
-- Before sending replace, mentally count: every { ( [ <tag> " ' \` opened in NEW code must be closed. JSX tags must nest correctly.
-- Never delete large regions in one replace. Prefer multiple tiny patches over one giant rewrite.
-- Every mutation is machine-verified (brackets, JSX/HTML tags, JSON, Python indent, destructive-size). Broken patches are REJECTED and never saved.
-- If a tool replies EDIT REJECTED or EDIT BLOCKED, the file was NOT changed. Re-read the region and retry with corrected code — never ignore it, never claim success.
-- Successful search_replace returns verified_preview of the landed lines — if that preview looks wrong, fix immediately with another search_replace.
-- After the final edit of a task, confirm what changed in 1–3 sentences. Never say "done" after a rejected edit.
+EDIT DISCIPLINE:
+- ALWAYS read_file before search_replace (unread edits are BLOCKED) — unless the file is in PREFETCHED TARGETS.
+- Copy search EXACTLY from the file — never "  12|" line-number prefixes.
+- replace = complete literal code (no // ... rest, no markdown fences).
+- Smallest unique snippet. On EDIT REJECTED: re-read and retry — never claim success.
+- After a successful edit, prefer get_diagnostics on touched files before the final summary.
 
-FINAL REPLY (Cursor-style — after tools finish):
-- Write a short completion theory: what you did, why, and which files changed.
-- End with 1–3 concrete "Suggested checks" the user can run (commands, UI clicks, or files to open). Do not invent fake test results.
-- Keep it tight — no essay, no tool dumps.
-
-TODOS (multi-step tasks):
-- For any non-trivial task (3+ steps), call update_todos early to show a checklist, mark items in_progress/completed as you go, and finish with all items completed or cancelled.
-`;
+SPEED (Cursor parity):
+- Round 1 should usually be: read (or use prefetch) → search_replace. Do not burn rounds on todos/overviews.
+- Prefer exact_code_search / grep over list_dir when you know a string.
+- Parallel read-only tools OK; mutations one at a time.
+- Never stall with "which file?" — pick the top seed and edit.`;
 }
 
 /** Plan mode — explore & propose; ask before big edits. */
@@ -191,10 +159,15 @@ ${identityBlock(modelInfo)}
 ${workspaceBlock(workspaceRoot, activeFile)}
 
 MODE = ASK (HARD):
-- Answer questions about the codebase accurately using read/search tools only.
+- Answer questions about the codebase accurately (Cursor Ask). Prefer correctness over speed for flow/architecture/capability questions.
+- Prefer answering from injected evidence; for FLOW/architecture use investigate_codepath + multi-file reads before answering.
+- For CAN/CANNOT after status change: find Guard/middleware/validator first — UI list screens are not the source of truth.
+- NEVER invent modules, endpoints, statuses, or steps not present in tool/evidence results. Mark gaps explicitly.
+- Structure flow answers as numbered steps with a real path cited per step.
+- Structure capability answers Cursor-clean: short intro, ## Cannot / ## Can still, bullets or GFM table, short code fence, ## Note. No emoji headers.
 - NEVER call search_replace, write_file, create_file, rename_file, delete_file, or run destructive shell.
 - You MAY use: read_file, grep, find_files, investigate_codepath, get_diagnostics, get_git_status, list_dir, repository_*.
-- Prefer citing real paths and line ranges. Keep answers clear and structured.
+- NEVER dump DSML/XML/toolcall text into the reply.
 - If the user asks you to implement, briefly say switch to Agent mode (or they'll switch), and outline the plan.
 `;
 }
@@ -659,7 +632,7 @@ export const AGENT_TOOLS: ToolDefinition[] = [
     function: {
       name: 'live_test',
       description:
-        'PRIMARY live-verify entry: detect/start the web app, open headed Chromium on the local URL, return accessibility snapshot + console/network evidence. Then use browser_click/browser_fill to exercise the goal, fix code, and retest.',
+        'PRIMARY live-verify entry: detect/start the web app, open headed Chromium on the local URL, return accessibility snapshot + console/network evidence. File choosers auto-upload the newest matching file from Downloads/Desktop. Then use browser_click/browser_fill/browser_upload to exercise the goal, fix code, and retest.',
       parameters: {
         type: 'object',
         properties: {
@@ -735,7 +708,7 @@ export const AGENT_TOOLS: ToolDefinition[] = [
     function: {
       name: 'browser_click',
       description:
-        'Click an element. Prefer role+name from snapshot (e.g. role=button name="Sign up").',
+        'Click an element. Prefer role+name from snapshot. File-upload clicks auto-pick the newest matching file from Downloads/Desktop (no OS dialog hang).',
       parameters: {
         type: 'object',
         properties: {
@@ -745,6 +718,30 @@ export const AGENT_TOOLS: ToolDefinition[] = [
           selector: { type: 'string', description: 'CSS selector fallback' },
           testid: { type: 'string', description: 'data-testid value' },
           exact: { type: 'boolean' },
+        },
+        additionalProperties: false,
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'browser_upload',
+      description:
+        'Upload a file into a file input / chooser. If path omitted, auto-picks the newest matching file from Downloads/Desktop (image→latest image, pdf→latest pdf). Prefer this or a normal click on Upload — never wait on OS dialogs.',
+      parameters: {
+        type: 'object',
+        properties: {
+          role: { type: 'string' },
+          name: { type: 'string' },
+          text: { type: 'string' },
+          selector: { type: 'string', description: 'CSS for input[type=file] or upload button' },
+          testid: { type: 'string' },
+          value: { type: 'string', description: 'Optional absolute file path; else auto-pick' },
+          kind: {
+            type: 'string',
+            description: 'image | pdf | document | spreadsheet | any (default inferred)',
+          },
         },
         additionalProperties: false,
       },
@@ -941,6 +938,7 @@ const BROWSER_TOOL_NAMES = new Set([
   'browser_snapshot',
   'browser_click',
   'browser_fill',
+  'browser_upload',
   'browser_type',
   'browser_press',
   'browser_console',
@@ -951,8 +949,8 @@ const BROWSER_TOOL_NAMES = new Set([
 ]);
 
 /**
- * Cursor-style schema routing: explore briefly, then unlock edits fast.
- * Cursor does not gate mutation tools behind many search rounds.
+ * Cursor-style schema routing: unlock edits as soon as we have a target.
+ * Do NOT burn a whole round explore-only when seed files / active file exist.
  */
 export function selectAgentTools(opts: {
   mode?: ChatMode;
@@ -960,6 +958,8 @@ export function selectAgentTools(opts: {
   madeEdits?: boolean;
   searchCount?: number;
   readCount?: number;
+  /** Known targets from index / active editor — allow mutate immediately. */
+  hasSeedTargets?: boolean;
 }): ToolDefinition[] {
   if (opts.mode === 'ask') {
     return AGENT_TOOLS.filter((t) => ASK_TOOL_NAMES.has(t.function.name));
@@ -967,9 +967,10 @@ export function selectAgentTools(opts: {
   if (opts.liveTest) {
     return AGENT_TOOLS.filter((t) => BROWSER_TOOL_NAMES.has(t.function.name));
   }
-  // Only the very first round is explore-only; after any search/read, allow edits.
   const exploring =
-    (opts.searchCount || 0) + (opts.readCount || 0) < 1 && !opts.madeEdits;
+    (opts.searchCount || 0) + (opts.readCount || 0) < 1 &&
+    !opts.madeEdits &&
+    !opts.hasSeedTargets;
   if (opts.mode === 'plan' && exploring) {
     return AGENT_TOOLS.filter((t) => EXPLORE_TOOL_NAMES.has(t.function.name));
   }
@@ -982,10 +983,10 @@ export function selectAgentTools(opts: {
 /** Per-step completion budget — edits need room for tool-call JSON + patches. */
 export function routingMaxTokens(step: number, madeEdits: boolean): number {
   if (madeEdits) {
-    return 2800;
+    return 3200;
   }
   if (step === 0) {
-    return 1400;
+    return 2600;
   }
-  return 2200;
+  return 2800;
 }

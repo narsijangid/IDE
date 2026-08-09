@@ -1,0 +1,259 @@
+#astra-sites-on-active {
+	font-family: "Figtree", "Inter", sans-serif;
+	padding: 0;
+	border: none;
+	box-shadow: none;
+	border-radius: 4px;
+}
+
+#astra-sites-on-active .astra-notice-container {
+	padding: 2rem;
+}
+
+.astra-review-notice-container {
+	display: flex;
+	align-items: center;
+	padding-top: 10px;
+}
+
+.astra-review-notice-container .dashicons {
+	font-size: 1.4em;
+	padding-right: 10px;
+}
+
+.astra-review-notice-container a {
+	padding-right: 5px;
+	text-decoration: none;
+}
+
+.astra-review-notice-container .dashicons:first-child {
+	padding-right: 0;
+}
+
+.notice-image img {
+	max-width: 90px;
+}
+
+.notice-content .notice-heading {
+	padding-bottom: 5px;
+}
+
+.notice-content {
+	margin-right: 15px;
+}
+
+.notice-container {
+    padding-top: 10px;
+    padding-bottom: 10px;
+	display: flex;
+	justify-content: left;
+	align-items: center;
+}
+
+#astra-sites-on-active .notice-image img,
+#astra-upgrade-pro-wc .notice-image img {
+	max-width: 50px;
+	margin-right: 5px;
+}
+
+#astra-sites-on-active .notice-content .notice-heading,
+#astra-upgrade-pro-wc .notice-content .notice-heading {
+	margin: 0 0 10px;
+	padding: 0;
+	font-weight: 600;
+	font-size: 1.3em;
+	color: #1e293b;
+}
+
+#astra-sites-on-active .notice-content p,
+#astra-upgrade-pro-wc .notice-content p {
+	padding-top: 0;
+	margin-top: 0;
+	margin-bottom: 6px;
+	color: #475569;
+}
+
+#astra-sites-on-active .notice-container,
+#astra-upgrade-pro-wc .notice-container {
+	padding: 18px 0 18px;
+	align-items: start;
+}
+
+#astra-sites-on-active .button.button-hero {
+	font-size: 13px;
+	min-height: 30px;
+	line-height: 26px;
+	padding: 0 12px;
+	height: 30px;
+}
+
+#astra-sites-on-active .astra-review-notice-container,
+#astra-upgrade-pro-wc .astra-review-notice-container {
+	padding-top: 5px;
+}
+
+#astra-sites-on-active .button-primary,
+#astra-upgrade-pro-wc .button-primary {
+	box-shadow: 0 1px 0 #006799;
+}
+
+#astra-sites-on-active .button.updating-message:before,
+#astra-sites-on-active .button.updated-message:before,
+#astra-sites-on-active .button.installed:before,
+#astra-sites-on-active .button.installing:before {
+	margin: 0 0 0 5px;
+}
+
+.wp-core-ui .astra-notice-wrapper:has(.ast-welcome-banner) {
+    padding-left: 0;
+}
+.ast-welcome-banner {
+	width: 100%;
+	display: flex;
+	gap: 2rem;
+	justify-content: space-between;
+	overflow: hidden;
+}
+.ast-col-left {
+	width: 50%;
+	display: flex;
+	flex-direction: column;
+	align-items: flex-start;
+	justify-content: center;
+}
+.ast-col-right {
+	max-width: 50%;
+	display: flex;
+	position: relative;
+    flex-direction: column;
+    justify-content: center;
+    align-items: center;
+}
+.ast-col-right > img {
+	width: 100%;
+	position: relative;
+}
+.ast-welcome-banner .notice-title {
+	color: #141338;
+	font-size: 30px;
+	line-height: 38px;
+	font-weight: 600;
+	padding: 0;
+	margin-top: 0px;
+	margin-bottom: 0.375rem;
+	
+}
+.ast-welcome-banner .description {
+	color: #6F6B99;
+	font-size: 14px;
+	line-height: 20px;
+	margin-top: 0px;
+	margin-bottom: 1.75rem;
+	padding: 0px;
+}
+#astra-sites-on-active .astra-notice-container .notice-actions > button {
+	border-radius: 6px;
+	background: #5C2EDE;
+	padding: 12px 24px;
+	/* shadow/sm */
+	color: white;
+	box-shadow: none;
+	border: none;
+	font-size: 14px;
+	line-height: 20px;
+	font-weight: 600;
+}
+.ast-welcome-banner .sub-notice-title {
+	display: flex;
+	flex-direction: column;
+	align-self: stretch;
+	color: #6F6B99;
+	font-size: 14px;
+	line-height: 20px;
+	margin: 0 0 1.75rem;
+	padding: 0;
+}
+.ast-welcome-banner .notice-actions {
+	margin-bottom: 1.75rem;
+}
+.ast-welcome-banner .notice-actions button {
+    font-size: 14px;
+    line-height: 22px;
+    font-weight: 500;
+    padding: 12px 24px;
+}
+p.sub-notice-description {
+	color: #6F6B99;
+    font-size: 12px;
+    line-height: 16px;
+	padding: 0;
+	margin: 0;
+}
+.ast-st-sites-cta {
+	width: fit-content;
+	max-width: 320px;
+	border: 1px solid #fff;
+    border-radius: 9999px;
+    display: flex;
+    gap: 12px;
+    justify-content: center;
+    align-items: center;
+    align-content: center;
+    box-shadow: 0px 16px 40px -16px #00000040;
+    z-index: 9;
+    padding: 12px;
+    position: absolute;
+    bottom: 40px;
+    background: rgb(228 228 228 / 50%);
+    backdrop-filter: blur(4px);
+	display: none; /* maybe show it in future */
+}
+
+.ast-st-sites-cta .ast-page-builder-ico {
+    padding: 8px;
+    background: #fff;
+    border-radius: 24px;
+    width: 20px;
+    height: 20px;
+}
+.ast-st-sites-cta span {
+	font-size: 16px;
+    line-height: 20px;
+    color: #0F172A;
+    font-weight: 700;
+    width: 100px;
+    text-align: center;
+    padding-left: 6px;
+    border-left: 1px solid #fff;
+}
+
+@media screen and (max-width: 1199px) {
+	#astra-sites-on-active .astra-notice-container {
+		padding: 1.5rem;
+	}
+	.ast-col-right {
+		display: none;
+	}
+	.ast-col-left {
+		width: 100%;
+		align-items: unset;
+		padding: 0.5rem 0;
+	}
+	#astra-sites-on-active .astra-notice-container .notice-actions > button {
+		width: 100%;
+	}
+	.ast-welcome-banner .notice-title {
+		font-size: 24px;
+		line-height: 36px;
+	}
+}
+
+@media screen and (max-width: 782px) {
+	#astra-sites-on-active .astra-notice-container {
+		padding: 1rem;
+	}
+	.ast-welcome-banner .notice-title {
+		font-size: 20px;
+		line-height: 30px;
+	}
+}

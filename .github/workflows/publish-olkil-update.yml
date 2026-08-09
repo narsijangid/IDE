@@ -1,0 +1,101 @@
+name: Publish OLKIL update
+
+# Ships a release-based auto-update (Cursor-style):
+# tag push → build installer → GitHub Release → Hostinger updates feed artifact
+#
+# Usage:
+#   git tag v1.3.7 && git push origin v1.3.7
+#   or: workflow_dispatch from Actions tab
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Product version (e.g. 1.3.7). Empty = product.json'
+        required: false
+        default: ''
+
+permissions:
+  contents: write
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+    defaults:
+      run:
+        working-directory: ide-electron
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '18'
+          cache: yarn
+          cache-dependency-path: ide-electron/yarn.lock
+
+      - name: Resolve version
+        shell: bash
+        id: ver
+        run: |
+          if [ -n "${{ github.event.inputs.version }}" ]; then
+            V="${{ github.event.inputs.version }}"
+          elif [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
+            V="${GITHUB_REF#refs/tags/v}"
+          else
+            V=$(node -p "require('./product.json').version")
+          fi
+          V="${V#v}"
+          echo "version=$V" >> "$GITHUB_OUTPUT"
+          echo "Resolved version: $V"
+
+      - name: Apply product version
+        shell: bash
+        run: |
+          export PRODUCT_VERSION="${{ steps.ver.outputs.version }}"
+          node scripts/apply-product.js
+
+      - name: Install dependencies
+        run: yarn install --frozen-lockfile
+
+      - name: Build + pack (generate latest.yml)
+        shell: bash
+        env:
+          OLKIL_PUBLISH: '1'
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          OLKIL_UPDATE_URL: https://updates.olkil.com
+          OLKIL_GH_OWNER: narsijangid
+          OLKIL_GH_REPO: IDE
+        run: |
+          yarn build-prod
+          node build/pack.js
+
+      - name: Stage update feed
+        run: node scripts/publish-update.js
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          OLKIL_UPDATE_URL: https://updates.olkil.com
+          OLKIL_GH_OWNER: narsijangid
+          OLKIL_GH_REPO: IDE
+
+      - name: Upload updates-feed artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: olkil-updates-feed
+          path: ide-electron/updates-feed
+          if-no-files-found: error
+
+      - name: Upload pack output artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: olkil-out
+          path: |
+            ide-electron/out/*.exe
+            ide-electron/out/*.yml
+            ide-electron/out/*.blockmap
+          if-no-files-found: warn

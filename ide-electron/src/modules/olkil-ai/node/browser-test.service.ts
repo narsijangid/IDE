@@ -3,6 +3,7 @@ import * as os from 'os';
 import * as path from 'path';
 import * as http from 'http';
 import * as https from 'https';
+import { spawn } from 'child_process';
 import {
   BrowserActionRequest,
   BrowserActionResult,
@@ -78,7 +79,7 @@ async function waitForHttp(url: string, timeoutMs: number): Promise<{ ok: boolea
     try {
       const status = await new Promise<number>((resolve, reject) => {
         const lib = url.startsWith('https') ? https : http;
-        const req = lib.get(url, { timeout: 2500 }, (res) => {
+        const req = lib.get(url, { timeout: 1200 }, (res) => {
           res.resume();
           resolve(res.statusCode || 0);
         });
@@ -95,9 +96,123 @@ async function waitForHttp(url: string, timeoutMs: number): Promise<{ ok: boolea
     } catch (e: any) {
       lastError = e?.message || String(e);
     }
-    await sleep(700);
+    await sleep(280);
   }
   return { ok: false, error: lastError || 'Timed out waiting for URL' };
+}
+
+type UploadKind = 'image' | 'pdf' | 'document' | 'spreadsheet' | 'any';
+
+const IMAGE_EXTS = new Set([
+  '.png',
+  '.jpg',
+  '.jpeg',
+  '.gif',
+  '.webp',
+  '.bmp',
+  '.svg',
+  '.heic',
+  '.tif',
+  '.tiff',
+]);
+const PDF_EXTS = new Set(['.pdf']);
+const DOC_EXTS = new Set(['.doc', '.docx', '.txt', '.rtf', '.odt', '.md']);
+const SHEET_EXTS = new Set(['.xls', '.xlsx', '.csv', '.ods']);
+
+function userFileDirs(): string[] {
+  const home = os.homedir();
+  const candidates = [
+    path.join(home, 'Downloads'),
+    path.join(home, 'Desktop'),
+    path.join(home, 'OneDrive', 'Downloads'),
+    path.join(home, 'OneDrive', 'Desktop'),
+    path.join(home, 'Documents'),
+  ];
+  return [...new Set(candidates.filter((d) => {
+    try {
+      return fs.existsSync(d) && fs.statSync(d).isDirectory();
+    } catch {
+      return false;
+    }
+  }))];
+}
+
+function inferUploadKind(accept?: string | null, hint?: string | null): UploadKind {
+  const blob = `${accept || ''} ${hint || ''}`.toLowerCase();
+  if (/image\/|\.png|\.jpe?g|\.gif|\.webp|\.svg|\.bmp|photo|avatar|logo|picture|img/i.test(blob)) {
+    return 'image';
+  }
+  if (/application\/pdf|\.pdf|\bpdf\b/i.test(blob)) {
+    return 'pdf';
+  }
+  if (/spreadsheet|excel|\.xlsx?|\.csv|sheet/i.test(blob)) {
+    return 'spreadsheet';
+  }
+  if (/msword|officedocument|\.docx?|\.txt|\.rtf|document/i.test(blob)) {
+    return 'document';
+  }
+  return 'any';
+}
+
+function extMatchesKind(ext: string, kind: UploadKind): boolean {
+  const e = ext.toLowerCase();
+  if (kind === 'image') return IMAGE_EXTS.has(e);
+  if (kind === 'pdf') return PDF_EXTS.has(e);
+  if (kind === 'document') return DOC_EXTS.has(e) || PDF_EXTS.has(e);
+  if (kind === 'spreadsheet') return SHEET_EXTS.has(e);
+  return (
+    IMAGE_EXTS.has(e) ||
+    PDF_EXTS.has(e) ||
+    DOC_EXTS.has(e) ||
+    SHEET_EXTS.has(e)
+  );
+}
+
+/** Newest matching file under Downloads/Desktop (mtime). */
+function findLatestUploadFile(kind: UploadKind, accept?: string | null): string | null {
+  const acceptExts = (accept || '')
+    .split(',')
+    .map((p) => p.trim().toLowerCase())
+    .filter((p) => p.startsWith('.') && p.length <= 8)
+    .map((p) => (p.includes('/') ? '' : p))
+    .filter(Boolean);
+
+  let best: { path: string; mtime: number } | null = null;
+  let bestAny: { path: string; mtime: number } | null = null;
+
+  for (const dir of userFileDirs()) {
+    let entries: string[] = [];
+    try {
+      entries = fs.readdirSync(dir);
+    } catch {
+      continue;
+    }
+    for (const name of entries) {
+      if (name.startsWith('.') || name === 'desktop.ini') continue;
+      const full = path.join(dir, name);
+      let st: fs.Stats;
+      try {
+        st = fs.statSync(full);
+      } catch {
+        continue;
+      }
+      if (!st.isFile() || st.size <= 0) continue;
+      const ext = path.extname(name).toLowerCase();
+      if (!ext) continue;
+      const mtime = st.mtimeMs;
+      if (!bestAny || mtime > bestAny.mtime) {
+        bestAny = { path: full, mtime };
+      }
+      const acceptHit = acceptExts.length ? acceptExts.includes(ext) : false;
+      const kindHit = extMatchesKind(ext, kind);
+      if (acceptHit || kindHit) {
+        if (!best || mtime > best.mtime) {
+          best = { path: full, mtime };
+        }
+      }
+    }
+  }
+  return best?.path || (kind === 'any' ? bestAny?.path || null : null) || bestAny?.path || null;
 }
 
 export class BrowserTestService {
@@ -115,6 +230,10 @@ export class BrowserTestService {
   private activePanel: DevToolsPanel = 'console';
   private cdp: CDPSession | null = null;
   private readonly commands: CommandRunner;
+  private lastAutoUpload: { path: string; kind: UploadKind; accept?: string } | null = null;
+  private lastAutoUploadError: string | null = null;
+  private lastRevealKey = '';
+  private lastRevealAt = 0;
 
   constructor(commands: CommandRunner) {
     this.commands = commands;
@@ -149,7 +268,6 @@ export class BrowserTestService {
   /**
    * Seed Chromium Preferences so DevTools docks on the RIGHT at ~320px.
    * Must be written before launch (or while browser is closed).
-   * Values are double-encoded strings — Chromium DevTools convention.
    */
   private seedDevToolsPreferences(panel: DevToolsPanel = 'console') {
     const defaultDir = path.join(this.userDataDir, 'Default');
@@ -167,7 +285,6 @@ export class BrowserTestService {
     data.devtools = data.devtools || {};
     data.devtools.preferences = {
       ...(data.devtools.preferences || {}),
-      // Chromium stores DevTools pref values as JSON-encoded strings (extra quotes).
       currentDockState: '"right"',
       'last-dock-state': '"right"',
       lastDockState: '"right"',
@@ -212,6 +329,10 @@ export class BrowserTestService {
       if (this.consoleLog.length > 120) {
         this.consoleLog.shift();
       }
+    });
+    // Never leave OS file dialogs open — auto-pick newest matching file from Downloads.
+    page.on('filechooser', (chooser) => {
+      void this.handleFileChooser(chooser);
     });
     page.on('response', (res) => {
       const status = res.status();
@@ -273,6 +394,207 @@ export class BrowserTestService {
     });
   }
 
+  private async handleFileChooser(chooser: import('playwright').FileChooser): Promise<void> {
+    try {
+      let accept: string | null = null;
+      try {
+        accept = await chooser.element().getAttribute('accept');
+      } catch {
+        accept = null;
+      }
+      const kind = inferUploadKind(accept);
+      const file = findLatestUploadFile(kind, accept);
+      if (!file) {
+        this.lastAutoUploadError =
+          `No matching file in Downloads/Desktop for kind=${kind}` +
+          (accept ? ` accept=${accept}` : '');
+        await this.showUploadToast(
+          this.page,
+          null,
+          kind,
+          'No matching file found in Downloads/Desktop',
+        );
+        await chooser.setFiles([]).catch(() => undefined);
+        return;
+      }
+      // Show File Manager + banner first, then attach (user can see what is uploading)
+      await this.prepareVisibleUpload(file, kind);
+      await chooser.setFiles(file);
+      this.lastAutoUpload = { path: file, kind, accept: accept || undefined };
+      this.lastAutoUploadError = null;
+    } catch (e: any) {
+      this.lastAutoUploadError = e?.message || String(e);
+    }
+  }
+
+  /** Open OS File Manager on the chosen file + banner in the test browser. */
+  private async prepareVisibleUpload(filePath: string, kind: UploadKind): Promise<void> {
+    const name = path.basename(filePath);
+    const folder = path.dirname(filePath);
+    const key = `${kind}:${path.resolve(filePath)}`;
+    const now = Date.now();
+    const alreadyShown = this.lastRevealKey === key && now - this.lastRevealAt < 2500;
+    this.lastRevealKey = key;
+    this.lastRevealAt = now;
+
+    if (!alreadyShown) {
+      this.revealInFileManager(filePath);
+      await this.showUploadToast(
+        this.page,
+        filePath,
+        kind,
+        `Opening File Manager → selecting latest ${kind}: ${name}`,
+      );
+      await sleep(1100);
+    }
+    await this.showUploadToast(
+      this.page,
+      filePath,
+      kind,
+      `Uploading ${name} from ${folder}`,
+    );
+  }
+
+  /** Reveal file in Windows Explorer / Finder / file manager (visible to the user). */
+  private revealInFileManager(filePath: string): void {
+    try {
+      const resolved = path.resolve(filePath);
+      if (!fs.existsSync(resolved)) {
+        return;
+      }
+      if (process.platform === 'win32') {
+        // Opens Explorer with the file highlighted — user sees the selection
+        spawn('explorer.exe', [`/select,${resolved}`], {
+          detached: true,
+          stdio: 'ignore',
+          windowsHide: false,
+        }).unref();
+        return;
+      }
+      if (process.platform === 'darwin') {
+        spawn('open', ['-R', resolved], { detached: true, stdio: 'ignore' }).unref();
+        return;
+      }
+      spawn('xdg-open', [path.dirname(resolved)], { detached: true, stdio: 'ignore' }).unref();
+    } catch {
+      // non-fatal — upload still proceeds
+    }
+  }
+
+  /** Pink OLKIL banner inside the headed browser — stays 10s then auto-hides. */
+  private async showUploadToast(
+    page: Page | null,
+    filePath: string | null,
+    kind: UploadKind,
+    message: string,
+  ): Promise<void> {
+    if (!page || page.isClosed()) {
+      return;
+    }
+    try {
+      await page.evaluate(
+        ({ msg, kindLabel, fileName, folderPath, hideAfterMs }) => {
+          const id = 'olkil-upload-toast';
+          const timerKey = '__olkilUploadToastTimer';
+          let el = document.getElementById(id);
+          if (!el) {
+            el = document.createElement('div');
+            el.id = id;
+            el.setAttribute('role', 'status');
+            Object.assign(el.style, {
+              position: 'fixed',
+              top: '16px',
+              left: '50%',
+              transform: 'translateX(-50%)',
+              zIndex: '2147483647',
+              maxWidth: 'min(560px, 92vw)',
+              padding: '12px 16px',
+              borderRadius: '12px',
+              background: 'linear-gradient(165deg, #fe019a 0%, #9b0060 100%)',
+              color: '#fff',
+              fontFamily: 'Segoe UI, system-ui, sans-serif',
+              fontSize: '13px',
+              fontWeight: '600',
+              lineHeight: '1.35',
+              boxShadow: '0 12px 40px rgba(0,0,0,0.45), 0 0 0 1px rgba(255,255,255,0.18)',
+              pointerEvents: 'none',
+              letterSpacing: '0.01em',
+              opacity: '1',
+              transition: 'opacity 0.35s ease',
+            } as CSSStyleDeclaration);
+            document.documentElement.appendChild(el);
+          }
+          el.style.opacity = '1';
+          el.style.display = 'block';
+          el.innerHTML =
+            `<div style="opacity:.85;font-size:10px;letter-spacing:.12em;text-transform:uppercase;margin-bottom:4px">OLKIL Live Test · ${kindLabel}</div>` +
+            `<div>${msg}</div>` +
+            (fileName
+              ? `<div style="opacity:.95;font-weight:600;margin-top:6px;font-size:12px">File: ${fileName}</div>`
+              : '') +
+            (folderPath
+              ? `<div style="opacity:.8;font-weight:500;margin-top:2px;font-size:11px;word-break:break-all">Folder: ${folderPath}</div>`
+              : '') +
+            `<div style="opacity:.65;font-size:10px;margin-top:8px">Visible for ${Math.round(
+              hideAfterMs / 1000,
+            )}s</div>`;
+
+          const w = window as unknown as Record<string, ReturnType<typeof setTimeout> | undefined>;
+          if (w[timerKey]) {
+            clearTimeout(w[timerKey]);
+          }
+          w[timerKey] = setTimeout(() => {
+            const node = document.getElementById(id);
+            if (!node) {
+              return;
+            }
+            node.style.opacity = '0';
+            setTimeout(() => {
+              node.remove();
+            }, 400);
+            w[timerKey] = undefined;
+          }, hideAfterMs);
+        },
+        {
+          msg: message,
+          kindLabel: kind.toUpperCase(),
+          fileName: filePath ? path.basename(filePath) : '',
+          folderPath: filePath ? path.dirname(filePath) : '',
+          hideAfterMs: 10_000,
+        },
+      );
+    } catch {
+      // page may be navigating
+    }
+  }
+
+  /** Pick newest Downloads/Desktop file matching accept / kind / optional path. */
+  resolveUploadPath(opts?: {
+    path?: string;
+    accept?: string | null;
+    kind?: UploadKind | string;
+    hint?: string;
+  }): { path: string; kind: UploadKind } | { error: string } {
+    if (opts?.path) {
+      const p = path.resolve(opts.path);
+      if (fs.existsSync(p) && fs.statSync(p).isFile()) {
+        const kind = inferUploadKind(opts.accept, opts.hint || path.extname(p));
+        return { path: p, kind };
+      }
+      return { error: `File not found: ${opts.path}` };
+    }
+    const kind = (opts?.kind as UploadKind) || inferUploadKind(opts?.accept, opts?.hint);
+    const file = findLatestUploadFile(kind, opts?.accept);
+    if (!file) {
+      return {
+        error:
+          `No recent ${kind} file in Downloads/Desktop. ` +
+          `Put a sample file there and retry.`,
+      };
+    }
+    return { path: file, kind };
+  }
+
   private async attachCdp(page: Page) {
     if (!this.context) {
       return;
@@ -280,7 +602,6 @@ export class BrowserTestService {
     try {
       this.cdp?.detach().catch(() => undefined);
       this.cdp = await this.context.newCDPSession(page);
-      // Enable domains the agent relies on for accurate evidence
       await this.cdp.send('Network.enable').catch(() => undefined);
       await this.cdp.send('Runtime.enable').catch(() => undefined);
       await this.cdp.send('Log.enable').catch(() => undefined);
@@ -292,7 +613,6 @@ export class BrowserTestService {
   async launch(headed = true, forceNew = false): Promise<BrowserActionResult> {
     const pw = this.loadPlaywright();
 
-    // Reuse session so DevTools / page state is not wiped mid-debug
     if (!forceNew && this.isAlive()) {
       return {
         ok: true,
@@ -314,7 +634,6 @@ export class BrowserTestService {
     this.devtoolsOpen = false;
 
     try {
-      // Prefs before launch: right dock, narrow panel — DevTools stays CLOSED until agent asks
       this.seedDevToolsPreferences('console');
 
       this.context = await pw.chromium.launchPersistentContext(this.userDataDir, {
@@ -326,14 +645,12 @@ export class BrowserTestService {
           `--install-autogenerated-theme=${OLKIL_PINK_RGB}`,
           `--window-size=${WINDOW_W},${WINDOW_H}`,
           '--window-position=100,60',
-          // Do NOT pass --auto-open-devtools-for-tabs (on-demand only)
         ],
       });
       this.browser = this.context.browser();
 
       const pages = this.context.pages();
       this.page = pages[0] || (await this.context.newPage());
-      // Close extra blank tabs from profile restore
       for (const p of pages.slice(1)) {
         await p.close().catch(() => undefined);
       }
@@ -341,7 +658,6 @@ export class BrowserTestService {
       this.attachPageListeners(this.page);
       await this.attachCdp(this.page);
 
-      // Ensure window bounds are comfortable (not huge)
       try {
         const b = this.browser;
         if (b) {
@@ -369,7 +685,7 @@ export class BrowserTestService {
           }
         }
       } catch {
-        // non-fatal — headed window still usable
+        // non-fatal
       }
 
       return {
@@ -424,16 +740,16 @@ export class BrowserTestService {
 
   private async snapshotOf(page: Page): Promise<string> {
     try {
-      const snap = await page.locator('body').ariaSnapshot({ timeout: 8000 });
-      return truncate(snap || '(empty snapshot)', 12_000);
+      const snap = await page.locator('body').ariaSnapshot({ timeout: 3500 });
+      return truncate(snap || '(empty snapshot)', 8_000);
     } catch {
       try {
         const items = await page.evaluate(() => {
           const nodes = Array.from(
             document.querySelectorAll(
-              'a,button,input,textarea,select,[role="button"],[role="link"],[role="textbox"]',
+              'a,button,input,textarea,select,[role="button"],[role="link"],[role="textbox"],[type="file"]',
             ),
-          ).slice(0, 60);
+          ).slice(0, 50);
           return nodes.map((el, i) => {
             const h = el as HTMLElement;
             const tag = h.tagName.toLowerCase();
@@ -445,7 +761,10 @@ export class BrowserTestService {
               h.getAttribute('name') ||
               '';
             const type = h.getAttribute('type') || '';
-            return `- e${i + 1}: role=${role} name=${JSON.stringify(name)} type=${type}`;
+            const accept = h.getAttribute('accept') || '';
+            return `- e${i + 1}: role=${role} name=${JSON.stringify(name)} type=${type}${
+              accept ? ` accept=${JSON.stringify(accept)}` : ''
+            }`;
           });
         });
         const title = await page.title();
@@ -462,22 +781,34 @@ export class BrowserTestService {
       this.screenshotDir,
       `${label}-${Date.now().toString(36)}.png`,
     );
-    await page.screenshot({ path: file, fullPage: false });
+    await page.screenshot({ path: file, fullPage: false, timeout: 8_000 });
     return file;
+  }
+
+  private uploadNote(): string {
+    if (this.lastAutoUpload) {
+      return ` Auto-uploaded ${this.lastAutoUpload.kind}: ${path.basename(this.lastAutoUpload.path)}.`;
+    }
+    if (this.lastAutoUploadError) {
+      return ` Upload note: ${this.lastAutoUploadError}.`;
+    }
+    return '';
   }
 
   private async baseResult(
     action: string,
     message: string,
-    opts: { screenshot?: boolean; ok?: boolean; error?: string } = {},
+    opts: { screenshot?: boolean; ok?: boolean; error?: string; snap?: boolean } = {},
   ): Promise<BrowserActionResult> {
     const page = this.page;
     const url = page ? page.url() : this.lastUrl;
     let snapshot = '';
     let screenshotPath: string | undefined;
     if (page && !page.isClosed()) {
-      snapshot = await this.snapshotOf(page);
-      if (opts.screenshot !== false) {
+      if (opts.snap !== false) {
+        snapshot = await this.snapshotOf(page);
+      }
+      if (opts.screenshot === true) {
         try {
           screenshotPath = await this.takeScreenshot(page, action);
         } catch {
@@ -485,10 +816,19 @@ export class BrowserTestService {
         }
       }
     }
+    const uploadSuffix = this.uploadNote();
+    // Clear one-shot upload notes after reporting (avoid repeating forever)
+    const lastUpload = this.lastAutoUpload
+      ? { path: this.lastAutoUpload.path, kind: this.lastAutoUpload.kind }
+      : undefined;
+    if (uploadSuffix) {
+      this.lastAutoUpload = null;
+      this.lastAutoUploadError = null;
+    }
     return {
       ok: opts.ok !== false,
       action,
-      message,
+      message: `${message}${uploadSuffix}`,
       url,
       title: page && !page.isClosed() ? await page.title().catch(() => '') : '',
       snapshot,
@@ -497,6 +837,7 @@ export class BrowserTestService {
       networkFailures: this.recentNetwork(),
       networkRequests: this.recentApiRequests(),
       devtoolsOpen: this.devtoolsOpen,
+      lastUpload,
       error: opts.error,
     };
   }
@@ -629,27 +970,28 @@ export class BrowserTestService {
       throw new Error(`Invalid URL: ${url}`);
     }
     this.lastUrl = target;
-    // Keep DevTools open across navigations — do not relaunch
     try {
-      const res = await page.goto(target, { waitUntil: 'domcontentloaded', timeout: 45_000 });
-      await sleep(400);
+      const res = await page.goto(target, { waitUntil: 'domcontentloaded', timeout: 25_000 });
+      await sleep(80);
       return this.baseResult(
         'goto',
         `Navigated to ${target} (HTTP ${res?.status() ?? '?'}).`,
+        { screenshot: false },
       );
     } catch (e: any) {
       return this.baseResult('goto', `Navigation issue: ${e?.message || e}`, {
         ok: false,
         error: e?.message || String(e),
+        screenshot: false,
       });
     }
   }
 
   async reload(): Promise<BrowserActionResult> {
     const page = this.requirePage();
-    await page.reload({ waitUntil: 'domcontentloaded', timeout: 45_000 });
-    await sleep(300);
-    return this.baseResult('reload', `Reloaded ${page.url()}.`);
+    await page.reload({ waitUntil: 'domcontentloaded', timeout: 25_000 });
+    await sleep(60);
+    return this.baseResult('reload', `Reloaded ${page.url()}.`, { screenshot: false });
   }
 
   private resolveLocator(page: Page, req: BrowserActionRequest) {
@@ -674,11 +1016,14 @@ export class BrowserTestService {
   async click(req: BrowserActionRequest): Promise<BrowserActionResult> {
     const page = this.requirePage();
     const loc = this.resolveLocator(page, req);
-    await loc.click({ timeout: req.timeoutMs ?? 12_000 });
-    await sleep(250);
+    const timeout = req.timeoutMs ?? 8_000;
+    // filechooser listener auto-uploads — no OS dialog hang
+    await loc.click({ timeout });
+    await sleep(100);
     return this.baseResult(
       'click',
       `Clicked ${req.role || req.selector || req.text || req.testid || req.name}.`,
+      { screenshot: false },
     );
   }
 
@@ -688,7 +1033,40 @@ export class BrowserTestService {
       throw new Error('fill requires value');
     }
     const loc = this.resolveLocator(page, req);
-    await loc.fill(String(req.value), { timeout: req.timeoutMs ?? 12_000 });
+    const timeout = req.timeoutMs ?? 8_000;
+
+    // File inputs: setInputFiles instead of fill (avoids stuck OS dialog)
+    const meta = await loc
+      .evaluate((el) => {
+        const h = el as HTMLInputElement;
+        return {
+          tag: (h.tagName || '').toLowerCase(),
+          type: (h.getAttribute('type') || '').toLowerCase(),
+          accept: h.getAttribute('accept') || '',
+        };
+      })
+      .catch(() => null);
+
+    if (meta?.type === 'file') {
+      const picked = this.resolveUploadPath({
+        path: String(req.value).trim() || undefined,
+        accept: meta.accept,
+        hint: meta.accept || 'upload',
+      });
+      if ('error' in picked) {
+        return this.baseResult('fill', picked.error, { ok: false, error: picked.error, screenshot: false });
+      }
+      await this.prepareVisibleUpload(picked.path, picked.kind);
+      await loc.setInputFiles(picked.path);
+      this.lastAutoUpload = { path: picked.path, kind: picked.kind, accept: meta.accept || undefined };
+      return this.baseResult(
+        'fill',
+        `Opened File Manager and uploaded ${picked.kind} file ${path.basename(picked.path)}.`,
+        { screenshot: false },
+      );
+    }
+
+    await loc.fill(String(req.value), { timeout });
     return this.baseResult(
       'fill',
       `Filled ${req.role || req.selector || req.name || req.testid} with ${JSON.stringify(
@@ -704,15 +1082,15 @@ export class BrowserTestService {
       throw new Error('type requires value');
     }
     const loc = this.resolveLocator(page, req);
-    await loc.click({ timeout: req.timeoutMs ?? 12_000 });
-    await page.keyboard.type(String(req.value), { delay: 12 });
+    await loc.click({ timeout: req.timeoutMs ?? 8_000 });
+    await page.keyboard.type(String(req.value), { delay: 4 });
     return this.baseResult('type', `Typed into target.`, { screenshot: false });
   }
 
   async press(key: string): Promise<BrowserActionResult> {
     const page = this.requirePage();
     await page.keyboard.press(key);
-    return this.baseResult('press', `Pressed ${key}.`, { screenshot: false });
+    return this.baseResult('press', `Pressed ${key}.`, { screenshot: false, snap: false });
   }
 
   async snapshot(): Promise<BrowserActionResult> {
@@ -724,7 +1102,66 @@ export class BrowserTestService {
 
   async screenshot(): Promise<BrowserActionResult> {
     this.requirePage();
-    return this.baseResult('screenshot', 'Screenshot captured.');
+    return this.baseResult('screenshot', 'Screenshot captured.', { screenshot: true });
+  }
+
+  /** Explicit upload — picks newest matching Downloads file when path omitted. */
+  async upload(req: BrowserActionRequest = {}): Promise<BrowserActionResult> {
+    const page = this.requirePage();
+    const picked = this.resolveUploadPath({
+      path: req.value || undefined,
+      accept: req.accept,
+      kind: req.kind,
+      hint: req.name || req.text || req.selector,
+    });
+    if ('error' in picked) {
+      return this.baseResult('upload', picked.error, { ok: false, error: picked.error, screenshot: false });
+    }
+
+    // Prefer targeting a file input; else wait for next filechooser from a click
+    try {
+      // Show File Manager first so the user sees which file will be used
+      await this.prepareVisibleUpload(picked.path, picked.kind);
+
+      if (req.selector || req.role || req.name || req.testid || req.text) {
+        const loc = this.resolveLocator(page, req);
+        const isFile = await loc
+          .evaluate((el) => (el as HTMLInputElement).type === 'file')
+          .catch(() => false);
+        if (isFile) {
+          await loc.setInputFiles(picked.path);
+        } else {
+          const [chooser] = await Promise.all([
+            page.waitForEvent('filechooser', { timeout: req.timeoutMs ?? 8_000 }),
+            loc.click({ timeout: req.timeoutMs ?? 8_000 }),
+          ]);
+          await chooser.setFiles(picked.path);
+        }
+      } else {
+        const fileInput = page.locator('input[type="file"]').first();
+        if ((await fileInput.count()) > 0) {
+          await fileInput.setInputFiles(picked.path);
+        } else {
+          return this.baseResult(
+            'upload',
+            `Resolved ${picked.path} but no file input / chooser target. Click the Upload control first.`,
+            { ok: false, screenshot: false },
+          );
+        }
+      }
+      this.lastAutoUpload = { path: picked.path, kind: picked.kind };
+      return this.baseResult(
+        'upload',
+        `Opened File Manager → selected latest ${picked.kind}: ${path.basename(picked.path)} (${picked.path}).`,
+        { screenshot: false },
+      );
+    } catch (e: any) {
+      return this.baseResult('upload', `Upload failed: ${e?.message || e}`, {
+        ok: false,
+        error: e?.message || String(e),
+        screenshot: false,
+      });
+    }
   }
 
   async consoleDump(): Promise<BrowserActionResult> {
@@ -820,7 +1257,7 @@ export class BrowserTestService {
           command,
           cwd: root,
           background: true,
-          settleMs: 2200,
+          settleMs: 1200,
         });
         commandId = run.id;
         urls = run.urls.length ? run.urls : detect.suggestedUrls;
@@ -843,7 +1280,7 @@ export class BrowserTestService {
       'http://127.0.0.1:3000';
 
     if (!request.url && commandId) {
-      const deadline = Date.now() + (request.readyTimeoutMs ?? 45_000);
+      const deadline = Date.now() + (request.readyTimeoutMs ?? 30_000);
       while (Date.now() < deadline) {
         const out = this.commands.getOutput(commandId);
         if (out?.urls?.length) {
@@ -852,21 +1289,21 @@ export class BrowserTestService {
           break;
         }
         for (const candidate of detect.suggestedUrls) {
-          const probe = await waitForHttp(candidate, 900);
+          const probe = await waitForHttp(candidate, 600);
           if (probe.ok) {
             target = candidate;
             urls = [candidate];
             break;
           }
         }
-        if (urls.length && urls[0] === target && (await waitForHttp(target, 900)).ok) {
+        if (urls.length && urls[0] === target && (await waitForHttp(target, 600)).ok) {
           break;
         }
-        await sleep(1000);
+        await sleep(350);
       }
     }
 
-    const ready = await waitForHttp(target, request.readyTimeoutMs ?? 20_000);
+    const ready = await waitForHttp(target, request.readyTimeoutMs ?? 15_000);
     if (!ready.ok) {
       notes.push(`URL not ready (${target}): ${ready.error || 'unknown'}`);
     }
@@ -890,8 +1327,11 @@ export class BrowserTestService {
     if (request.goal) {
       notes.push(`Goal: ${request.goal}`);
     }
+      notes.push(
+        'File uploads: File Manager opens with the latest matching file selected (Downloads/Desktop), plus an on-page OLKIL banner — so you can see what is uploading.',
+      );
     notes.push(
-      'Next: browser_snapshot → click/fill. Prefer browser_console / browser_network for evidence. Open browser_devtools only when you need the visible Console/Network panel (right dock). Close with action=close when done.',
+      'Next: browser_snapshot → click/fill (fast). Prefer browser_console / browser_network for evidence. browser_devtools only if needed.',
     );
 
     return {

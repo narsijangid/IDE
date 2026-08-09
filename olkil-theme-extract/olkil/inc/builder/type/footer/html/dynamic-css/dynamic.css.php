@@ -1,0 +1,100 @@
+<?php
+/**
+ * HTML control - Dynamic CSS
+ *
+ * @package Astra Builder
+ * @since 3.0.0
+ */
+
+if ( ! defined( 'ABSPATH' ) ) {
+	exit; // Exit if accessed directly.
+}
+
+/**
+ * Heading Colors
+ */
+add_filter( 'astra_dynamic_theme_css', 'astra_fb_html_dynamic_css' );
+
+/**
+ * Dynamic CSS
+ *
+ * @param  string $dynamic_css          Astra Dynamic CSS.
+ * @param  string $dynamic_css_filtered Astra Dynamic CSS Filters.
+ * @return String Generated dynamic CSS for Heading Colors.
+ *
+ * @since 3.0.0
+ */
+function astra_fb_html_dynamic_css( $dynamic_css, $dynamic_css_filtered = '' ) {
+
+	$dynamic_css     .= Astra_Html_Component_Dynamic_CSS::astra_html_dynamic_css( 'footer' );
+	$static_css_flg   = false;
+	$stati_css_output = '';
+	for ( $index = 1; $index <= Astra_Builder_Helper::$num_of_footer_html; $index++ ) {
+
+		if ( ! Astra_Builder_Helper::is_component_loaded( 'html-' . $index, 'footer' ) ) {
+			continue;
+		}
+
+		$static_css_flg = true;
+		$selector       = '.footer-widget-area[data-section="section-fb-html-' . $index . '"]';
+
+		$alignment = astra_get_option( 'footer-html-' . $index . '-alignment' );
+
+		$desktop_alignment = isset( $alignment['desktop'] ) ? $alignment['desktop'] : '';
+		$tablet_alignment  = isset( $alignment['tablet'] ) ? $alignment['tablet'] : '';
+		$mobile_alignment  = isset( $alignment['mobile'] ) ? $alignment['mobile'] : '';
+
+		$is_rtl = is_rtl();
+
+		$desktop_text_alignment = $is_rtl ?
+			( $desktop_alignment === 'left' ? 'right' : ( $desktop_alignment === 'right' ? 'left' : $desktop_alignment ) )
+			: $desktop_alignment;
+
+		$tablet_text_alignment = $is_rtl ?
+			( $tablet_alignment === 'left' ? 'right' : ( $tablet_alignment === 'right' ? 'left' : $tablet_alignment ) )
+			: $tablet_alignment;
+
+		$mobile_text_alignment = $is_rtl ?
+			( $mobile_alignment === 'left' ? 'right' : ( $mobile_alignment === 'right' ? 'left' : $mobile_alignment ) )
+			: $mobile_alignment;
+
+		/**
+		 * Copyright CSS.
+		 */
+		$css_output_desktop = array(
+			$selector . ' .ast-builder-html-element' => array(
+				'text-align' => $desktop_text_alignment,
+			),
+		);
+
+		$css_output_tablet = array(
+			$selector . ' .ast-builder-html-element' => array(
+				'text-align' => $tablet_text_alignment,
+			),
+		);
+
+		$css_output_mobile = array(
+			$selector . ' .ast-builder-html-element' => array(
+				'text-align' => $mobile_text_alignment,
+			),
+		);
+
+		/* Parse CSS from array() */
+		$css_output  = astra_parse_css( $css_output_desktop );
+		$css_output .= astra_parse_css( $css_output_tablet, '', astra_get_tablet_breakpoint() );
+		$css_output .= astra_parse_css( $css_output_mobile, '', astra_get_mobile_breakpoint() );
+
+		$dynamic_css .= $css_output;
+	}
+
+	if ( true === $static_css_flg ) {
+		$stati_css_output .= astra_parse_css(
+			array(
+				'.footer-widget-area[data-section^="section-fb-html-"] .ast-builder-html-element' => array(
+					'text-align' => 'center',
+				),
+			)
+		);
+	}
+	return $stati_css_output . $dynamic_css;
+}

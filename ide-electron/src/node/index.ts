@@ -17,6 +17,7 @@ import { MiniCodeDesktopNodeModule } from './module';
 
 import { ExtensionManagerModule } from '../extensionManager/node';
 import { OlkilAiNodeModule } from '../modules/olkil-ai/node';
+import { OlkilAuthNodeModule } from '../modules/olkil-auth/node';
 
 export const CommonNodeModules: ConstructorOf<NodeModule>[] = [
   ServerCommonModule,
@@ -33,7 +34,7 @@ export const CommonNodeModules: ConstructorOf<NodeModule>[] = [
 ];
 
 startServer({
-  modules: [...CommonNodeModules, MiniCodeDesktopNodeModule, OlkilAiNodeModule],
+  modules: [...CommonNodeModules, MiniCodeDesktopNodeModule, OlkilAiNodeModule, OlkilAuthNodeModule],
 }).then(() => {
   console.log('ready');
   if (process.send) {
