@@ -5,6 +5,7 @@ import { WorkbenchEditorService } from '@opensumi/ide-editor';
 import { IEditorDocumentModelService } from '@opensumi/ide-editor/lib/browser';
 import { IFileServiceClient } from '@opensumi/ide-file-service/lib/common';
 import { IWorkspaceService } from '@opensumi/ide-workspace/lib/common';
+import { IFileTreeService } from '@opensumi/ide-file-tree-next/lib/common';
 import * as path from 'path';
 import {
   ActivityInfo,
@@ -124,6 +125,9 @@ export class OlkilChatService extends Disposable implements IOlkilChatService {
 
   @Autowired(IWorkspaceService)
   private workspaceService!: IWorkspaceService;
+
+  @Autowired(IFileTreeService)
+  private fileTreeService!: IFileTreeService;
 
   @Autowired(IMarkerService)
   private markerService!: IMarkerService;
@@ -2290,16 +2294,25 @@ Read the highest-scoring evidence in trail order. For a bug, trace UI → handle
    * Live tools / thinking / file-change cards surface in the Olkil chat UI.
    */
   private async runClineEngine(pendingId: string, prompt: string): Promise<string> {
+    const workspaceRoot = this.workspaceRoot();
+    // No folder open: never fall back to the IDE codebase. Soft ask only when
+    // the user wants project edits; basic Q&A can still answer in chat.
+    if (!workspaceRoot) {
+      if (this.wantsProjectFolder(prompt)) {
+        return 'Please open your project folder in OLKIL first (File → Open Folder), then ask me again and I’ll work only inside that folder.';
+      }
+    }
+
     const runId = `olkil_${Date.now()}_${++msgSeq}`;
     this.activeClineRunId = runId;
     const active = this.editorService.currentResource?.uri.codeUri.fsPath;
-    const projectRules = this.getProjectRules();
+    const projectRules = workspaceRoot ? this.getProjectRules() : '';
 
     this.setStatus('Working…');
     const runPromise = this.aiNode.clineRun({
       runId,
       prompt,
-      workspaceRoot: this.workspaceRoot(),
+      workspaceRoot: workspaceRoot || '',
       activeFile: active,
       mode: this.chatMode,
       modelId: this.modelId,
@@ -2313,6 +2326,21 @@ Read the highest-scoring evidence in trail order. For a bug, trace UI → handle
     let lastText = '';
     let lastReasoning = '';
     let thinkingStarted = false;
+    let explorerRefreshTimer: ReturnType<typeof setTimeout> | null = null;
+    const touchedExplorerPaths = new Set<string>();
+
+    const scheduleExplorerRefresh = (filePath: string) => {
+      touchedExplorerPaths.add(filePath);
+      if (explorerRefreshTimer) {
+        clearTimeout(explorerRefreshTimer);
+      }
+      // Debounce so rapid multi-file edits refresh the tree live without thrashing.
+      explorerRefreshTimer = setTimeout(() => {
+        explorerRefreshTimer = null;
+        void this.refreshExplorerLive([...touchedExplorerPaths]);
+        touchedExplorerPaths.clear();
+      }, 120);
+    };
 
     const applyState = async (st: Awaited<ReturnType<IOlkilAiNodeService['clineGetState']>>) => {
       const status = (st.status || '')
@@ -2385,6 +2413,8 @@ Read the highest-scoring evidence in trail order. For a bug, trace UI → handle
             beforeContent: fc.beforeContent,
             afterContent: fc.afterContent,
           });
+          scheduleExplorerRefresh(fc.path);
+          // Open as soon as the file exists so the user sees live progress.
           void this.editorService.open(URI.file(fc.path)).catch(() => undefined);
         } catch {
           // ignore card errors
@@ -2417,6 +2447,16 @@ Read the highest-scoring evidence in trail order. For a bug, trace UI → handle
       await this.aiNode.clineCancel(runId);
       return (lastText || '').trim() || 'Stopped.';
     } finally {
+      if (explorerRefreshTimer) {
+        clearTimeout(explorerRefreshTimer);
+        explorerRefreshTimer = null;
+      }
+      if (touchedExplorerPaths.size > 0) {
+        void this.refreshExplorerLive([...touchedExplorerPaths]);
+        touchedExplorerPaths.clear();
+      } else {
+        void this.refreshExplorerLive([]);
+      }
       this.activeClineRunId = null;
     }
   }
@@ -4949,10 +4989,48 @@ Read the highest-scoring evidence in trail order. For a bug, trace UI → handle
       // fall through
     }
     const fromConfig = this.appConfig.workspaceDir || '';
-    if (fromConfig && fs.existsSync(fromConfig)) {
+    // appConfig can point at the IDE install during boot — never treat that as
+    // the user's project unless they explicitly opened it (roots above).
+    if (fromConfig && fs.existsSync(fromConfig) && !this.isIdeInstallPath(fromConfig)) {
       return fromConfig;
     }
-    return process.cwd();
+    // Never fall back to process.cwd() — that is usually the IDE install folder.
+    return '';
+  }
+
+  /** True when the user is asking to create/edit files in a project. */
+  private wantsProjectFolder(text: string): boolean {
+    if (this.requiresImplementation(text)) return true;
+    const t = (text || '').toLowerCase();
+    return /\b(landing\s*page|website|webpage|html|css|react|next\.?js|folder|project|file|code|banao|bana|karo|likh|create|build|make|write|add|edit|fix|update)\b/i.test(
+      t,
+    );
+  }
+
+  private isIdeInstallPath(candidate: string): boolean {
+    const n = path.resolve(candidate).replace(/\\/g, '/').toLowerCase();
+    if (n.includes('/ide-electron/') || n.endsWith('/ide-electron')) return true;
+    if (n.includes('/packages/olkil-engine')) return true;
+    return false;
+  }
+
+  /**
+   * Refresh the sidebar file tree as soon as agent tools create/edit files,
+   * instead of waiting until the turn finishes.
+   */
+  private async refreshExplorerLive(filePaths: string[]): Promise<void> {
+    try {
+      await this.fileTreeService?.refresh?.();
+    } catch {
+      // Explorer may not be ready yet.
+    }
+    for (const p of filePaths) {
+      try {
+        await this.refreshRepositoryIndex([p]);
+      } catch {
+        // ignore
+      }
+    }
   }
 
   private resolvePath(input: string): string {

@@ -1,6 +1,7 @@
 /**
  * OLKIL coding-agent runtime host (Node).
- * Engine: @cline/sdk Agent + default tools. User-facing branding: OLKIL only.
+ * Engine: vendored @olkil/engine (forked Cline SDK source under packages/olkil-engine).
+ * User-facing branding: OLKIL only.
  */
 import * as fs from 'fs';
 import * as os from 'os';
@@ -115,7 +116,7 @@ async function loadSdk(): Promise<ClineSdk> {
     const dynamicImport = new Function('specifier', 'return import(specifier)') as (
       specifier: string,
     ) => Promise<ClineSdk>;
-    sdkPromise = dynamicImport('@cline/sdk').catch((err) => {
+    sdkPromise = dynamicImport('@olkil/engine').catch((err) => {
       sdkPromise = null;
       throw err;
     });
@@ -255,22 +256,66 @@ function resolveEditPath(cwd: string, inputPath: string): string {
 }
 
 /**
+ * Prefer the folder the user opened. Empty string means "no project" —
+ * never invent process.cwd() (IDE install) as a workspace.
+ */
+function resolveAgentCwd(requested: string | undefined): string {
+  const raw = (requested || '').trim();
+  if (!raw) return '';
+  try {
+    const cwd = path.resolve(raw);
+    if (fs.existsSync(cwd) && fs.statSync(cwd).isDirectory()) {
+      return cwd;
+    }
+  } catch {
+    // ignore
+  }
+  return '';
+}
+
+function assertPathInsideWorkspace(absPath: string, workspaceRoot: string): void {
+  if (!workspaceRoot) {
+    throw new Error('No project folder is open.');
+  }
+  const root = path.resolve(workspaceRoot);
+  const file = path.resolve(absPath);
+  const rel = path.relative(root, file);
+  if (rel.startsWith('..') || path.isAbsolute(rel)) {
+    throw new Error(
+      `Refusing to edit outside the opened workspace (${root}): ${file}`,
+    );
+  }
+}
+
+/**
  * Wrap Cline's editor executor so each write also emits an Olkil file-change
  * record (before/after) for Accept / Revert cards in chat.
  */
 function wrapEditorForFileChanges(
   editor: ((input: any, cwd: string, ctx: any) => Promise<string>) | undefined,
   onChange: (change: ClineRuntimeFileChange) => void,
+  workspaceRoot: string,
 ): typeof editor {
   if (!editor) return editor;
   return async (input: any, cwd: string, ctx: any) => {
+    const toolCwd = cwd || workspaceRoot;
     const rel = String(input?.path || '');
-    const abs = rel ? resolveEditPath(cwd, rel) : '';
+    const abs = rel ? resolveEditPath(toolCwd, rel) : '';
+    if (abs) {
+      assertPathInsideWorkspace(abs, workspaceRoot);
+    }
+    // Force relative paths to resolve against the opened workspace, not IDE cwd.
+    const safeInput =
+      rel && !path.isAbsolute(rel)
+        ? { ...input, path: path.relative(toolCwd, abs).replace(/\\/g, '/') || '.' }
+        : abs
+          ? { ...input, path: abs }
+          : input;
     const before = abs ? readFileSafe(abs) : null;
     const kind: FileChangeKind =
       before == null ? 'create' : input?.insert_line != null ? 'edit' : 'edit';
 
-    const result = await editor(input, cwd, ctx);
+    const result = await editor(safeInput, workspaceRoot, ctx);
 
     const after = abs ? readFileSafe(abs) : null;
     if (abs && (before !== after || kind === 'create')) {
@@ -349,13 +394,14 @@ export class OlkilClineRuntimeHost {
         );
       }
 
-      const cwd = request.workspaceRoot || process.cwd();
+      const cwd = resolveAgentCwd(request.workspaceRoot);
+      const hasWorkspace = Boolean(cwd);
       const mode = request.mode;
       const userMode = chatModeToUserMode(mode);
 
       const systemPrompt = buildClineStyleSystemPrompt({
         mode,
-        workspaceRoot: cwd,
+        workspaceRoot: cwd || '(no folder open)',
         activeFile: request.activeFile,
         platform: `${os.platform()} ${os.release()}`,
         ideName: 'OLKIL',
@@ -363,43 +409,64 @@ export class OlkilClineRuntimeHost {
         identity: `# Identity
 - Product / IDE: OLKIL. You are the coding agent inside OLKIL.
 - Never claim to be Cline, ChatGPT, Claude, Gemini, Laguna, or Poolside as the product name.
-- Selected model: ${option.publicName || option.displayName || option.label}.`,
+- Selected model: ${option.publicName || option.displayName || option.label}.
+${
+  hasWorkspace
+    ? `- Your ONLY workspace is: ${cwd}
+- Never edit, create, or delete files outside this workspace. Never touch the OLKIL IDE source/install tree.`
+    : `- No project folder is open. Answer general questions only.
+- Do NOT invent or use the IDE install path as a workspace.
+- If the user asks to create/edit project files, politely ask them to open their project folder first.`
+}`,
       });
 
-      const baseExecutors = sdk.createDefaultExecutors
-        ? sdk.createDefaultExecutors({})
+      const baseExecutors = hasWorkspace && sdk.createDefaultExecutors
+        ? sdk.createDefaultExecutors({
+            editor: { restrictToCwd: true },
+            applyPatch: { restrictToCwd: true },
+          })
         : {};
 
-      const executors = {
-        ...baseExecutors,
-        editor: wrapEditorForFileChanges(baseExecutors.editor, (change) => {
-          // Merge successive edits to same path into one card baseline
-          const existing = state.fileChanges.find(
-            (c) => path.resolve(c.path) === path.resolve(change.path),
-          );
-          if (existing) {
-            existing.afterContent = change.afterContent;
-            existing.kind = existing.beforeContent == null ? 'create' : 'edit';
-          } else {
-            state.fileChanges.push(change);
+      const executors = hasWorkspace
+        ? {
+            ...baseExecutors,
+            editor: wrapEditorForFileChanges(
+              baseExecutors.editor,
+              (change) => {
+                const existing = state.fileChanges.find(
+                  (c) => path.resolve(c.path) === path.resolve(change.path),
+                );
+                if (existing) {
+                  existing.afterContent = change.afterContent;
+                  existing.kind = existing.beforeContent == null ? 'create' : 'edit';
+                } else {
+                  state.fileChanges.push(change);
+                }
+                state.status = `Edited ${path.basename(change.path)}`;
+              },
+              cwd,
+            ),
           }
-          state.status = `Edited ${path.basename(change.path)}`;
-        }),
-      };
+        : {};
 
       const isPlanOrAsk = mode === 'plan' || mode === 'ask';
-      const tools = sdk.createDefaultTools({
-        executors,
-        enableReadFiles: true,
-        enableSearch: true,
-        enableBash: true,
-        enableWebFetch: true,
-        enableEditor: !isPlanOrAsk,
-        enableApplyPatch: false,
-        enableSkills: false,
-        enableAskQuestion: false,
-        enableSubmitAndExit: false,
-      });
+      // Only attach filesystem tools when a real project folder is open.
+      // Never pass process.cwd() — that would point at the IDE itself.
+      const tools = hasWorkspace
+        ? sdk.createDefaultTools({
+            executors,
+            cwd,
+            enableReadFiles: true,
+            enableSearch: true,
+            enableBash: true,
+            enableWebFetch: true,
+            enableEditor: !isPlanOrAsk,
+            enableApplyPatch: false,
+            enableSkills: false,
+            enableAskQuestion: false,
+            enableSubmitAndExit: false,
+          })
+        : [];
 
       const autoApprove = request.autoApprove !== false && mode === 'agent';
 
@@ -411,7 +478,7 @@ export class OlkilClineRuntimeHost {
         baseUrl,
         systemPrompt,
         tools,
-        maxIterations: mode === 'ask' ? 12 : mode === 'plan' ? 16 : 48,
+        maxIterations: hasWorkspace ? (mode === 'ask' ? 12 : mode === 'plan' ? 16 : 48) : 4,
         toolExecution: 'parallel',
         requestToolApproval: async () => ({ approved: autoApprove || mode === 'agent' }),
         onEvent: (event: any) => {

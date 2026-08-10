@@ -72,15 +72,21 @@ module.exports = createConfig({
       ) {
         return callback(null, 'commonjs ' + request);
       }
-      // Cline SDK is ESM-only — leave unbundled; loaded via runtime dynamic import().
+      // OLKIL engine is ESM — leave unbundled; loaded via runtime dynamic import().
       if (
+        request === '@olkil/engine' ||
+        request === '@olkil/core' ||
+        request === '@olkil/agents' ||
+        request === '@olkil/llms' ||
+        request === '@olkil/shared' ||
         request === '@cline/sdk' ||
         request === '@cline/core' ||
         request === '@cline/agents' ||
         request === '@cline/llms' ||
         request === '@cline/shared' ||
         request === 'undici' ||
-        (typeof request === 'string' && request.startsWith('@cline/'))
+        (typeof request === 'string' &&
+          (request.startsWith('@olkil/') || request.startsWith('@cline/')))
       ) {
         return callback(null, 'commonjs ' + request);
       }
