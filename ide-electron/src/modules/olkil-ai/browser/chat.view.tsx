@@ -772,7 +772,7 @@ export const OlkilAiChatView = ({ dormant = false }: OlkilAiChatViewProps) => {
               className={`${styles.modeBtn} ${chatMode === 'agent' ? styles.modeBtnActive : ''}`}
               disabled={busy}
               onClick={() => chat.setChatMode('agent')}
-              title="Autonomous: explores & edits files itself"
+              title="Act mode: gather context, plan, then implement with tools"
             >
               Agent
             </button>
@@ -783,7 +783,7 @@ export const OlkilAiChatView = ({ dormant = false }: OlkilAiChatViewProps) => {
               className={`${styles.modeBtn} ${chatMode === 'ask' ? styles.modeBtnActive : ''}`}
               disabled={busy}
               onClick={() => chat.setChatMode('ask')}
-              title="Read-only Q&A — no file edits"
+              title="Ask mode: read-only answers, no file edits"
             >
               Ask
             </button>
@@ -794,7 +794,7 @@ export const OlkilAiChatView = ({ dormant = false }: OlkilAiChatViewProps) => {
               className={`${styles.modeBtn} ${chatMode === 'plan' ? styles.modeBtnActive : ''}`}
               disabled={busy}
               onClick={() => chat.setChatMode('plan')}
-              title="Discuss first: outlines a plan before big edits"
+              title="Plan mode: explore and outline — switch to Agent to implement"
             >
               Plan
             </button>

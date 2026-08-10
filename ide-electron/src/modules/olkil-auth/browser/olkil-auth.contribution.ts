@@ -1,32 +1,80 @@
-import { Autowired } from '@opensumi/di';
+import { Autowired, Injectable } from '@opensumi/di';
 import {
   ClientAppContribution,
   CommandContribution,
   CommandRegistry,
+  ComponentContribution,
+  ComponentRegistry,
   Domain,
-  StatusBarAlignment,
-  StatusBarEntryAccessor,
-  IStatusBarService,
+  MaybePromise,
+  URI,
+  WithEventBus,
+  getIcon,
 } from '@opensumi/ide-core-browser';
 import { MenuContribution, IMenuRegistry, MenuId } from '@opensumi/ide-core-browser/lib/menu/next';
 import { IMessageService } from '@opensumi/ide-overlay';
 import { IElectronRendererURLService, IElectronURLService } from '@opensumi/ide-core-common/lib/electron';
-import { IOlkilAuthService } from '../common';
+import { IResource, IResourceProvider, ResourceService } from '@opensumi/ide-editor';
+import {
+  BrowserEditorContribution,
+  EditorComponentRegistry,
+  EditorOpenType,
+  WorkbenchEditorService,
+} from '@opensumi/ide-editor/lib/browser';
+import { IOlkilAuthService, OLKIL_ACCOUNT_SCHEME } from '../common';
 import { OlkilAuthService } from './auth.service';
+import { OlkilAccountView } from './account.view';
+import { OlkilElectronHeaderBar } from './auth-header';
+import {
+  OLKIL_AUTH_OPEN_ACCOUNT,
+  OLKIL_AUTH_SIGN_IN,
+  OLKIL_AUTH_SIGN_OUT,
+} from './commands';
 
-export const OLKIL_AUTH_SIGN_IN = {
-  id: 'olkil.auth.signIn',
-  label: 'Sign in to OLKIL…',
-};
+export {
+  OLKIL_AUTH_OPEN_ACCOUNT,
+  OLKIL_AUTH_SIGN_IN,
+  OLKIL_AUTH_SIGN_OUT,
+} from './commands';
 
-export const OLKIL_AUTH_SIGN_OUT = {
-  id: 'olkil.auth.signOut',
-  label: 'Sign out of OLKIL',
-};
+const OLKIL_ACCOUNT_COMPONENT_ID = 'olkil-account-preview';
 
-@Domain(ClientAppContribution, CommandContribution, MenuContribution)
+@Injectable()
+export class OlkilAccountResourceProvider extends WithEventBus implements IResourceProvider {
+  readonly scheme: string = OLKIL_ACCOUNT_SCHEME;
+
+  provideResource(uri: URI): MaybePromise<IResource<any>> {
+    return {
+      supportsRevive: true,
+      name: 'OLKIL Account',
+      icon: getIcon('setting'),
+      uri,
+    };
+  }
+
+  provideResourceSubname(): string | null {
+    return null;
+  }
+
+  async shouldCloseResource(): Promise<boolean> {
+    return true;
+  }
+}
+
+@Domain(
+  ClientAppContribution,
+  CommandContribution,
+  MenuContribution,
+  ComponentContribution,
+  BrowserEditorContribution,
+)
 export class OlkilAuthContribution
-  implements ClientAppContribution, CommandContribution, MenuContribution
+  implements
+    ClientAppContribution,
+    CommandContribution,
+    MenuContribution,
+    ComponentContribution,
+    BrowserEditorContribution
 {
   @Autowired(IOlkilAuthService)
   private readonly auth!: OlkilAuthService;
@@ -34,18 +82,17 @@ export class OlkilAuthContribution
   @Autowired(IMessageService)
   private readonly messages!: IMessageService;
 
-  @Autowired(IStatusBarService)
-  private readonly statusBar!: IStatusBarService;
-
   @Autowired(IElectronURLService)
   private readonly urlService!: IElectronRendererURLService;
 
-  private statusEntry?: StatusBarEntryAccessor;
+  @Autowired(WorkbenchEditorService)
+  private readonly editorService!: WorkbenchEditorService;
+
+  @Autowired(OlkilAccountResourceProvider)
+  private readonly accountResourceProvider!: OlkilAccountResourceProvider;
 
   async onDidStart() {
     await this.auth.init();
-    this.renderStatus();
-    this.auth.onDidChangeSession(() => this.renderStatus());
 
     const handleUrl = async (url?: string) => {
       if (!url) {
@@ -58,13 +105,11 @@ export class OlkilAuthContribution
       }
     };
 
-    // Deep-link fallback from OpenSumi URL service
     this.urlService.on('open-url', async (payload: { url?: string } | string) => {
       const url = typeof payload === 'string' ? payload : payload?.url;
       await handleUrl(url);
     });
 
-    // Windows second-instance / cold-start bridge from main process
     try {
       // eslint-disable-next-line @typescript-eslint/no-var-requires
       const { ipcRenderer } = require('electron');
@@ -80,6 +125,42 @@ export class OlkilAuthContribution
     }
   }
 
+  /** Override electron title-bar so avatar sits left of window controls. */
+  registerComponent(registry: ComponentRegistry) {
+    registry.register(
+      'electron-header',
+      {
+        id: 'electron-header',
+        component: OlkilElectronHeaderBar,
+      },
+      {
+        size: 27,
+        containerId: 'electron-header',
+      },
+    );
+  }
+
+  registerResource(resourceService: ResourceService) {
+    resourceService.registerResourceProvider(this.accountResourceProvider);
+  }
+
+  registerEditorComponent(editorComponentRegistry: EditorComponentRegistry) {
+    editorComponentRegistry.registerEditorComponent({
+      component: OlkilAccountView,
+      uid: OLKIL_ACCOUNT_COMPONENT_ID,
+      scheme: OLKIL_ACCOUNT_SCHEME,
+    });
+
+    editorComponentRegistry.registerEditorComponentResolver(OLKIL_ACCOUNT_SCHEME, (_, __, resolve) => {
+      resolve([
+        {
+          type: EditorOpenType.component,
+          componentId: OLKIL_ACCOUNT_COMPONENT_ID,
+        },
+      ]);
+    });
+  }
+
   registerCommands(commands: CommandRegistry) {
     commands.registerCommand(OLKIL_AUTH_SIGN_IN, {
       execute: async () => {
@@ -91,9 +172,11 @@ export class OlkilAuthContribution
           );
         } catch (err: any) {
           const msg = err?.message || String(err);
-          if (!/cancel/i.test(msg)) {
-            this.messages.error(`Sign in failed: ${msg}`);
+          // User abandoned / re-clicked Sign in — don't show a scary error
+          if (/cancel|timed out/i.test(msg)) {
+            return;
           }
+          this.messages.error(`Sign in failed: ${msg}`);
         }
       },
     });
@@ -104,9 +187,23 @@ export class OlkilAuthContribution
         this.messages.info('Signed out of OLKIL');
       },
     });
+
+    commands.registerCommand(OLKIL_AUTH_OPEN_ACCOUNT, {
+      execute: async () => {
+        await this.editorService.open(new URI().withScheme(OLKIL_ACCOUNT_SCHEME), {
+          preview: false,
+          focus: true,
+        });
+      },
+    });
   }
 
   registerMenus(menus: IMenuRegistry) {
+    menus.registerMenuItem(MenuId.MenubarFileMenu, {
+      command: OLKIL_AUTH_OPEN_ACCOUNT.id,
+      group: '9_olkil',
+      order: 0,
+    });
     menus.registerMenuItem(MenuId.MenubarFileMenu, {
       command: OLKIL_AUTH_SIGN_IN.id,
       group: '9_olkil',
@@ -116,33 +213,6 @@ export class OlkilAuthContribution
       command: OLKIL_AUTH_SIGN_OUT.id,
       group: '9_olkil',
       order: 2,
-    });
-  }
-
-  private renderStatus() {
-    const user = this.auth.getUser();
-    const text = user
-      ? `OLKIL · ${user.email || user.displayName || 'Signed in'}`
-      : 'OLKIL · Sign in';
-    const command = user ? OLKIL_AUTH_SIGN_OUT.id : OLKIL_AUTH_SIGN_IN.id;
-
-    if (this.statusEntry) {
-      this.statusEntry.update({
-        text,
-        alignment: StatusBarAlignment.RIGHT,
-        priority: 1000,
-        command,
-        tooltip: user ? 'Sign out of OLKIL' : 'Sign in via olkil.com',
-      });
-      return;
-    }
-
-    this.statusEntry = this.statusBar.addElement('olkil-auth-status', {
-      text,
-      alignment: StatusBarAlignment.RIGHT,
-      priority: 1000,
-      command,
-      tooltip: user ? 'Sign out of OLKIL' : 'Sign in via olkil.com',
     });
   }
 }

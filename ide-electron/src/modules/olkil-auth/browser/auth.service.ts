@@ -27,6 +27,7 @@ export class OlkilAuthService implements IOlkilAuthService {
   readonly onDidChangeSessionEvent: Event<OlkilAuthSession | null> = this.onDidChangeSessionEmitter.event;
   private bootstrapped = false;
   private signInFlight: Promise<OlkilAuthSession> | null = null;
+  private signInGen = 0;
 
   async init(): Promise<void> {
     if (this.bootstrapped) {
@@ -37,7 +38,6 @@ export class OlkilAuthService implements IOlkilAuthService {
       const stored = await this.authNode.loadSession();
       if (stored?.refreshToken) {
         this.session = stored;
-        // Soft refresh in background
         void this.getValidIdToken().catch(() => undefined);
       }
     } catch {
@@ -62,26 +62,49 @@ export class OlkilAuthService implements IOlkilAuthService {
     return this.onDidChangeSessionEvent(listener);
   }
 
+  /**
+   * Start (or restart) browser login.
+   * A second click cancels the previous incomplete flow so we never stick on
+   * "Opening browser…" after the user abandons Google sign-in.
+   */
   async signIn(): Promise<OlkilAuthSession> {
-    if (this.signInFlight) {
-      return this.signInFlight;
+    await this.cancelPendingSignIn();
+    const gen = ++this.signInGen;
+    const flight = this.runSignIn(gen);
+    this.signInFlight = flight;
+    try {
+      return await flight;
+    } finally {
+      if (this.signInFlight === flight) {
+        this.signInFlight = null;
+      }
     }
-    this.signInFlight = this.runSignIn().finally(() => {
-      this.signInFlight = null;
-    });
-    return this.signInFlight;
   }
 
-  private async runSignIn(): Promise<OlkilAuthSession> {
+  private async cancelPendingSignIn(): Promise<void> {
+    try {
+      await this.authNode.cancelLoginFlow();
+    } catch {
+      // ignore
+    }
+    this.signInFlight = null;
+  }
+
+  private async runSignIn(gen: number): Promise<OlkilAuthSession> {
     await this.init();
     const state = createAuthState();
     const { redirectUri } = await this.authNode.beginLoginFlow(state);
+    if (gen !== this.signInGen) {
+      throw new Error('Login cancelled');
+    }
     const authUrl = buildIdeAuthUrl({ state, redirectUri });
 
-    // Open system browser (Trae/Cursor pattern)
     this.electronUi.openExternal(authUrl);
 
     const callback = await this.authNode.waitForCallback(state);
+    if (gen !== this.signInGen) {
+      throw new Error('Login cancelled');
+    }
     const session = sessionFromTokens(callback.idToken, callback.refreshToken);
     if (!session) {
       throw new Error('Could not parse account from Firebase token');
@@ -94,7 +117,7 @@ export class OlkilAuthService implements IOlkilAuthService {
   }
 
   async signOut(): Promise<void> {
-    await this.authNode.cancelLoginFlow();
+    await this.cancelPendingSignIn();
     await this.authNode.clearSession();
     this.session = null;
     this.onDidChangeSessionEmitter.fire(null);
@@ -115,7 +138,6 @@ export class OlkilAuthService implements IOlkilAuthService {
       if (!next) {
         return this.session.idToken;
       }
-      // Keep user profile fields if JWT omits them
       next.user = {
         ...this.session.user,
         ...next.user,
@@ -140,14 +162,16 @@ export class OlkilAuthService implements IOlkilAuthService {
       if (uri.scheme !== 'olkil') {
         return false;
       }
+      // Focus/done ping from success page — not a token callback
+      if (/auth\/done/i.test(rawUrl)) {
+        return false;
+      }
       const path = (uri.path.toString() || '').replace(/^\//, '');
       if (!path.startsWith('auth/callback') && uri.authority !== 'auth') {
-        // olkil://auth/callback or olkil:///auth/callback
         if (!rawUrl.includes('auth/callback')) {
           return false;
         }
       }
-      // Parse manually — URI helper may not expose all query params consistently
       const qIndex = rawUrl.indexOf('?');
       if (qIndex < 0) {
         return false;
@@ -159,13 +183,11 @@ export class OlkilAuthService implements IOlkilAuthService {
       if (!state || !idToken || !refreshToken) {
         return false;
       }
-      // If loopback flow is active with same state, the website should prefer localhost;
-      // deep link is a fallback — still accept and store.
       const session = sessionFromTokens(idToken, refreshToken);
       if (!session) {
         return false;
       }
-      await this.authNode.cancelLoginFlow();
+      await this.cancelPendingSignIn();
       await this.authNode.saveSession(session);
       this.session = session;
       this.onDidChangeSessionEmitter.fire(session);

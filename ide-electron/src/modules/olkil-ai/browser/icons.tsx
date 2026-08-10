@@ -126,3 +126,10 @@ export const PinIcon = ({ size, className }: IconProps) => (
     <path d="M12 11.6V20" {...stroke} />
   </Svg>
 );
+
+export const HistoryIcon = ({ size, className }: IconProps) => (
+  <Svg size={size} className={className}>
+    <circle cx="12" cy="12" r="8.2" {...stroke} />
+    <path d="M12 7.8v4.6l3.1 1.9" {...stroke} />
+  </Svg>
+);

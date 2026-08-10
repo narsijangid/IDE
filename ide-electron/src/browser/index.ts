@@ -109,11 +109,12 @@ export const CommonBrowserModules: ConstructorOf<BrowserModule>[] = [
   MiniDesktopModule,
   LocalBasicModule,
   OlkilAiModule,
-  OlkilAuthModule,
 ];
 
 renderApp({
-  modules: [...CommonBrowserModules, ElectronBasicModule, DemoModule],
+  // OlkilAuthModule must load after ElectronBasicModule so our electron-header
+  // (avatar left of window controls) replaces the default title bar.
+  modules: [...CommonBrowserModules, ElectronBasicModule, OlkilAuthModule, DemoModule],
   layoutConfig: customLayoutConfig,
   appName: 'OLKIL',
   defaultPreferences: {

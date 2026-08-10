@@ -287,6 +287,70 @@
   flex-shrink: 0;
 }
 
+.historyWrap {
+  position: relative;
+}
+
+.historyMenu {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  z-index: 30;
+  width: min(280px, 72vw);
+  padding: 6px;
+  border-radius: 10px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  background: #121214;
+  box-shadow: 0 16px 40px rgba(0, 0, 0, 0.45);
+}
+
+.historyHead {
+  padding: 6px 8px 8px;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: rgba(255, 255, 255, 0.38);
+}
+
+.historyEmpty {
+  padding: 10px 8px 12px;
+  font-size: 12px;
+  line-height: 1.45;
+  color: rgba(255, 255, 255, 0.55);
+}
+
+.historyItem {
+  appearance: none;
+  width: 100%;
+  display: grid;
+  gap: 2px;
+  text-align: left;
+  border: none;
+  background: transparent;
+  color: rgba(255, 255, 255, 0.9);
+  border-radius: 7px;
+  padding: 8px;
+  cursor: pointer;
+}
+
+.historyItem:hover {
+  background: rgba(254, 1, 154, 0.12);
+}
+
+.historyTitle {
+  font-size: 12px;
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.historyMeta {
+  font-size: 10.5px;
+  color: rgba(255, 255, 255, 0.42);
+}
+
 .iconBtn {
   appearance: none;
   border: none;

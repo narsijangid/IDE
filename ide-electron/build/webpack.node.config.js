@@ -72,6 +72,18 @@ module.exports = createConfig({
       ) {
         return callback(null, 'commonjs ' + request);
       }
+      // Cline SDK is ESM-only — leave unbundled; loaded via runtime dynamic import().
+      if (
+        request === '@cline/sdk' ||
+        request === '@cline/core' ||
+        request === '@cline/agents' ||
+        request === '@cline/llms' ||
+        request === '@cline/shared' ||
+        request === 'undici' ||
+        (typeof request === 'string' && request.startsWith('@cline/'))
+      ) {
+        return callback(null, 'commonjs ' + request);
+      }
       callback();
     },
   ],

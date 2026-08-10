@@ -415,6 +415,59 @@ export interface IOlkilAiNodeService {
   browserClose(): Promise<BrowserActionResult>;
   /** Start app (if needed) + open headed browser + first snapshot. */
   liveTest(request: LiveTestRequest): Promise<LiveTestResult>;
+
+  /**
+   * Run a full Cline Agent session (default tools + Cline loop) in the Node host.
+   * Branding stays OLKIL via system prompt; engine is @cline/sdk.
+   */
+  clineRun(request: ClineEngineRunRequest): Promise<ClineEngineRunState>;
+  /** Poll live Cline run text / tool activities. */
+  clineGetState(runId: string): Promise<ClineEngineRunState>;
+  /** Abort an in-flight Cline run. */
+  clineCancel(runId: string): Promise<boolean>;
+}
+
+/** Request payload for the embedded Cline engine. */
+export interface ClineEngineRunRequest {
+  runId: string;
+  prompt: string;
+  workspaceRoot: string;
+  activeFile?: string;
+  mode: 'agent' | 'plan' | 'ask';
+  modelId?: string;
+  rules?: string;
+  autoApprove?: boolean;
+}
+
+export interface ClineEngineActivity {
+  id: string;
+  kind: ActivityKind;
+  label: string;
+  done?: boolean;
+  filePath?: string;
+  command?: string;
+  argsPreview?: string;
+  resultPreview?: string;
+}
+
+export interface ClineEngineFileChange {
+  id: string;
+  kind: FileChangeKind;
+  path: string;
+  beforeContent: string | null;
+  afterContent: string | null;
+}
+
+export interface ClineEngineRunState {
+  runId: string;
+  done: boolean;
+  text: string;
+  reasoning?: string;
+  error?: string;
+  activities: ClineEngineActivity[];
+  status?: string;
+  /** Live file edits for Olkil accept/revert cards */
+  fileChanges?: ClineEngineFileChange[];
 }
 
 export type FileChangeKind = 'edit' | 'create' | 'rename' | 'delete';
@@ -544,6 +597,14 @@ export interface IOlkilChatService {
   agentTodos: AgentTodoItem[];
   /** Checkpoint stack for rewind */
   checkpoints: Array<{ id: string; label: string; createdAt: number }>;
+  /** Signed-in user's recent chats (max 3, 48h TTL on Firebase) */
+  chatHistory: Array<{
+    id: string;
+    title: string;
+    updatedAt: number;
+    expiresAt: number;
+    messageCount: number;
+  }>;
   onDidChange: any;
   init(): Promise<void>;
   send(
@@ -562,6 +623,10 @@ export interface IOlkilChatService {
   /** One-click live browser verify → fix → retest loop. */
   startLiveTest(goal?: string): Promise<void>;
   clear(): void;
+  /** Persist current chat (if signed in), then start a fresh session. */
+  newChat(): void;
+  /** Load a saved chat from Firebase history. */
+  loadChatHistory(id: string): Promise<void>;
   stop(): void;
   /** Drop a queued follow-up before it runs. */
   cancelQueued(id: string): void;

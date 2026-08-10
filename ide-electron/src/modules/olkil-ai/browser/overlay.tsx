@@ -13,6 +13,7 @@ import {
   CloseIcon,
   CollapseIcon,
   ExpandIcon,
+  HistoryIcon,
   MinimizeIcon,
   NewChatIcon,
   PinIcon,
@@ -25,6 +26,21 @@ const EXIT_MS = 320;
 
 function cx(...names: Array<string | false | undefined>): string {
   return names.filter(Boolean).join(' ');
+}
+
+function formatHistoryAge(updatedAt: number): string {
+  const mins = Math.max(0, Math.round((Date.now() - updatedAt) / 60000));
+  if (mins < 1) {
+    return 'just now';
+  }
+  if (mins < 60) {
+    return `${mins}m ago`;
+  }
+  const hrs = Math.round(mins / 60);
+  if (hrs < 48) {
+    return `${hrs}h ago`;
+  }
+  return `${Math.round(hrs / 24)}d ago`;
 }
 
 /**
@@ -72,6 +88,9 @@ export const OlkilAiOverlay = () => {
   const [pinned, setPinned] = useState(ui.pinned);
   const [busy, setBusy] = useState(chat.busy);
   const [pendingCount, setPendingCount] = useState(chat.pendingChanges.length);
+  const [history, setHistory] = useState(chat.chatHistory || []);
+  const [historyOpen, setHistoryOpen] = useState(false);
+  const historyRef = useRef<HTMLDivElement>(null);
 
   const hostRef = useRef<HTMLDivElement>(null);
   const panelRef = useRef<HTMLElement>(null);
@@ -93,9 +112,23 @@ export const OlkilAiOverlay = () => {
     const d = chat.onDidChange(() => {
       setBusy(chat.busy);
       setPendingCount(chat.pendingChanges.length);
+      setHistory(chat.chatHistory || []);
     });
     return () => d.dispose();
   }, [chat]);
+
+  useEffect(() => {
+    if (!historyOpen) {
+      return;
+    }
+    const onDoc = (e: MouseEvent) => {
+      if (historyRef.current && !historyRef.current.contains(e.target as Node)) {
+        setHistoryOpen(false);
+      }
+    };
+    document.addEventListener('mousedown', onDoc);
+    return () => document.removeEventListener('mousedown', onDoc);
+  }, [historyOpen]);
 
   const open = state === 'open';
 
@@ -245,10 +278,56 @@ export const OlkilAiOverlay = () => {
             <span className={cx(styles.liveTag, busy && styles.liveTagBusy)}>{statusLabel}</span>
 
             <div className={styles.titleActions}>
+              <div className={styles.historyWrap} ref={historyRef}>
+                <button
+                  type="button"
+                  className={cx(styles.iconBtn, historyOpen && styles.iconBtnOn)}
+                  onClick={() => setHistoryOpen((v) => !v)}
+                  disabled={busy}
+                  title={
+                    history.length
+                      ? `Chat history (${history.length}/3, expires in 48h)`
+                      : 'Chat history — sign in to sync (max 3, 48h)'
+                  }
+                  aria-label="Chat history"
+                  aria-expanded={historyOpen}
+                >
+                  <HistoryIcon size={15} />
+                </button>
+                {historyOpen ? (
+                  <div className={styles.historyMenu} role="menu">
+                    <div className={styles.historyHead}>Recent chats · max 3 · 48h</div>
+                    {history.length === 0 ? (
+                      <div className={styles.historyEmpty}>
+                        No saved chats yet. Sign in and chat — only the latest 3 are kept.
+                      </div>
+                    ) : (
+                      history.map((h) => (
+                        <button
+                          key={h.id}
+                          type="button"
+                          role="menuitem"
+                          className={styles.historyItem}
+                          disabled={busy}
+                          onClick={() => {
+                            setHistoryOpen(false);
+                            void chat.loadChatHistory(h.id);
+                          }}
+                        >
+                          <span className={styles.historyTitle}>{h.title}</span>
+                          <span className={styles.historyMeta}>
+                            {formatHistoryAge(h.updatedAt)} · {h.messageCount} msgs
+                          </span>
+                        </button>
+                      ))
+                    )}
+                  </div>
+                ) : null}
+              </div>
               <button
                 type="button"
                 className={styles.iconBtn}
-                onClick={() => chat.clear()}
+                onClick={() => chat.newChat()}
                 disabled={busy}
                 title="New chat"
                 aria-label="New chat"

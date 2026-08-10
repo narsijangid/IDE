@@ -38,6 +38,8 @@ import {
 } from './embedded-secrets';
 import { CommandRunner } from './command-runner';
 import { BrowserTestService } from './browser-test.service';
+import { olkilClineRuntime } from './cline-runtime.service';
+import type { ClineEngineRunRequest, ClineEngineRunState } from '../common';
 
 const POOLSIDE_URL = 'https://inference.poolside.ai/v1/chat/completions';
 const DEFAULT_DEEPSEEK_BASE = 'https://api.deepseek.com';
@@ -456,6 +458,18 @@ export class OlkilAiNodeService implements IOlkilAiNodeService {
 
   liveTest(request: LiveTestRequest): Promise<LiveTestResult> {
     return this.browserTest.liveTest(request);
+  }
+
+  async clineRun(request: ClineEngineRunRequest): Promise<ClineEngineRunState> {
+    return olkilClineRuntime.run(request);
+  }
+
+  async clineGetState(runId: string): Promise<ClineEngineRunState> {
+    return olkilClineRuntime.getState(runId);
+  }
+
+  async clineCancel(runId: string): Promise<boolean> {
+    return olkilClineRuntime.cancel(runId);
   }
 
   private getKey(provider: AiProviderId): string {

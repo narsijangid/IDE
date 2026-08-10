@@ -12,6 +12,9 @@ export const OlkilAuthNodeServicePath = 'OlkilAuthNodeServicePath';
 export const IOlkilAuthNodeService = 'IOlkilAuthNodeService';
 export const IOlkilAuthService = 'IOlkilAuthService';
 
+/** Virtual editor scheme for the OLKIL Account tab (Cursor Settings–style). */
+export const OLKIL_ACCOUNT_SCHEME = 'olkil-account';
+
 /** Public Firebase web config (restricted by Auth domain allowlist). */
 export const OLKIL_FIREBASE_CONFIG = {
   apiKey: 'AIzaSyA3z0FDMJrfskddGj4Iair9D2XH3K_IS2k',
@@ -22,6 +25,9 @@ export const OLKIL_FIREBASE_CONFIG = {
   appId: '1:781364120676:web:b95ff8f1839b3a0b0aa371',
   measurementId: 'G-77ZW0JFXSB',
 } as const;
+
+/** Firestore project used for per-user agent chat history (max 3 / 48h). */
+export const OLKIL_FIRESTORE_PROJECT = OLKIL_FIREBASE_CONFIG.projectId;
 
 export const OLKIL_AUTH_WEB_ORIGIN = 'https://olkil.com';
 export const OLKIL_AUTH_IDE_PATH = '/auth/ide/';

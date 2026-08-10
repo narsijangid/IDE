@@ -150,6 +150,7 @@
     "node-gyp": "*"
   },
   "dependencies": {
+    "@cline/sdk": "0.0.72",
     "@opensumi/ide-ai-native": "3.2.1",
     "@opensumi/ide-design": "3.2.1",
     "electron-updater": "^6.3.9",

@@ -1,0 +1,64 @@
+.rightCluster {
+  display: flex;
+  align-items: center;
+  height: 100%;
+  flex-shrink: 0;
+  -webkit-app-region: no-drag;
+}
+
+.avatarBtn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  padding: 0 10px;
+  margin: 0;
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  -webkit-app-region: no-drag;
+  color: var(--titlebar-activeForeground, #ccc);
+
+  &:hover {
+    background-color: hsla(0, 0%, 100%, 0.08);
+  }
+
+  &:focus-visible {
+    outline: 1px solid #fe019a;
+    outline-offset: -2px;
+  }
+}
+
+.avatarImg,
+.avatarFallback {
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  display: block;
+  flex-shrink: 0;
+}
+
+.avatarImg {
+  object-fit: cover;
+  background: #1a1a1a;
+  border: 1px solid rgba(255, 255, 255, 0.18);
+}
+
+.avatarFallback {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: #fe019a;
+  color: #fff;
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1;
+  border: 1px solid rgba(255, 255, 255, 0.18);
+}
+
+.signInLabel {
+  margin-left: 6px;
+  font-size: 12px;
+  white-space: nowrap;
+  opacity: 0.9;
+}

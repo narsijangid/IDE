@@ -33,6 +33,12 @@ import {
   MUTATING_TOOL_NAMES,
   routingMaxTokens,
 } from '../common/tools';
+import {
+  chatModeToUserMode,
+  createModeSwitchNoticeTracker,
+  formatModeSwitchNotice,
+  formatUserInputBlock,
+} from '../common/cline-prompt';
 import { loadProjectRules } from '../common/rules';
 import { buildDiffHunks, applyAcceptedHunks } from '../common/hunks';
 import { buildChangeSummary, buildDiffPreview, countLineStats } from '../common/diff';
@@ -51,10 +57,20 @@ import * as fs from 'fs';
 import { MarkerSeverity } from '@opensumi/ide-core-common';
 import { IMarkerService } from '@opensumi/ide-markers';
 import { SCMService } from '@opensumi/ide-scm';
+import { IOlkilAuthService } from '../../olkil-auth/common';
+import { OlkilChatHistoryService } from './chat-history.service';
+import {
+  CHAT_HISTORY_TTL_MS,
+  sessionHasUserContent,
+  slimMessages,
+  titleFromMessages,
+} from '../common/chat-history';
+import type { ChatHistorySummary } from '../common/chat-history';
 
 let msgSeq = 0;
 const nextId = () => `m_${Date.now()}_${++msgSeq}`;
 const nextChangeId = () => `c_${Date.now()}_${++msgSeq}`;
+const nextSessionId = () => `chat_${Date.now()}_${++msgSeq}`;
 
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 
@@ -115,6 +131,12 @@ export class OlkilChatService extends Disposable implements IOlkilChatService {
   @Autowired(SCMService)
   private scmService!: SCMService;
 
+  @Autowired(IOlkilAuthService)
+  private auth!: IOlkilAuthService;
+
+  @Autowired(OlkilChatHistoryService)
+  private chatHistoryStore!: OlkilChatHistoryService;
+
   private readonly _onDidChange = new Emitter<void>();
   readonly onDidChange: Event<void> = this._onDidChange.event;
 
@@ -131,6 +153,12 @@ export class OlkilChatService extends Disposable implements IOlkilChatService {
   modelId = DEFAULT_MODEL_ID;
   modelName = findModel(DEFAULT_MODEL_ID).model;
   chatMode: ChatMode = DEFAULT_CHAT_MODE;
+  chatHistory: ChatHistorySummary[] = [];
+  private sessionId = nextSessionId();
+  private sessionCreatedAt = Date.now();
+  private modeSwitchTracker = createModeSwitchNoticeTracker();
+  private historyUnsub?: { dispose: () => void };
+  private authUnsub?: { dispose: () => void };
   models: Array<{
     id: string;
     provider: string;
@@ -165,6 +193,8 @@ export class OlkilChatService extends Disposable implements IOlkilChatService {
 
   private history: ChatMessage[] = [];
   private cancelRequested = false;
+  /** Active Cline engine run id (for Stop). */
+  private activeClineRunId: string | null = null;
   /** Silent auto-resume after provider stall (max 1 per user turn). */
   private stallAutoRetries = 0;
   /** Files the agent has actually read — edits to unread files are blocked. */
@@ -210,9 +240,125 @@ export class OlkilChatService extends Disposable implements IOlkilChatService {
         }
       }
       this.fire();
+      this.wireChatHistory();
     } catch (e: any) {
       this.pushUi('status', `AI backend init error: ${e?.message || e}`);
     }
+  }
+
+  private wireChatHistory() {
+    if (!this.historyUnsub) {
+      this.historyUnsub = this.chatHistoryStore.onDidChange(() => {
+        this.chatHistory = this.chatHistoryStore.listSummaries();
+        this.fire();
+      });
+      this.addDispose({ dispose: () => this.historyUnsub?.dispose() });
+    }
+    if (!this.authUnsub) {
+      this.authUnsub = this.auth.onDidChangeSession(() => {
+        void this.refreshChatHistory();
+      });
+      this.addDispose({ dispose: () => this.authUnsub?.dispose() });
+    }
+    void this.refreshChatHistory();
+  }
+
+  private async refreshChatHistory() {
+    if (!this.auth.isSignedIn()) {
+      this.chatHistoryStore.resetLocal();
+      this.chatHistory = [];
+      this.fire();
+      return;
+    }
+    try {
+      this.chatHistory = await this.chatHistoryStore.bootstrap();
+      this.fire();
+    } catch {
+      // optional feature
+    }
+  }
+
+  private persistCurrentSession() {
+    if (!this.auth.isSignedIn() || !sessionHasUserContent(this.messages)) {
+      return;
+    }
+    const now = Date.now();
+    this.chatHistoryStore.scheduleUpsert({
+      id: this.sessionId,
+      title: titleFromMessages(this.messages),
+      createdAt: this.sessionCreatedAt,
+      updatedAt: now,
+      expiresAt: now + CHAT_HISTORY_TTL_MS,
+      messages: slimMessages(this.messages),
+    });
+    this.chatHistory = this.chatHistoryStore.listSummaries();
+  }
+
+  private resetLocalSession(welcome = 'Chat cleared. OLKIL ready.') {
+    void this.decorations.clearAll();
+    this.history = [];
+    this.snapshots.clear();
+    this.queuedMessages = [];
+    this.agentTodos = [];
+    this.checkpoints = [];
+    this.checkpointSnapshots.clear();
+    this.filesReadThisSession.clear();
+    this.sessionId = nextSessionId();
+    this.sessionCreatedAt = Date.now();
+    this.messages = [
+      {
+        id: nextId(),
+        role: 'system',
+        content: welcome,
+      },
+    ];
+    this.status = '';
+  }
+
+  clear() {
+    this.newChat();
+  }
+
+  newChat() {
+    this.persistCurrentSession();
+    this.resetLocalSession('New chat. OLKIL ready.');
+    this.fire();
+  }
+
+  async loadChatHistory(id: string) {
+    if (this.busy) {
+      return;
+    }
+    this.persistCurrentSession();
+    let session = this.chatHistoryStore.getSession(id);
+    if (!session) {
+      await this.refreshChatHistory();
+      session = this.chatHistoryStore.getSession(id);
+    }
+    if (!session) {
+      this.pushUi('status', 'That chat expired or was removed (max 3 chats, 48h).');
+      return;
+    }
+    this.resetLocalSession('Restored chat from history.');
+    this.sessionId = session.id;
+    this.sessionCreatedAt = session.createdAt;
+    this.messages = [
+      {
+        id: nextId(),
+        role: 'system',
+        content: 'Restored chat from your OLKIL history (expires 48h / max 3).',
+      },
+      ...session.messages.map((m) => ({
+        id: m.id || nextId(),
+        role: m.role,
+        content: m.content,
+      })),
+    ];
+    // Rebuild a minimal LLM history so follow-ups have context
+    this.history = session.messages
+      .filter((m) => m.role === 'user' || m.role === 'assistant')
+      .map((m) => ({ role: m.role as 'user' | 'assistant', content: m.content }));
+    this.fire();
   }
 
   /**
@@ -460,14 +606,19 @@ export class OlkilChatService extends Disposable implements IOlkilChatService {
     if (mode !== 'agent' && mode !== 'plan' && mode !== 'ask') {
       return;
     }
+    const from = chatModeToUserMode(this.chatMode);
+    const to = chatModeToUserMode(mode);
+    if (from !== to) {
+      this.modeSwitchTracker.record(from, to);
+    }
     this.chatMode = mode;
     this.pushUi(
       'status',
       mode === 'agent'
-        ? 'Agent mode — will explore & edit files on its own.'
+        ? 'Agent mode — explore & implement on its own.'
         : mode === 'ask'
           ? 'Ask mode — read-only answers (no file edits).'
-          : 'Plan mode — will outline a plan and ask before big edits.',
+          : 'Plan mode — explore & plan only; switch to Agent to implement.',
     );
     this.fire();
   }
@@ -496,27 +647,12 @@ Required loop:
     await this.send(focus, [], { historyText: agentPrompt });
   }
 
-  clear() {
-    void this.decorations.clearAll();
-    this.history = [];
-    this.snapshots.clear();
-    this.queuedMessages = [];
-    this.agentTodos = [];
-    this.checkpoints = [];
-    this.checkpointSnapshots.clear();
-    this.messages = [
-      {
-        id: nextId(),
-        role: 'system',
-        content: 'Chat cleared. OLKIL ready.',
-      },
-    ];
-    this.status = '';
-    this.fire();
-  }
-
   stop() {
     this.cancelRequested = true;
+    const runId = this.activeClineRunId;
+    if (runId) {
+      void this.aiNode.clineCancel(runId).catch(() => undefined);
+    }
     this.status = 'Stopped';
     this.busy = false;
     this.fire();
@@ -917,14 +1053,32 @@ Required loop:
 
     const forAgent = (opts?.historyText || text).trim() || text;
     const enriched = await this.buildUserContentWithAttachments(forAgent, attachments);
-    this.history.push({ role: 'user', content: enriched });
+    const userMode = chatModeToUserMode(this.chatMode);
+    const modeNotice = this.modeSwitchTracker.consume();
+    const wrapped =
+      (modeNotice
+        ? `${formatModeSwitchNotice(modeNotice.from, modeNotice.to)}\n`
+        : '') + formatUserInputBlock(enriched, userMode);
+    this.history.push({ role: 'user', content: wrapped });
 
     const pendingId = nextId();
     this.messages.push({ id: pendingId, role: 'assistant', content: '', pending: true });
     this.setStatus(this.chatMode === 'agent' ? 'Agent thinking…' : 'Planning…');
 
     try {
-      const reply = await this.runAgentLoop(pendingId);
+      // Full Cline engine (@cline/sdk Agent + default tools). Falls back to legacy loop only if SDK fails to load.
+      let reply = '';
+      try {
+        reply = await this.runClineEngine(pendingId, enriched);
+      } catch (clineErr: any) {
+        const msg = clineErr?.message || String(clineErr);
+        if (/Cannot find module|Failed to fetch dynamically|ERR_MODULE_NOT_FOUND|@cline\//i.test(msg)) {
+          this.pushUi('status', 'Agent engine unavailable — using built-in loop.');
+          reply = await this.runAgentLoop(pendingId);
+        } else {
+          throw clineErr;
+        }
+      }
       let finalText = this.sanitizeUserFacingReply((reply || '').trim());
       // Empty / stall dump → silent auto-resume once (Cursor never asks "resend").
       if (
@@ -936,8 +1090,13 @@ Required loop:
         this.setStatus('Provider stall — auto-resuming…');
         this.setStatus('Auto-resuming…');
         await sleep(450);
-        const resumed = await this.runAgentLoop(pendingId);
-        finalText = this.sanitizeUserFacingReply((resumed || '').trim());
+        try {
+          const resumed = await this.runClineEngine(pendingId, enriched);
+          finalText = this.sanitizeUserFacingReply((resumed || '').trim());
+        } catch {
+          const resumed = await this.runAgentLoop(pendingId);
+          finalText = this.sanitizeUserFacingReply((resumed || '').trim());
+        }
       }
       if (!finalText || this.looksLikeStallFallback(finalText)) {
         finalText = this.friendlyCompletionMessage();
@@ -997,6 +1156,7 @@ Required loop:
       }
     } finally {
       this.busy = false;
+      this.persistCurrentSession();
       this.fire();
       this.scheduleFlushQueue();
     }
@@ -2125,6 +2285,142 @@ Read the highest-scoring evidence in trail order. For a bug, trace UI → handle
     }
   }
 
+  /**
+   * OLKIL coding agent (Cline-engine under the hood).
+   * Live tools / thinking / file-change cards surface in the Olkil chat UI.
+   */
+  private async runClineEngine(pendingId: string, prompt: string): Promise<string> {
+    const runId = `olkil_${Date.now()}_${++msgSeq}`;
+    this.activeClineRunId = runId;
+    const active = this.editorService.currentResource?.uri.codeUri.fsPath;
+    const projectRules = this.getProjectRules();
+
+    this.setStatus('Working…');
+    const runPromise = this.aiNode.clineRun({
+      runId,
+      prompt,
+      workspaceRoot: this.workspaceRoot(),
+      activeFile: active,
+      mode: this.chatMode,
+      modelId: this.modelId,
+      rules: projectRules,
+      autoApprove: this.chatMode === 'agent',
+    });
+
+    const seenActivities = new Set<string>();
+    const finishedActivities = new Set<string>();
+    const fileChangeFingerprints = new Map<string, string>();
+    let lastText = '';
+    let lastReasoning = '';
+    let thinkingStarted = false;
+
+    const applyState = async (st: Awaited<ReturnType<IOlkilAiNodeService['clineGetState']>>) => {
+      const status = (st.status || '')
+        .replace(/\bCline\b/gi, 'OLKIL')
+        .replace(/\bcline\b/g, 'OLKIL');
+      if (status) {
+        this.setStatus(status);
+      }
+      if (st.reasoning && st.reasoning !== lastReasoning) {
+        lastReasoning = st.reasoning;
+        if (!thinkingStarted) {
+          thinkingStarted = true;
+          this.pushActivity(pendingId, 'thinking', 'Thinking', undefined, false, {
+            resultPreview: st.reasoning.slice(0, 800),
+          });
+          seenActivities.add('thinking_live');
+        } else {
+          for (let i = this.messages.length - 1; i >= 0; i--) {
+            const m = this.messages[i];
+            if (m.role === 'activity' && m.activity?.kind === 'thinking' && !m.activity.done) {
+              m.activity = {
+                ...m.activity,
+                resultPreview: st.reasoning.slice(0, 800),
+              };
+              this.fire();
+              break;
+            }
+          }
+        }
+      }
+      if (st.text && st.text !== lastText) {
+        lastText = st.text;
+        if (!this.looksLikeGarbageToolDump(st.text)) {
+          const painted = this.bubbleSafeContent(st.text);
+          if (painted.trim().length > 0) {
+            this.patchUi(pendingId, { content: painted, pending: true });
+            this.fire();
+          }
+        }
+      }
+      for (const a of st.activities || []) {
+        if (a.id === 'thinking_live') {
+          continue;
+        }
+        if (!seenActivities.has(a.id)) {
+          seenActivities.add(a.id);
+          this.pushActivity(pendingId, a.kind, a.label, undefined, false, {
+            filePath: a.filePath,
+            command: a.command,
+            argsPreview: a.argsPreview,
+          });
+        }
+        if (a.done && !finishedActivities.has(a.id)) {
+          finishedActivities.add(a.id);
+          this.completeLastActivity(pendingId, undefined, true, {
+            resultPreview: a.resultPreview,
+          });
+        }
+      }
+      for (const fc of st.fileChanges || []) {
+        const fp = `${(fc.afterContent || '').length}:${(fc.afterContent || '').slice(0, 64)}`;
+        if (fileChangeFingerprints.get(fc.path) === fp) {
+          continue;
+        }
+        fileChangeFingerprints.set(fc.path, fp);
+        try {
+          await this.recordFileChange({
+            kind: fc.kind,
+            path: fc.path,
+            beforeContent: fc.beforeContent,
+            afterContent: fc.afterContent,
+          });
+          void this.editorService.open(URI.file(fc.path)).catch(() => undefined);
+        } catch {
+          // ignore card errors
+        }
+      }
+    };
+
+    try {
+      while (!this.cancelRequested) {
+        const st = await this.aiNode.clineGetState(runId);
+        await applyState(st);
+        if (st.done) {
+          if (st.error && !st.text) {
+            throw new Error(st.error);
+          }
+          return (st.text || lastText || '').trim();
+        }
+        const raced = await Promise.race([
+          runPromise.then((r) => ({ kind: 'done' as const, r })),
+          sleep(80).then(() => ({ kind: 'tick' as const, r: null })),
+        ]);
+        if (raced.kind === 'done') {
+          await applyState(raced.r!);
+          if (raced.r!.error && !raced.r!.text) {
+            throw new Error(raced.r!.error);
+          }
+          return (raced.r!.text || lastText || '').trim();
+        }
+      }
+      await this.aiNode.clineCancel(runId);
+      return (lastText || '').trim() || 'Stopped.';
+    } finally {
+      this.activeClineRunId = null;
+    }
+  }
+
   private async runAgentLoop(pendingId: string): Promise<string> {
     const latestUser = [...this.history].reverse().find((m) => m.role === 'user')?.content || '';
     const liveTestIntent = this.isLiveTestIntent(latestUser);
@@ -2223,18 +2519,18 @@ Read the highest-scoring evidence in trail order. For a bug, trace UI → handle
     }
 
     const option = findModel(this.modelId);
-    // Keep API payloads small — Cursor-style token discipline.
+    // Cline-style: keep more transcript turns so planning + tool context survives.
     const recentHistory = this.history
       .filter((m) => m.role === 'user' || m.role === 'assistant')
       .filter((m) => !m.tool_calls?.length)
       .map((m) => ({
         role: m.role,
         content:
-          typeof m.content === 'string' && m.content.length > 6_000
-            ? `${m.content.slice(0, 6_000)}\n/* truncated */`
+          typeof m.content === 'string' && m.content.length > 12_000
+            ? `${m.content.slice(0, 12_000)}\n/* truncated */`
             : m.content,
       }))
-      .slice(-6);
+      .slice(-14);
 
     const messages: ChatMessage[] = [
       {
