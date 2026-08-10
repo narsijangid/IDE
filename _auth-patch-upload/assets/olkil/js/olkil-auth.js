@@ -1,9 +1,8 @@
 /**
  * OLKIL website ↔ IDE auth bridge (Firebase).
  *
- * 1) POST tokens to http://127.0.0.1:<port>/callback (preferred)
- * 2) Fallback: olkil://auth/callback?... deep link (never leave user on a dead localhost page)
- * Stay on olkil.com with a success + "Open OLKIL" button whenever possible.
+ * Primary (Cursor/Trae style): POST tokens to http://127.0.0.1:<port>/callback
+ * Fallback: GET navigation to loopback (shows IDE success page)
  */
 (function () {
   'use strict';
@@ -60,7 +59,6 @@
 
   function showSuccessStayOnPage() {
     completed = true;
-    completing = false;
     setBusy(false);
     hideActions();
 
@@ -68,18 +66,21 @@
     if (lead) {
       lead.textContent = 'Authentication complete. Return to the OLKIL app — you can close this tab.';
     }
+
     var title = document.querySelector('.olkil-auth-card h1');
     if (title) {
       title.textContent = "You're signed in";
     }
+
     setStatus('Connected to OLKIL successfully.', false);
 
     var done = document.getElementById('olkil-auth-done');
     if (done) {
       done.hidden = false;
-    } else if (!document.getElementById('olkil-auth-done-fallback')) {
+    } else {
+      // Fallback if template not yet updated
       var card = document.querySelector('.olkil-auth-card');
-      if (card) {
+      if (card && !document.getElementById('olkil-auth-done-fallback')) {
         var wrap = document.createElement('div');
         wrap.id = 'olkil-auth-done-fallback';
         wrap.className = 'olkil-auth-done';
@@ -102,10 +103,7 @@
   function postToIde(redirectUri, state, idToken, refreshToken) {
     return fetch(redirectUri, {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Accept: 'application/json',
-      },
+      headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
       body: JSON.stringify({
         state: state,
         id_token: idToken,
@@ -121,30 +119,6 @@
         return { ok: true };
       });
     });
-  }
-
-  function deepLinkToIde(state, idToken, refreshToken) {
-    var url =
-      'olkil://auth/callback?state=' +
-      encodeURIComponent(state) +
-      '&id_token=' +
-      encodeURIComponent(idToken) +
-      '&refresh_token=' +
-      encodeURIComponent(refreshToken);
-    // Hidden iframe is less disruptive than top-level navigation away from success UI
-    try {
-      var iframe = document.createElement('iframe');
-      iframe.style.display = 'none';
-      iframe.src = url;
-      document.body.appendChild(iframe);
-      setTimeout(function () {
-        try {
-          document.body.removeChild(iframe);
-        } catch (e) {}
-      }, 2000);
-    } catch (e) {
-      window.location.href = url;
-    }
   }
 
   function completeToIde(user) {
@@ -183,6 +157,7 @@
           return;
         }
 
+        // 1) Preferred: localhost loopback POST (stay on olkil.com success UI)
         if (isLoopbackRedirect(redirectUri)) {
           setStatus('Connecting back to OLKIL…', false);
           return postToIde(redirectUri, state, idToken, refreshToken)
@@ -190,14 +165,23 @@
               showSuccessStayOnPage();
             })
             .catch(function (err) {
-              console.warn('[olkil-auth] loopback POST failed, using deep link', err);
-              // Do NOT navigate to http://127.0.0.1 — that shows "can't be reached"
-              // when the IDE already closed the port. Use the custom protocol instead.
-              deepLinkToIde(state, idToken, refreshToken);
-              showSuccessStayOnPage();
+              console.warn('[olkil-auth] loopback POST failed, opening IDE success page via GET', err);
+              // 2) GET navigation — IDE serves a Cursor-style success page
+              // (server stays open briefly after accepting tokens)
+              window.location.replace(
+                redirectUri +
+                  (redirectUri.indexOf('?') >= 0 ? '&' : '?') +
+                  'state=' +
+                  encodeURIComponent(state) +
+                  '&id_token=' +
+                  encodeURIComponent(idToken) +
+                  '&refresh_token=' +
+                  encodeURIComponent(refreshToken),
+              );
             });
         }
 
+        // 3) No loopback URI — web-only session
         completing = false;
         setBusy(false);
         setStatus(
@@ -242,10 +226,12 @@
       });
     }
 
+    // Only auto-complete from existing session once (avoid double fire with popup handlers).
     var autoHandled = false;
     auth.onAuthStateChanged(function (user) {
       if (user && qs('state') && !autoHandled && !completing && !completed) {
         autoHandled = true;
+        // Small delay so popup/redirect handlers can claim first if they fire.
         setTimeout(function () {
           if (!completing && !completed) {
             completeToIde(user);

@@ -1563,6 +1563,18 @@ body.olkil-theme .comments-title {
 	color: var(--olkil-text-dim);
 	line-height: 1.45;
 }
+.olkil-auth-done {
+	display: grid;
+	gap: 0.75rem;
+	margin: 0 0 1.25rem;
+}
+.olkil-auth-done[hidden] {
+	display: none !important;
+}
+.olkil-auth-done .olkil-btn {
+	width: 100%;
+	justify-content: center;
+}
 .olkil-auth-fallback-link {
 	color: var(--olkil-pink-hot) !important;
 	font-weight: 600;
