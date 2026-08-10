@@ -87,6 +87,7 @@ export const OlkilAiOverlay = () => {
   const [expanded, setExpanded] = useState(ui.expanded);
   const [pinned, setPinned] = useState(ui.pinned);
   const [busy, setBusy] = useState(chat.busy);
+  const [liveStatus, setLiveStatus] = useState(chat.status);
   const [pendingCount, setPendingCount] = useState(chat.pendingChanges.length);
   const [history, setHistory] = useState(chat.chatHistory || []);
   const [historyOpen, setHistoryOpen] = useState(false);
@@ -111,6 +112,7 @@ export const OlkilAiOverlay = () => {
   useEffect(() => {
     const d = chat.onDidChange(() => {
       setBusy(chat.busy);
+      setLiveStatus(chat.status);
       setPendingCount(chat.pendingChanges.length);
       setHistory(chat.chatHistory || []);
     });
@@ -218,7 +220,11 @@ export const OlkilAiOverlay = () => {
     [ui],
   );
 
-  const statusLabel = busy ? 'Working' : pendingCount > 0 ? `${pendingCount} to review` : 'Ready';
+  const statusLabel = busy
+    ? liveStatus || 'Thinking'
+    : pendingCount > 0
+      ? `${pendingCount} to review`
+      : 'Ready';
 
   return (
     <div className={styles.host} ref={hostRef}>

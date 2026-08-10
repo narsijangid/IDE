@@ -75,6 +75,17 @@ const nextSessionId = () => `chat_${Date.now()}_${++msgSeq}`;
 
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 
+function olkilStatusLabel(raw: string): string {
+  return (raw || '')
+    .replace(/\bCline\b/gi, 'OLKIL')
+    .replace(/\bcline\b/g, 'OLKIL')
+    .replace(/\bOLKIL agent starting…?/gi, 'Thinking')
+    .replace(/\bAgent thinking…?/gi, 'Thinking')
+    .replace(/\bWorking…?/gi, 'Thinking')
+    .replace(/…+$/g, '')
+    .trim();
+}
+
 interface ChangeSnapshot {
   changeId: string;
   kind: FileChangeKind;
@@ -1067,7 +1078,7 @@ Required loop:
 
     const pendingId = nextId();
     this.messages.push({ id: pendingId, role: 'assistant', content: '', pending: true });
-    this.setStatus(this.chatMode === 'agent' ? 'Agent thinking…' : 'Planning…');
+    this.setStatus(this.chatMode === 'agent' ? 'Thinking' : 'Planning');
 
     try {
       // Full Cline engine (@cline/sdk Agent + default tools). Falls back to legacy loop only if SDK fails to load.
@@ -2308,7 +2319,7 @@ Read the highest-scoring evidence in trail order. For a bug, trace UI → handle
     const active = this.editorService.currentResource?.uri.codeUri.fsPath;
     const projectRules = workspaceRoot ? this.getProjectRules() : '';
 
-    this.setStatus('Working…');
+    this.setStatus('Thinking');
     const runPromise = this.aiNode.clineRun({
       runId,
       prompt,
@@ -2343,9 +2354,7 @@ Read the highest-scoring evidence in trail order. For a bug, trace UI → handle
     };
 
     const applyState = async (st: Awaited<ReturnType<IOlkilAiNodeService['clineGetState']>>) => {
-      const status = (st.status || '')
-        .replace(/\bCline\b/gi, 'OLKIL')
-        .replace(/\bcline\b/g, 'OLKIL');
+      const status = olkilStatusLabel(st.status || '');
       if (status) {
         this.setStatus(status);
       }
@@ -2391,11 +2400,12 @@ Read the highest-scoring evidence in trail order. For a bug, trace UI → handle
             filePath: a.filePath,
             command: a.command,
             argsPreview: a.argsPreview,
+            toolCallId: a.id,
           });
         }
         if (a.done && !finishedActivities.has(a.id)) {
           finishedActivities.add(a.id);
-          this.completeLastActivity(pendingId, undefined, true, {
+          this.completeActivityByToolId(a.id, a.label, {
             resultPreview: a.resultPreview,
           });
         }
@@ -2554,7 +2564,7 @@ Read the highest-scoring evidence in trail order. For a bug, trace UI → handle
             : 'Index ready — exploring with tools',
         );
       } else {
-        this.setStatus(questionIntent ? 'Answering…' : 'Agent thinking…');
+        this.setStatus(questionIntent ? 'Answering' : 'Thinking');
       }
     }
 
@@ -2863,14 +2873,14 @@ Read the highest-scoring evidence in trail order. For a bug, trace UI → handle
       this.setStatus(
         step === 0
           ? this.chatMode === 'agent'
-            ? 'Agent thinking…'
+            ? 'Thinking'
             : this.chatMode === 'ask'
-              ? 'Ask thinking…'
-              : 'Planning…'
-          : `${this.chatMode === 'agent' ? 'Agent' : this.chatMode === 'ask' ? 'Ask' : 'Plan'} working…`,
+              ? 'Thinking'
+              : 'Planning'
+          : 'Thinking',
       );
       if (step === 0) {
-        this.pushActivity(pendingId, 'thinking', 'Thinking…');
+        this.pushActivity(pendingId, 'thinking', 'Thinking');
       }
 
       const tools = selectAgentTools({
@@ -3608,8 +3618,10 @@ Read the highest-scoring evidence in trail order. For a bug, trace UI → handle
     let l = (label || '').replace(/…/g, '').trim();
     if (!l) return l;
     l = l
+      .replace(/^Thinking\b/i, 'Thought')
       .replace(/^Reading\b/i, 'Read')
-      .replace(/^Searching\b/i, 'Searched')
+      .replace(/^Exploring\b/i, 'Explored')
+      .replace(/^Searching\b/i, 'Explored')
       .replace(/^Editing\b/i, 'Edited')
       .replace(/^Patching\b/i, 'Patched')
       .replace(/^Creating\b/i, 'Created')
@@ -3626,7 +3638,9 @@ Read the highest-scoring evidence in trail order. For a bug, trace UI → handle
       .replace(/^Following\b/i, 'Followed')
       .replace(/^Mapping\b/i, 'Mapped')
       .replace(/^Exact-searching\b/i, 'Exact-searched')
-      .replace(/^Grepping\b/i, 'Grepped');
+      .replace(/^Grepping\b/i, 'Grepped')
+      .replace(/^Browsing\b/i, 'Browsed')
+      .replace(/^Asking\b/i, 'Asked');
     return l;
   }
 
@@ -3800,6 +3814,44 @@ Read the highest-scoring evidence in trail order. For a bug, trace UI → handle
         return;
       }
       if (m.role === 'user') {
+        return;
+      }
+    }
+  }
+
+  private completeActivityByToolId(
+    toolCallId: string,
+    label?: string,
+    extra?: Partial<ActivityInfo>,
+  ) {
+    for (let i = this.messages.length - 1; i >= 0; i--) {
+      const m = this.messages[i];
+      if (m.role === 'activity' && m.activity && !m.activity.done && m.activity.toolCallId === toolCallId) {
+        const nextLabel = label || this.toPastActivityLabel(m.activity.label);
+        m.activity = {
+          ...m.activity,
+          ...extra,
+          done: true,
+          label: nextLabel,
+        };
+        m.content = m.activity.label;
+        this.fire();
+        return;
+      }
+    }
+    // Fallback: complete the latest live activity
+    for (let i = this.messages.length - 1; i >= 0; i--) {
+      const m = this.messages[i];
+      if (m.role === 'activity' && m.activity && !m.activity.done) {
+        const nextLabel = label || this.toPastActivityLabel(m.activity.label);
+        m.activity = {
+          ...m.activity,
+          ...extra,
+          done: true,
+          label: nextLabel,
+        };
+        m.content = m.activity.label;
+        this.fire();
         return;
       }
     }
@@ -4373,20 +4425,20 @@ Read the highest-scoring evidence in trail order. For a bug, trace UI → handle
             const prose = state.text.trim();
             // Live final answer into the assistant bubble — NEVER paint DSML / tool XML.
             if (this.looksLikeGarbageToolDump(state.text)) {
-              this.setStatus('Working…');
+              this.setStatus('Thinking');
             } else {
               const painted = this.bubbleSafeContent(state.text);
               // Cursor: during tool rounds, NEVER paint into the answer bubble — activity only.
               if (request.tools?.length && request.toolChoice === 'auto') {
                 if (painted.trim().length > 8) {
-                  this.setStatus('Thinking…');
+                  this.setStatus('Thinking');
                 }
               } else if (!painted) {
-                this.setStatus('Writing…');
+                this.setStatus('Writing');
               } else {
                 this.patchUi(pendingId, { content: painted, pending: true });
                 if (painted.trim().length > 8) {
-                  this.setStatus('Replying…');
+                  this.setStatus('Writing');
                   this.completeLastActivity(pendingId, undefined, true);
                 }
               }

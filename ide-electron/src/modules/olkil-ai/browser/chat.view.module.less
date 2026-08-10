@@ -687,7 +687,59 @@
   font-style: italic;
 }
 
-/* —— Cline-style tool / activity disclosure rows —— */
+/* Cursor-style live step indicator at the bottom of the timeline */
+.liveStatus {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 2px 10px;
+  min-height: 28px;
+}
+
+.liveStatusSpin {
+  flex-shrink: 0;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  border: 1.5px solid rgba(254, 1, 154, 0.28);
+  border-top-color: rgba(254, 1, 154, 0.95);
+  animation: activitySpin 0.7s linear infinite;
+}
+
+.liveStatusText {
+  font-size: 12.5px;
+  line-height: 1.35;
+  font-weight: 500;
+  letter-spacing: 0.01em;
+  background: linear-gradient(
+    90deg,
+    rgba(255, 255, 255, 0.55) 0%,
+    rgba(255, 255, 255, 0.95) 40%,
+    rgba(254, 1, 154, 0.9) 50%,
+    rgba(255, 255, 255, 0.95) 60%,
+    rgba(255, 255, 255, 0.55) 100%
+  );
+  background-size: 220% 100%;
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  animation: liveShimmer 2.2s ease-in-out infinite;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 100%;
+}
+
+@keyframes liveShimmer {
+  0% {
+    background-position: 100% 0;
+  }
+  100% {
+    background-position: -100% 0;
+  }
+}
+
+/* —— Cursor-style tool / activity disclosure rows —— */
 
 .activityCard {
   width: 100%;
@@ -724,11 +776,11 @@
 }
 
 .activityLive {
-  color: rgba(254, 1, 154, 0.92);
+  color: rgba(255, 255, 255, 0.72);
 }
 
 .activityDone {
-  color: rgba(134, 239, 172, 0.88);
+  color: rgba(160, 170, 180, 0.78);
 }
 
 .activityGlyph {
@@ -740,7 +792,7 @@
   justify-content: center;
   text-align: center;
   font-size: 11px;
-  opacity: 0.9;
+  opacity: 0.85;
   font-variant-numeric: tabular-nums;
 }
 
@@ -753,6 +805,11 @@
   font-size: 0;
   color: transparent;
   animation: activitySpin 0.7s linear infinite;
+}
+
+.activityDone .activityGlyph {
+  color: rgba(134, 239, 172, 0.85);
+  opacity: 1;
 }
 
 @keyframes activitySpin {
@@ -778,8 +835,14 @@
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  font-size: 12px;
-  line-height: 1.35;
+  font-size: 12.5px;
+  line-height: 1.4;
+  font-weight: 450;
+}
+
+.activityLive .activityLabel {
+  color: rgba(255, 255, 255, 0.88);
+  font-weight: 500;
 }
 
 .activityOk {

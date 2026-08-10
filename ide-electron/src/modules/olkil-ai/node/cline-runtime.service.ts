@@ -196,6 +196,7 @@ function mapProvider(provider: AiProviderId): string {
 
 function toolKind(name: string): ClineRuntimeActivity['kind'] {
   const n = (name || '').toLowerCase();
+  if (/list_dir|list_files|glob|ls\b/.test(n)) return 'searching';
   if (/read|file/.test(n) && !/edit|write|create|replace/.test(n)) return 'reading';
   if (/search|grep|find|codebase/.test(n)) return 'searching';
   if (/edit|write|patch|apply|create|replace|insert/.test(n)) return 'editing';
@@ -217,29 +218,84 @@ function olkilStatus(raw?: string): string {
   return raw
     .replace(/\bCline\b/gi, 'OLKIL')
     .replace(/\bcline\b/g, 'OLKIL')
+    .replace(/\bOLKIL agent starting…?/gi, 'Thinking')
+    .replace(/\bWorking…?/gi, 'Thinking')
     .trim();
 }
 
+function toolFileBase(input: any): string {
+  const file =
+    input?.path ||
+    input?.file_path ||
+    input?.filePath ||
+    input?.target_file ||
+    input?.paths?.[0] ||
+    '';
+  return file ? path.basename(String(file)) : '';
+}
+
+/** Cursor-style present-tense labels while a step is live. */
 function friendlyToolLabel(toolName: string, input: any): string {
   const n = (toolName || 'tool').toLowerCase();
-  const file =
-    input?.path || input?.file_path || input?.filePath || input?.target_file || '';
-  const base = file ? path.basename(String(file)) : '';
-  if (/read_files|read_file|read/.test(n)) return base ? `Reading ${base}` : 'Reading files';
-  if (/search_codebase|search|grep/.test(n)) {
+  const base = toolFileBase(input);
+  if (/read_files|read_file|read/.test(n)) return base ? `Reading ${base}` : 'Reading';
+  if (/list_dir|list_files|glob|ls\b/.test(n)) {
+    const p = input?.path || input?.target_directory || '.';
+    return p && p !== '.' ? `Exploring ${truncate(String(p), 40)}` : 'Exploring';
+  }
+  if (/search_codebase|search|grep|find/.test(n)) {
     const q = input?.query || input?.pattern || '';
-    return q ? `Searching “${truncate(String(q), 36)}”` : 'Searching codebase';
+    if (/grep/.test(n)) {
+      return q ? `Grepping “${truncate(String(q), 36)}”` : 'Grepping';
+    }
+    return q ? `Exploring “${truncate(String(q), 36)}”` : 'Exploring';
   }
   if (/run_commands|bash|shell|command/.test(n)) {
     const cmd = typeof input?.command === 'string' ? input.command : '';
-    return cmd ? `Running $ ${truncate(cmd, 48)}` : 'Running command';
+    return cmd ? `Running ${truncate(cmd, 48)}` : 'Running command';
   }
   if (/editor|apply_patch|write|edit|str_replace|create/.test(n)) {
-    return base ? `Editing ${base}` : 'Editing files';
+    return base ? `Editing ${base}` : 'Editing';
   }
-  if (/fetch_web|web/.test(n)) return 'Fetching web content';
-  if (/ask_question/.test(n)) return 'Asking a question';
-  return base ? `${toolName} · ${base}` : toolName || 'Working…';
+  if (/fetch_web|web/.test(n)) return 'Browsing web';
+  if (/ask_question/.test(n)) return 'Asking';
+  return base ? `${toolName} · ${base}` : 'Working';
+}
+
+/** Cursor-style past-tense labels once a step finishes. */
+function completedToolLabel(toolName: string, input: any, liveLabel?: string): string {
+  const n = (toolName || 'tool').toLowerCase();
+  const base = toolFileBase(input);
+  if (/read_files|read_file|read/.test(n)) return base ? `Read ${base}` : 'Read files';
+  if (/list_dir|list_files|glob|ls\b/.test(n)) return 'Explored';
+  if (/search_codebase|search|find/.test(n) && !/grep/.test(n)) {
+    const q = input?.query || input?.pattern || '';
+    return q ? `Explored “${truncate(String(q), 36)}”` : 'Explored';
+  }
+  if (/grep/.test(n)) {
+    const q = input?.query || input?.pattern || '';
+    return q ? `Grepped “${truncate(String(q), 36)}”` : 'Grepped';
+  }
+  if (/run_commands|bash|shell|command/.test(n)) {
+    const cmd = typeof input?.command === 'string' ? input.command : '';
+    return cmd ? `Ran ${truncate(cmd, 48)}` : 'Ran command';
+  }
+  if (/editor|apply_patch|write|edit|str_replace|create/.test(n)) {
+    return base ? `Edited ${base}` : 'Edited files';
+  }
+  if (/fetch_web|web/.test(n)) return 'Browsed web';
+  if (/ask_question/.test(n)) return 'Asked';
+  if (liveLabel) {
+    return liveLabel
+      .replace(/^Reading\b/i, 'Read')
+      .replace(/^Exploring\b/i, 'Explored')
+      .replace(/^Grepping\b/i, 'Grepped')
+      .replace(/^Editing\b/i, 'Edited')
+      .replace(/^Running\b/i, 'Ran')
+      .replace(/^Browsing\b/i, 'Browsed')
+      .replace(/^Thinking\b/i, 'Thought');
+  }
+  return 'Done';
 }
 
 function readFileSafe(filePath: string): string | null {
@@ -374,7 +430,7 @@ export class OlkilClineRuntimeHost {
       reasoning: '',
       activities: [],
       fileChanges: [],
-      status: 'OLKIL agent starting…',
+      status: 'Thinking',
     };
     this.states.set(runId, state);
 
@@ -442,7 +498,7 @@ ${
                 } else {
                   state.fileChanges.push(change);
                 }
-                state.status = `Edited ${path.basename(change.path)}`;
+                state.status = `Editing ${path.basename(change.path)}`;
               },
               cwd,
             ),
@@ -487,7 +543,7 @@ ${
       } as any);
 
       this.aborts.set(runId, agent);
-      state.status = 'Working…';
+      state.status = 'Thinking';
 
       const wrappedPrompt = `<user_input mode="${userMode}">${request.prompt}</user_input>`;
       const result = await agent.run(wrappedPrompt);
@@ -520,11 +576,11 @@ ${
     switch (event.type) {
       case 'assistant-text-delta':
         state.text = event.accumulatedText || state.text + (event.text || '');
-        state.status = 'Writing…';
+        state.status = 'Writing';
         break;
       case 'assistant-reasoning-delta': {
         state.reasoning = event.accumulatedText || state.reasoning || '';
-        state.status = 'Thinking…';
+        state.status = 'Thinking';
         // Mirror reasoning into a live thinking activity for the chat timeline
         const thinkId = 'thinking_live';
         let row = state.activities.find((a) => a.id === thinkId);
@@ -537,6 +593,10 @@ ${
             resultPreview: '',
           };
           state.activities.push(row);
+        } else if (row.done) {
+          // New thinking phase after tools
+          row.done = false;
+          row.label = 'Thinking';
         }
         row.resultPreview = truncate(state.reasoning || '', 800);
         break;
@@ -562,6 +622,12 @@ ${
         const input = (typeof tc.input === 'object' && tc.input) || tc.arguments || {};
         const label = friendlyToolLabel(name, input);
         const filePath = input.path || input.file_path || input.filePath || input.target_file;
+        // Close previous thinking row when tools begin
+        const think = state.activities.find((a) => a.id === 'thinking_live' && !a.done);
+        if (think) {
+          think.done = true;
+          think.label = 'Thought';
+        }
         state.activities.push({
           id,
           kind: toolKind(name),
@@ -577,11 +643,14 @@ ${
       case 'tool-finished': {
         const tc = event.toolCall || {};
         const id = tc.toolCallId || tc.id || '';
+        const name = tc.toolName || tc.name || '';
+        const input = (typeof tc.input === 'object' && tc.input) || tc.arguments || {};
         const row =
           state.activities.find((a) => a.id === id) ||
           state.activities.filter((a) => a.id !== 'thinking_live').slice(-1)[0];
         if (row) {
           row.done = true;
+          row.label = completedToolLabel(name || row.label, input, row.label);
           const msg = event.message;
           const parts = msg?.content || msg?.parts || [];
           const preview = parts
@@ -596,6 +665,11 @@ ${
             .join('\n');
           if (preview) row.resultPreview = truncate(preview, 600);
         }
+        // Between tools Cursor shows Thinking again
+        const stillLive = state.activities.some((a) => !a.done && a.id !== 'thinking_live');
+        state.status = stillLive
+          ? state.activities.filter((a) => !a.done).slice(-1)[0]?.label || 'Thinking'
+          : 'Thinking';
         break;
       }
       case 'status-notice':

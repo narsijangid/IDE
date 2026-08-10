@@ -55,6 +55,16 @@ function activityGlyph(kind: string, done?: boolean): string {
   }
 }
 
+function LiveStatusBar({ label }: { label: string }) {
+  if (!label) return null;
+  return (
+    <div className={styles.liveStatus} aria-live="polite">
+      <span className={styles.liveStatusSpin} aria-hidden />
+      <span className={styles.liveStatusText}>{label}</span>
+    </div>
+  );
+}
+
 async function copyText(text: string) {
   try {
     await navigator.clipboard.writeText(text);
@@ -1128,8 +1138,18 @@ export const OlkilAiChatView = ({ dormant = false }: OlkilAiChatViewProps) => {
             </div>
           );
         })}
-        {status && !busy ? <div className={styles.status}>{status}</div> : null}
-        {status && busy ? <div className={styles.statusQuiet}>{status}</div> : null}
+        {busy ? (
+          <LiveStatusBar
+            label={
+              ([...messages].reverse().find((m) => m.role === 'activity' && m.activity && !m.activity.done)
+                ?.activity?.label ||
+                status ||
+                'Thinking') as string
+            }
+          />
+        ) : status ? (
+          <div className={styles.status}>{status}</div>
+        ) : null}
       </div>
 
       <div

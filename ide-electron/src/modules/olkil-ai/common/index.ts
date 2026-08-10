@@ -529,6 +529,8 @@ export interface ActivityInfo {
   detail?: string;
   /** When true, row shows as completed (checkmark style). */
   done?: boolean;
+  /** Engine / tool call id — used to complete the matching live row. */
+  toolCallId?: string;
   /** Tool function name for expandable cards */
   toolName?: string;
   /** Pretty-printed args (truncated) */
