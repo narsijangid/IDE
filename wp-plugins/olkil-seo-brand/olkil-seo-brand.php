@@ -2,7 +2,7 @@
 /**
  * Plugin Name: OLKIL SEO Brand
  * Description: Advanced OLKIL SEO + syncs Dazzlone pricing UI into the OLKIL theme.
- * Version: 1.2.4
+ * Version: 1.3.0
  * Author: OLKIL
  */
 
@@ -11,14 +11,15 @@ if ( ! defined( 'ABSPATH' ) ) {
 }
 
 define( 'OLKIL_SEO_BRAND_NAME', 'OLKIL' );
-define( 'OLKIL_SEO_BRAND_VERSION', '1.2.4' );
+define( 'OLKIL_SEO_BRAND_VERSION', '1.3.0' );
 define( 'OLKIL_SEO_BRAND_DIR', plugin_dir_path( __FILE__ ) );
+define( 'OLKIL_SEO_BRAND_URL', plugin_dir_url( __FILE__ ) );
 
 /**
  * Sync pricing UI theme overrides into the active OLKIL theme.
  */
 function olkil_seo_brand_sync_theme_files() {
-	if ( get_option( 'olkil_seo_brand_theme_sync_v124' ) === OLKIL_SEO_BRAND_VERSION ) {
+	if ( get_option( 'olkil_seo_brand_theme_sync_v130' ) === OLKIL_SEO_BRAND_VERSION ) {
 		return;
 	}
 
@@ -52,14 +53,35 @@ function olkil_seo_brand_sync_theme_files() {
 		}
 	}
 
+	// Google crawls /favicon.ico first — overwrite tiny/default root icon.
+	$brand_ico = OLKIL_SEO_BRAND_DIR . 'brand/favicon.ico';
+	$brand_48  = OLKIL_SEO_BRAND_DIR . 'brand/favicon-48.png';
+	if ( file_exists( $brand_ico ) ) {
+		@copy( $brand_ico, ABSPATH . 'favicon.ico' );
+	}
+	if ( file_exists( $brand_48 ) ) {
+		@copy( $brand_48, ABSPATH . 'favicon-48x48.png' );
+		@copy( OLKIL_SEO_BRAND_DIR . 'brand/favicon-192.png', ABSPATH . 'favicon-192x192.png' );
+	}
+
 	if ( $ok ) {
-		update_option( 'olkil_seo_brand_theme_sync_v124', OLKIL_SEO_BRAND_VERSION, false );
+		update_option( 'olkil_seo_brand_theme_sync_v130', OLKIL_SEO_BRAND_VERSION, false );
 		if ( function_exists( 'opcache_reset' ) ) {
 			@opcache_reset();
 		}
 	}
 }
 add_action( 'init', 'olkil_seo_brand_sync_theme_files', 3 );
+
+/**
+ * Brand asset URL helper.
+ *
+ * @param string $file File under brand/.
+ * @return string
+ */
+function olkil_seo_brand_asset( $file ) {
+	return OLKIL_SEO_BRAND_URL . 'brand/' . ltrim( $file, '/' );
+}
 
 /**
  * @return array<int, array<string, mixed>>
@@ -123,17 +145,17 @@ function olkil_seo_brand_activate() {
 	update_option( 'rank-math-options-titles', $opt, false );
 	update_option( 'blogname', OLKIL_SEO_BRAND_NAME );
 	update_option( 'blogdescription', 'Free AI code editor & IDE — Dazzlone free, Lite 100M, Pro 350M, Max 1B, Ultra 2B tokens' );
-	delete_option( 'olkil_seo_brand_theme_sync_v124' );
+	delete_option( 'olkil_seo_brand_theme_sync_v130' );
 	olkil_seo_brand_sync_theme_files();
 }
 register_activation_hook( __FILE__, 'olkil_seo_brand_activate' );
 
 function olkil_seo_brand_maybe_persist() {
-	if ( get_option( 'olkil_seo_brand_persisted_v124' ) ) {
+	if ( get_option( 'olkil_seo_brand_persisted_v130' ) ) {
 		return;
 	}
 	olkil_seo_brand_activate();
-	update_option( 'olkil_seo_brand_persisted_v124', 1, false );
+	update_option( 'olkil_seo_brand_persisted_v130', 1, false );
 }
 add_action( 'init', 'olkil_seo_brand_maybe_persist', 5 );
 
@@ -142,9 +164,43 @@ function olkil_seo_brand_disable_theme_seo() {
 }
 add_action( 'wp_head', 'olkil_seo_brand_disable_theme_seo', 0 );
 
+/**
+ * Drop WordPress 32x32 site icons — Google requires multiples of 48px.
+ */
+function olkil_seo_brand_strip_small_site_icons() {
+	remove_action( 'wp_head', 'wp_site_icon', 99 );
+}
+add_action( 'init', 'olkil_seo_brand_strip_small_site_icons', 20 );
+
+/**
+ * Emit Google-compliant favicon tags (48+ multiples) + brand meta.
+ */
+function olkil_seo_brand_favicon_head() {
+	$icon_48  = olkil_seo_brand_asset( 'favicon-48.png' );
+	$icon_96  = olkil_seo_brand_asset( 'favicon-96.png' );
+	$icon_144 = olkil_seo_brand_asset( 'favicon-144.png' );
+	$icon_192 = olkil_seo_brand_asset( 'favicon-192.png' );
+	$icon_512 = olkil_seo_brand_asset( 'favicon-512.png' );
+	$apple    = olkil_seo_brand_asset( 'apple-touch-icon.png' );
+	$ico      = home_url( '/favicon.ico' );
+
+	echo "\n<!-- OLKIL Favicon (Google 48px+) -->\n";
+	echo '<link rel="icon" href="' . esc_url( $ico ) . '" sizes="any" />' . "\n";
+	echo '<link rel="icon" type="image/png" sizes="48x48" href="' . esc_url( $icon_48 ) . '" />' . "\n";
+	echo '<link rel="icon" type="image/png" sizes="96x96" href="' . esc_url( $icon_96 ) . '" />' . "\n";
+	echo '<link rel="icon" type="image/png" sizes="192x192" href="' . esc_url( $icon_192 ) . '" />' . "\n";
+	echo '<link rel="icon" type="image/png" sizes="512x512" href="' . esc_url( $icon_512 ) . '" />' . "\n";
+	echo '<link rel="apple-touch-icon" sizes="180x180" href="' . esc_url( $apple ) . '" />' . "\n";
+	echo '<link rel="shortcut icon" href="' . esc_url( $ico ) . '" />' . "\n";
+	echo '<meta name="msapplication-TileImage" content="' . esc_url( $icon_144 ) . '" />' . "\n";
+	echo '<meta name="msapplication-TileColor" content="#0a0a0b" />' . "\n";
+}
+add_action( 'wp_head', 'olkil_seo_brand_favicon_head', 2 );
+
 function olkil_seo_brand_head() {
 	$desc = 'OLKIL is a free AI code editor and AI IDE with multi-model AI, agents, autocomplete, unlimited browser testing, and chat. Plans: Dazzlone free, Lite $3 (100M tokens), Pro $10 (350M), Max $30 (1B), Ultra $50 (2B). Windows, macOS, and Linux.';
 	$url  = is_singular() ? get_permalink() : home_url( '/' );
+	$logo = olkil_seo_brand_asset( 'favicon-512.png' );
 
 	echo "\n<!-- OLKIL SEO Brand " . esc_html( OLKIL_SEO_BRAND_VERSION ) . " -->\n";
 	echo '<meta name="theme-color" content="#0a0a0b" />' . "\n";
@@ -166,6 +222,42 @@ function olkil_seo_brand_head() {
 		);
 	}
 
+	$org = array(
+		'@context' => 'https://schema.org',
+		'@type'    => 'Organization',
+		'@id'      => 'https://olkil.com/#organization',
+		'name'     => 'OLKIL',
+		'url'      => 'https://olkil.com',
+		'logo'     => array(
+			'@type'  => 'ImageObject',
+			'@id'    => 'https://olkil.com/#logo',
+			'url'    => $logo,
+			'width'  => 512,
+			'height' => 512,
+			'caption'=> 'OLKIL',
+		),
+		'image'    => $logo,
+		'sameAs'   => array(
+			'https://olkil.com',
+		),
+	);
+	echo '<script type="application/ld+json">' . wp_json_encode( $org, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE ) . '</script>' . "\n";
+
+	$website = array(
+		'@context'        => 'https://schema.org',
+		'@type'           => 'WebSite',
+		'@id'             => 'https://olkil.com/#website',
+		'name'            => 'OLKIL',
+		'url'             => 'https://olkil.com',
+		'publisher'       => array( '@id' => 'https://olkil.com/#organization' ),
+		'potentialAction' => array(
+			'@type'       => 'SearchAction',
+			'target'      => home_url( '/?s={search_term_string}' ),
+			'query-input' => 'required name=search_term_string',
+		),
+	);
+	echo '<script type="application/ld+json">' . wp_json_encode( $website, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE ) . '</script>' . "\n";
+
 	$software = array(
 		'@context'            => 'https://schema.org',
 		'@type'               => 'SoftwareApplication',
@@ -175,13 +267,9 @@ function olkil_seo_brand_head() {
 		'url'                 => 'https://olkil.com',
 		'downloadUrl'         => home_url( '/download/' ),
 		'description'         => $desc,
+		'image'               => $logo,
 		'offers'              => $offers,
-		'publisher'           => array(
-			'@type' => 'Organization',
-			'name'  => 'OLKIL',
-			'url'   => 'https://olkil.com',
-			'logo'  => 'https://olkil.com/wp-content/uploads/2026/08/cropped-Picsart_26-08-09_13-57-30-385-scaled-1-192x192.png',
-		),
+		'publisher'           => array( '@id' => 'https://olkil.com/#organization' ),
 		'featureList'         => array( 'AI Agents', 'Smart Autocomplete', 'Multi-model Chat', 'Unlimited Browser Testing', 'Full IDE', 'Local Models' ),
 	);
 	echo '<script type="application/ld+json">' . wp_json_encode( $software, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE ) . '</script>' . "\n";
