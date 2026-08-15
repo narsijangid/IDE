@@ -81,6 +81,7 @@
             padding: 0 4px;
             gap: 12px;
             flex-wrap: wrap;
+            background: transparent;
         }
 
         .oa-title {
@@ -88,6 +89,8 @@
             font-weight: 600;
             letter-spacing: .2px;
             color: var(--text);
+            background: transparent;
+            box-shadow: none;
         }
 
         .oa-title span {
@@ -1407,18 +1410,19 @@
             }
         }
 
-        /* IDE embed: fill the editor tab — no visible scrollbars (zoom-safe) */
+        /* IDE embed: compact scene that fits a 900×540 iframe (parent scales it) */
         html.oa-embed,
         body.oa-embed {
             height: 100%;
             min-height: 100%;
             max-height: 100%;
-            padding: 10px 12px;
-            align-items: stretch;
+            padding: 6px 8px 8px;
+            align-items: flex-start;
             justify-content: flex-start;
             overflow: hidden;
             scrollbar-width: none;
             -ms-overflow-style: none;
+            background: #0f1218;
         }
 
         html.oa-embed::-webkit-scrollbar,
@@ -1432,20 +1436,65 @@
         }
 
         body.oa-embed .officeai {
-            max-width: none;
+            max-width: 880px;
             width: 100%;
-            height: 100%;
-            margin: 0 auto;
-            overflow: auto;
+            height: auto;
+            margin: 0;
+            overflow: hidden;
+            background: transparent;
             scrollbar-width: none;
             -ms-overflow-style: none;
-            overscroll-behavior: contain;
+        }
+
+        body.oa-embed .oa-header,
+        body.oa-embed .oa-title,
+        body.oa-embed .oa-title span,
+        body.oa-embed .oa-live {
+            background: transparent !important;
+            box-shadow: none;
+            outline: none;
+            user-select: none;
+            -webkit-user-select: none;
         }
 
         body.oa-embed .officeai::-webkit-scrollbar {
             width: 0 !important;
             height: 0 !important;
             display: none !important;
+        }
+
+        body.oa-embed .oa-header {
+            margin-bottom: 8px;
+        }
+
+        body.oa-embed .oa-scene {
+            padding: 14px 12px 10px;
+        }
+
+        body.oa-embed .oa-lounge {
+            height: 70px;
+            margin: 0 6px 2px;
+        }
+
+        body.oa-embed .oa-manager-row {
+            margin: 12px 4px 4px;
+            gap: 10px;
+        }
+
+        body.oa-embed .oa-cabins {
+            gap: 8px;
+            flex-wrap: nowrap;
+        }
+
+        body.oa-embed .oa-cabin {
+            flex: 1 1 0;
+            min-width: 0;
+            max-width: none;
+            padding: 8px 8px 10px;
+        }
+
+        body.oa-embed .oa-desk-area {
+            height: 84px;
         }
     </style>
 </head>
