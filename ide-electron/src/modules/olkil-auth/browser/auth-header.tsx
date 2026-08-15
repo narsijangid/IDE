@@ -4,6 +4,7 @@ import {
   ElectronHeaderBar,
   HeaderBarRightComponent,
 } from '@opensumi/ide-electron-basic/lib/browser/header/header.view';
+import { IOlkilVirtualOfficeService } from 'modules/olkil-ai/common';
 import { IOlkilAuthService, OlkilAuthUser } from '../common';
 import { OLKIL_AUTH_OPEN_ACCOUNT } from './commands';
 import styles from './auth-header.module.less';
@@ -65,10 +66,47 @@ export const OlkilAuthAvatarButton = () => {
   );
 };
 
+/**
+ * Toggle: closed → "Virtual Office" opens floor.
+ * Open → "Dev Studio" exits back to normal single-agent IDE.
+ */
+export const OlkilVirtualOfficeButton = () => {
+  const commands = useInjectable<CommandService>(CommandService);
+  const office = useInjectable<IOlkilVirtualOfficeService>(IOlkilVirtualOfficeService);
+  const [active, setActive] = useState(office.active);
+
+  useEffect(() => {
+    setActive(office.active);
+    const sub = office.onDidChange(() => setActive(office.active));
+    return () => sub.dispose();
+  }, [office]);
+
+  const label = active ? 'Dev Studio' : 'Virtual Office';
+  const title = active
+    ? 'Return to Dev Studio — normal single-agent mode'
+    : 'Open Virtual Office — multi-agent team floor';
+
+  return (
+    <button
+      type="button"
+      className={`${styles.officeBtn} ${active ? styles.officeBtnActive : ''}`}
+      title={title}
+      aria-label={label}
+      onClick={(e) => {
+        e.stopPropagation();
+        void commands.executeCommand('olkil.virtualOffice.toggle');
+      }}
+      onDoubleClick={(e) => e.stopPropagation()}
+    >
+      <span className={styles.officeLabel}>{label}</span>
+    </button>
+  );
+};
+
 export const OlkilHeaderRightComponent = () => (
   <div className={styles.rightCluster}>
+    <OlkilVirtualOfficeButton />
     <OlkilAuthAvatarButton />
-    {/* Native traffic lights on macOS — only inject Windows/Linux chrome buttons. */}
     {!isMacintosh && <HeaderBarRightComponent />}
   </div>
 );

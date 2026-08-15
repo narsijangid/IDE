@@ -448,6 +448,11 @@ export interface ClineEngineActivity {
   command?: string;
   argsPreview?: string;
   resultPreview?: string;
+  groupId?: string;
+  parentId?: string;
+  lineRange?: string;
+  filesExplored?: number;
+  searchCount?: number;
 }
 
 export interface ClineEngineFileChange {
@@ -542,6 +547,12 @@ export interface ActivityInfo {
   /** Shell command line when kind=running */
   command?: string;
   exitCode?: number | null;
+  /** Nested exploration group (Cursor-style). */
+  groupId?: string;
+  parentId?: string;
+  lineRange?: string;
+  filesExplored?: number;
+  searchCount?: number;
 }
 
 /** Cursor TodoWrite-style checklist item. */
@@ -570,6 +581,8 @@ export interface UiChatMessage {
   todos?: AgentTodoItem[];
   /** Parsed follow-up suggestion chips under assistant reply */
   suggestions?: string[];
+  /** User prompt started a Live Test — show Testing badge on this bubble */
+  liveTest?: boolean;
 }
 
 export interface IOlkilChatService {
@@ -589,6 +602,8 @@ export interface IOlkilChatService {
   }>;
   /** 'agent' = autonomous edits; 'plan' = discuss first; 'ask' = read-only */
   chatMode: 'agent' | 'plan' | 'ask';
+  /** True while a Live Test run is active (pink Testing badge). */
+  liveTesting: boolean;
   /** Local Ollama download / readiness for the selected model */
   ollamaDownload: OllamaDownloadUiState;
   /** Pending (not yet accepted/reverted) file changes from the agent */
@@ -612,7 +627,7 @@ export interface IOlkilChatService {
   send(
     text: string,
     attachments?: ChatAttachment[],
-    opts?: { historyText?: string },
+    opts?: { historyText?: string; liveTest?: boolean },
   ): Promise<void>;
   /** Fuzzy file/folder list for @mention picker. */
   listMentionCandidates(query: string, limit?: number): Promise<ChatAttachment[]>;
@@ -709,3 +724,5 @@ export interface IOlkilChatUiService {
   setPinned(pinned: boolean): void;
   setWidth(width: number): void;
 }
+
+export * from './virtual-office';

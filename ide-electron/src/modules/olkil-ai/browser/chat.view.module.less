@@ -101,6 +101,137 @@
   cursor: default;
 }
 
+.userLiveTestLayout {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  position: relative;
+  z-index: 1;
+  min-width: 168px;
+}
+
+.userLiveTestBody {
+  flex: 1;
+  min-width: 0;
+  padding: 2px 0 2px 2px;
+}
+
+.testingBadgeOnPrompt {
+  flex-shrink: 0;
+  position: relative;
+  z-index: 2;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  margin: -2px -4px 0 0;
+  padding: 5px 11px 5px 14px;
+  font-size: 9px;
+  font-weight: 750;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  line-height: 1;
+  color: #fff;
+  background:
+    radial-gradient(circle at 20% 50%, rgba(254, 1, 154, 0.28), transparent 55%),
+    linear-gradient(145deg, #1a0a14 0%, #120810 55%, #1c0b16 100%);
+  border: 1px solid rgba(255, 90, 180, 0.7);
+  clip-path: polygon(9px 0, 100% 0, 100% 100%, 9px 100%, 0 50%);
+  box-shadow:
+    0 0 0 1px rgba(254, 1, 154, 0.22),
+    0 0 14px rgba(254, 1, 154, 0.38),
+    inset 0 1px 0 rgba(255, 255, 255, 0.12);
+  pointer-events: none;
+  user-select: none;
+}
+
+.testingBadgeIcon {
+  flex-shrink: 0;
+  color: #ffb3de;
+  filter: drop-shadow(0 0 4px rgba(254, 1, 154, 0.7));
+}
+
+.testingBadgeOnPromptLive {
+  animation: testingPulse 1.7s ease-in-out infinite;
+}
+
+@keyframes testingPulse {
+  0%,
+  100% {
+    box-shadow:
+      0 0 0 1px rgba(254, 1, 154, 0.22),
+      0 0 12px rgba(254, 1, 154, 0.32),
+      inset 0 1px 0 rgba(255, 255, 255, 0.12);
+  }
+  50% {
+    box-shadow:
+      0 0 0 1px rgba(254, 1, 154, 0.45),
+      0 0 20px rgba(254, 1, 154, 0.55),
+      inset 0 1px 0 rgba(255, 255, 255, 0.18);
+  }
+}
+
+.bubbleUserLiveTest {
+  position: relative;
+  isolation: isolate;
+  overflow: hidden;
+  max-width: 88%;
+  padding: 11px 12px 10px;
+  border-radius: 14px;
+  border: 1px solid transparent;
+  background: #0b0d12;
+  filter:
+    drop-shadow(-5px 0 10px rgba(34, 211, 238, 0.22))
+    drop-shadow(5px 0 10px rgba(254, 1, 154, 0.22));
+}
+
+.bubbleUserLiveTest::before {
+  content: '';
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 220%;
+  height: 220%;
+  transform: translate(-50%, -50%);
+  background: conic-gradient(
+    from 0deg,
+    #22d3ee 0deg,
+    #38bdf8 70deg,
+    #a78bfa 140deg,
+    #fe019a 210deg,
+    #f472b6 280deg,
+    #22d3ee 360deg
+  );
+  animation: liveBorderSpin 4.5s linear infinite;
+  z-index: 0;
+  pointer-events: none;
+}
+
+.bubbleUserLiveTest::after {
+  content: '';
+  position: absolute;
+  inset: 1.5px;
+  border-radius: 12.5px;
+  background:
+    radial-gradient(120px 80px at 100% 0%, rgba(254, 1, 154, 0.16), transparent 60%),
+    radial-gradient(140px 90px at 0% 0%, rgba(34, 211, 238, 0.12), transparent 55%),
+    repeating-radial-gradient(circle at 92% 12%, rgba(255, 255, 255, 0.045) 0 1px, transparent 1px 7px),
+    #0b0d12;
+  z-index: 0;
+  pointer-events: none;
+}
+
+.bubbleUserLiveTest > * {
+  position: relative;
+  z-index: 1;
+}
+
+@keyframes liveBorderSpin {
+  to {
+    transform: translate(-50%, -50%) rotate(360deg);
+  }
+}
+
 .modelPicker {
   position: relative;
   flex: 1;
@@ -431,6 +562,7 @@
 }
 
 .bubbleUser {
+  position: relative;
   max-width: 88%;
   padding: 8px 11px;
   border-radius: 10px;
@@ -945,6 +1077,44 @@
   font-size: 11px;
 }
 
+.activityGroup {
+  width: 100%;
+  margin: 0.2rem 0;
+}
+
+.activityGroupHeader {
+  appearance: none;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  width: 100%;
+  padding: 4px 2px;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.activityGroupHeader:hover {
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.activityGroupMeta {
+  margin-left: auto;
+  font-size: 11px;
+  color: rgba(160, 170, 180, 0.72);
+  flex-shrink: 0;
+}
+
+.activityGroupBody {
+  margin-left: 18px;
+  padding-left: 8px;
+  border-left: 1px solid rgba(255, 255, 255, 0.08);
+}
+
 /* —— Todos checklist —— */
 
 .todosCard {
@@ -1020,6 +1190,13 @@
 .bubble:hover .msgActions,
 .bubble:focus-within .msgActions {
   opacity: 1;
+}
+
+.bubbleUserLiveTest .msgActions {
+  opacity: 1;
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
 }
 
 .msgActionBtn {
@@ -1445,6 +1622,264 @@
   outline: 1px dashed rgba(254, 1, 154, 0.7);
   outline-offset: -4px;
   background: rgba(254, 1, 154, 0.08);
+}
+
+.voBar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px 0;
+  flex-shrink: 0;
+}
+
+.voLabel {
+  font-size: 10px;
+  font-weight: 650;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: rgba(254, 1, 154, 0.95);
+  white-space: nowrap;
+}
+
+.voSelect {
+  flex: 1;
+  min-width: 0;
+  height: 28px;
+  padding: 0 8px;
+  border-radius: 6px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  background: rgba(0, 0, 0, 0.35);
+  color: rgba(255, 255, 255, 0.9);
+  font-size: 12px;
+  outline: none;
+
+  &:focus {
+    border-color: rgba(254, 1, 154, 0.55);
+  }
+
+  option {
+    background: #1a1a1a;
+    color: #fff;
+  }
+}
+
+.voInspect {
+  flex-shrink: 0;
+  margin: 8px 10px 0;
+  padding: 12px;
+  border-radius: 10px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  background:
+    linear-gradient(145deg, rgba(254, 1, 154, 0.08), transparent 45%),
+    rgba(12, 12, 14, 0.95);
+  animation: voInspectIn 220ms ease;
+}
+
+@keyframes voInspectIn {
+  from {
+    opacity: 0;
+    transform: translateY(-4px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+.voInspect[data-status='working'] {
+  border-color: rgba(34, 197, 94, 0.35);
+}
+
+.voInspect[data-status='done'] {
+  border-color: rgba(59, 130, 246, 0.35);
+}
+
+.voInspect[data-status='error'] {
+  border-color: rgba(239, 68, 68, 0.4);
+}
+
+.voInspectTop {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.voInspectIdentity {
+  display: flex;
+  gap: 10px;
+  min-width: 0;
+}
+
+.voInspectAvatar {
+  width: 34px;
+  height: 34px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  font-size: 13px;
+  font-weight: 700;
+  color: #fff;
+  background: linear-gradient(135deg, #fe019a, #9d015f);
+}
+
+.voInspectMeta {
+  min-width: 0;
+}
+
+.voInspectName {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  font-weight: 650;
+  color: #fff;
+}
+
+.voInspectRole {
+  font-size: 10px;
+  font-weight: 650;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: rgba(255, 255, 255, 0.45);
+}
+
+.voInspectStatus {
+  margin-top: 2px;
+  font-size: 11px;
+  color: rgba(134, 239, 172, 0.95);
+}
+
+.voInspect[data-status='idle'] .voInspectStatus {
+  color: rgba(255, 255, 255, 0.45);
+}
+
+.voInspect[data-status='done'] .voInspectStatus {
+  color: #93c5fd;
+}
+
+.voInspect[data-status='error'] .voInspectStatus {
+  color: #fca5a5;
+}
+
+.voInspectClose {
+  appearance: none;
+  border: none;
+  background: transparent;
+  color: rgba(255, 255, 255, 0.45);
+  font-size: 16px;
+  line-height: 1;
+  cursor: pointer;
+  padding: 2px 4px;
+
+  &:hover {
+    color: #fff;
+  }
+}
+
+.voInspectTask {
+  margin-top: 10px;
+  font-size: 12px;
+  font-weight: 560;
+  color: rgba(255, 255, 255, 0.88);
+  line-height: 1.4;
+}
+
+.voInspectSection {
+  margin-top: 10px;
+}
+
+.voInspectSectionLabel {
+  font-size: 10px;
+  font-weight: 650;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  color: rgba(255, 255, 255, 0.38);
+  margin-bottom: 6px;
+}
+
+.voInspectFiles {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.voInspectFile {
+  appearance: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  max-width: 100%;
+  height: 24px;
+  padding: 0 8px;
+  border-radius: 5px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  background: rgba(255, 255, 255, 0.05);
+  color: rgba(255, 255, 255, 0.85);
+  font-size: 11px;
+  cursor: pointer;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+
+  &:hover {
+    border-color: rgba(254, 1, 154, 0.45);
+    background: rgba(254, 1, 154, 0.1);
+  }
+}
+
+.voInspectFileKind {
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: rgba(254, 1, 154, 0.9);
+}
+
+.voInspectActs {
+  margin: 0;
+  padding-left: 16px;
+  font-size: 11px;
+  line-height: 1.45;
+  color: rgba(255, 255, 255, 0.62);
+}
+
+.voInspectActDone {
+  color: rgba(255, 255, 255, 0.32);
+  text-decoration: line-through;
+}
+
+.voInspectSummary,
+.voInspectEmpty {
+  margin: 10px 0 0;
+  font-size: 11px;
+  line-height: 1.45;
+  color: rgba(255, 255, 255, 0.55);
+}
+
+.voInspectError {
+  margin: 8px 0 0;
+  font-size: 11px;
+  color: #fca5a5;
+}
+
+.voInspectStop {
+  margin-top: 10px;
+  height: 26px;
+  padding: 0 10px;
+  border-radius: 5px;
+  border: 1px solid rgba(239, 68, 68, 0.35);
+  background: rgba(239, 68, 68, 0.12);
+  color: #fca5a5;
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+
+  &:hover {
+    background: rgba(239, 68, 68, 0.2);
+  }
 }
 
 .composerHint {

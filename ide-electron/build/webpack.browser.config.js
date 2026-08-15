@@ -141,6 +141,10 @@ module.exports = createConfig({
           from: path.join(srcDir, 'assets/olkil.mp4'),
           to: path.join(distDir, 'assets/olkil.mp4'),
         },
+        {
+          from: path.join(__dirname, '../src/modules/olkil-ai/VertualOffice/vertualoffice.html'),
+          to: path.join(distDir, 'vertualoffice.html'),
+        },
       ],
     }),
   ],

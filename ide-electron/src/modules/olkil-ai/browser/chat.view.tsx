@@ -7,12 +7,20 @@ import {
   FileChangeInfo,
   FileDiffLine,
   IOlkilChatService,
+  IOlkilChatUiService,
   OllamaDownloadUiState,
   QueuedChatMessage,
   UiChatMessage,
 } from '../common';
+import {
+  IOlkilVirtualOfficeService,
+  VIRTUAL_OFFICE_ASSIGNEES,
+  VirtualOfficeAssigneeId,
+  VirtualOfficeWorkerBrief,
+  basenamePath,
+} from '../common/virtual-office';
 import { MarkdownMessage } from './markdown';
-import { CheckIcon, CopyIcon, RefreshIcon, SendIcon, StopIcon } from './icons';
+import { CheckIcon, CopyIcon, RefreshIcon, SendIcon, ShieldStarIcon, StopIcon } from './icons';
 import styles from './chat.view.module.less';
 import logoUrl from './olkil-logo.png';
 
@@ -71,6 +79,83 @@ async function copyText(text: string) {
   } catch {
     // ignore
   }
+}
+
+type ChatRow =
+  | { type: 'message'; message: UiChatMessage }
+  | { type: 'activity-group'; parent: UiChatMessage; children: UiChatMessage[] };
+
+function clusterActivityRows(messages: UiChatMessage[]): ChatRow[] {
+  const childrenByParent = new Map<string, UiChatMessage[]>();
+  const childIds = new Set<string>();
+  for (const m of messages) {
+    const parentId = m.activity?.parentId;
+    if (m.role === 'activity' && parentId) {
+      const list = childrenByParent.get(parentId) || [];
+      list.push(m);
+      childrenByParent.set(parentId, list);
+      childIds.add(m.id);
+    }
+  }
+  const rows: ChatRow[] = [];
+  for (const m of messages) {
+    if (childIds.has(m.id)) continue;
+    if (m.role === 'activity' && m.activity) {
+      const key = m.activity.groupId || m.activity.toolCallId || m.id;
+      const children = childrenByParent.get(key) || childrenByParent.get(m.id) || [];
+      if (children.length > 0) {
+        rows.push({ type: 'activity-group', parent: m, children });
+        continue;
+      }
+    }
+    rows.push({ type: 'message', message: m });
+  }
+  return rows;
+}
+
+function ExplorationGroup({
+  parent,
+  items,
+  onOpenPath,
+}: {
+  parent: UiChatMessage;
+  items: UiChatMessage[];
+  onOpenPath: (path: string) => void;
+}) {
+  const a = parent.activity;
+  const [open, setOpen] = useState(false);
+  if (!a) return null;
+  const files =
+    a.filesExplored ?? new Set(items.map((c) => c.activity?.filePath).filter(Boolean)).size;
+  const searches =
+    a.searchCount ?? items.filter((c) => c.activity?.kind === 'searching').length;
+  const label =
+    a.done && (files || searches)
+      ? a.label || `Explored ${files} files, ${searches} searches`
+      : a.label;
+  return (
+    <div className={`${styles.activityGroup} ${a.done ? styles.activityDone : styles.activityLive}`}>
+      <button type="button" className={styles.activityGroupHeader} onClick={() => setOpen((v) => !v)}>
+        <span className={styles.activityGlyph} aria-hidden>
+          {activityGlyph(a.kind, a.done)}
+        </span>
+        <span className={styles.activityLabel}>{label}</span>
+        <span className={styles.activityGroupMeta}>
+          {files ? `${files} files` : ''}
+          {files && searches ? ', ' : ''}
+          {searches ? `${searches} searches` : ''}
+        </span>
+        <span className={`${styles.activityChevron} ${open ? styles.activityChevronOpen : ''}`}>▸</span>
+      </button>
+      {open ? (
+        <div className={styles.activityGroupBody}>
+          {items.map((child) => (
+            <ActivityRow key={child.id} message={child} onOpenPath={onOpenPath} />
+          ))}
+        </div>
+      ) : null}
+    </div>
+  );
 }
 
 function ActivityRow({
@@ -380,15 +465,21 @@ export interface OlkilAiChatViewProps {
 
 export const OlkilAiChatView = ({ dormant = false }: OlkilAiChatViewProps) => {
   const chat = useInjectable<IOlkilChatService>(IOlkilChatService);
+  const chatUi = useInjectable<IOlkilChatUiService>(IOlkilChatUiService);
+  const virtualOffice = useInjectable<IOlkilVirtualOfficeService>(IOlkilVirtualOfficeService);
   const [messages, setMessages] = useState<UiChatMessage[]>(chat.messages);
   const [status, setStatus] = useState(chat.status);
   const [busy, setBusy] = useState(chat.busy);
   const [modelId, setModelId] = useState(chat.modelId);
   const [models, setModels] = useState(chat.models);
   const [chatMode, setChatMode] = useState(chat.chatMode);
+  const [liveTesting, setLiveTesting] = useState(chat.liveTesting);
   const [ollamaDownload, setOllamaDownload] = useState<OllamaDownloadUiState>(chat.ollamaDownload);
   const [pendingCount, setPendingCount] = useState(chat.pendingChanges.length);
   const [queue, setQueue] = useState<QueuedChatMessage[]>(chat.queuedMessages);
+  const [voActive, setVoActive] = useState(virtualOffice.active);
+  const [voAssignee, setVoAssignee] = useState<VirtualOfficeAssigneeId>(virtualOffice.assigneeId);
+  const [voBrief, setVoBrief] = useState<VirtualOfficeWorkerBrief | null>(null);
   const [input, setInput] = useState('');
   const [attachments, setAttachments] = useState<ChatAttachment[]>([]);
   const [mentionOpen, setMentionOpen] = useState(false);
@@ -400,6 +491,7 @@ export const OlkilAiChatView = ({ dormant = false }: OlkilAiChatViewProps) => {
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const mentionSeq = useRef(0);
   const stickBottomRef = useRef(true);
+  const lastInspectedRef = useRef<string | null>(null);
 
   const sync = useCallback(() => {
     setMessages([...chat.messages]);
@@ -408,10 +500,30 @@ export const OlkilAiChatView = ({ dormant = false }: OlkilAiChatViewProps) => {
     setModelId(chat.modelId);
     setModels([...chat.models]);
     setChatMode(chat.chatMode);
+    setLiveTesting(chat.liveTesting);
     setOllamaDownload({ ...chat.ollamaDownload });
     setPendingCount(chat.pendingChanges.length);
     setQueue([...chat.queuedMessages]);
   }, [chat]);
+
+  const syncVo = useCallback(() => {
+    setVoActive(virtualOffice.active);
+    setVoAssignee(virtualOffice.assigneeId);
+    const id = virtualOffice.inspectedWorkerId;
+    setVoBrief(id ? virtualOffice.getWorkerBrief(id) : null);
+    if (id && id !== lastInspectedRef.current) {
+      lastInspectedRef.current = id;
+      try {
+        chatUi.open();
+        chatUi.setPinned(true);
+      } catch {
+        // optional
+      }
+    }
+    if (!id) {
+      lastInspectedRef.current = null;
+    }
+  }, [virtualOffice, chatUi]);
 
   const dormantRef = useRef(dormant);
   const staleRef = useRef(false);
@@ -429,13 +541,25 @@ export const OlkilAiChatView = ({ dormant = false }: OlkilAiChatViewProps) => {
     return () => d.dispose();
   }, [chat, sync]);
 
+  useEffect(() => {
+    syncVo();
+    const d = virtualOffice.onDidChange(() => {
+      if (dormantRef.current) {
+        return;
+      }
+      syncVo();
+    });
+    return () => d.dispose();
+  }, [virtualOffice, syncVo]);
+
   // Catch up in one pass when the panel is brought back.
   useEffect(() => {
     if (!dormant && staleRef.current) {
       staleRef.current = false;
       sync();
+      syncVo();
     }
-  }, [dormant, sync]);
+  }, [dormant, sync, syncVo]);
 
   useEffect(() => {
     const el = listRef.current;
@@ -740,7 +864,7 @@ export const OlkilAiChatView = ({ dormant = false }: OlkilAiChatViewProps) => {
     return () => window.clearTimeout(timer);
   }, [busy]);
 
-  const rows = useMemo(() => messages, [messages]);
+  const rows = useMemo(() => clusterActivityRows(messages), [messages]);
   const ollamaBlocked =
     ollamaDownload.phase === 'needs_download' ||
     ollamaDownload.phase === 'starting' ||
@@ -860,6 +984,102 @@ export const OlkilAiChatView = ({ dormant = false }: OlkilAiChatViewProps) => {
         </div>
       </header>
 
+      {voActive && voBrief ? (
+        <div className={styles.voInspect} data-status={voBrief.deskStatus}>
+          <div className={styles.voInspectTop}>
+            <div className={styles.voInspectIdentity}>
+              <span className={styles.voInspectAvatar} aria-hidden>
+                {(voBrief.workerName[0] || '?').toUpperCase()}
+              </span>
+              <div className={styles.voInspectMeta}>
+                <div className={styles.voInspectName}>
+                  {voBrief.workerName}
+                  <span className={styles.voInspectRole}>{voBrief.role}</span>
+                </div>
+                <div className={styles.voInspectStatus}>
+                  {voBrief.deskStatus === 'working'
+                    ? voBrief.task?.liveStatus || 'Working'
+                    : voBrief.deskStatus === 'done'
+                      ? 'Completed'
+                      : voBrief.deskStatus === 'error'
+                        ? 'Failed'
+                        : 'Idle — ready for a task'}
+                </div>
+              </div>
+            </div>
+            <button
+              type="button"
+              className={styles.voInspectClose}
+              title="Close inspect"
+              onClick={() => virtualOffice.clearInspect()}
+            >
+              ×
+            </button>
+          </div>
+
+          {voBrief.task ? (
+            <>
+              <div className={styles.voInspectTask}>{voBrief.task.title}</div>
+
+              {voBrief.task.files.length > 0 ? (
+                <div className={styles.voInspectSection}>
+                  <div className={styles.voInspectSectionLabel}>Files touched</div>
+                  <div className={styles.voInspectFiles}>
+                    {voBrief.task.files.slice(0, 8).map((f) => (
+                      <button
+                        key={f.path}
+                        type="button"
+                        className={styles.voInspectFile}
+                        title={f.path}
+                        onClick={() => void chat.openPath(f.path)}
+                      >
+                        <span className={styles.voInspectFileKind}>{f.kind}</span>
+                        {basenamePath(f.path)}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              ) : null}
+
+              {voBrief.task.activities.length > 0 ? (
+                <div className={styles.voInspectSection}>
+                  <div className={styles.voInspectSectionLabel}>Live activity</div>
+                  <ul className={styles.voInspectActs}>
+                    {voBrief.task.activities.slice(-6).map((a) => (
+                      <li key={a.id} className={a.done ? styles.voInspectActDone : undefined}>
+                        {a.label}
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              ) : null}
+
+              {voBrief.task.summary && voBrief.task.status !== 'running' ? (
+                <p className={styles.voInspectSummary}>{voBrief.task.summary.slice(0, 360)}</p>
+              ) : null}
+
+              {voBrief.task.error ? (
+                <p className={styles.voInspectError}>{voBrief.task.error}</p>
+              ) : null}
+
+              {voBrief.task.status === 'running' ? (
+                <button
+                  type="button"
+                  className={styles.voInspectStop}
+                  onClick={() => void virtualOffice.cancelTask(voBrief.task!.id)}
+                >
+                  Stop {voBrief.workerName}
+                </button>
+              ) : null}
+            </>
+          ) : (
+            <p className={styles.voInspectEmpty}>
+              No active task. Select {voBrief.workerName} in Assign to, then send a prompt.
+            </p>
+          )}
+        </div>
+      ) : null}
+
       {ollamaDownload.phase === 'needs_download' || ollamaDownload.phase === 'error' ? (
         <div className={styles.ollamaBanner}>
           <div className={styles.ollamaBannerText}>
@@ -975,7 +1195,19 @@ export const OlkilAiChatView = ({ dormant = false }: OlkilAiChatViewProps) => {
       ) : null}
 
       <div className={styles.list} ref={listRef} onScroll={onListScroll}>
-        {rows.map((m) => {
+        {rows.map((row) => {
+          if (row.type === 'activity-group') {
+            return (
+              <div key={row.parent.id} className={styles.rowLeft}>
+                <ExplorationGroup
+                  parent={row.parent}
+                  items={row.children}
+                  onOpenPath={(p) => void chat.openPath(p)}
+                />
+              </div>
+            );
+          }
+          const m = row.message;
           if (m.role === 'activity' && m.activity) {
             return (
               <div key={m.id} className={styles.rowLeft}>
@@ -1048,7 +1280,9 @@ export const OlkilAiChatView = ({ dormant = false }: OlkilAiChatViewProps) => {
               <div
                 className={`${styles.bubble} ${styles[m.role] || ''} ${
                   isUser ? styles.bubbleUser : styles.bubbleAssistant
-                } ${m.pending ? styles.bubblePending : ''}`}
+                } ${isUser && m.liveTest ? styles.bubbleUserLiveTest : ''} ${
+                  m.pending ? styles.bubblePending : ''
+                }`}
               >
                 {!isUser && !isSystem ? (
                   <div className={styles.roleRow}>
@@ -1058,7 +1292,22 @@ export const OlkilAiChatView = ({ dormant = false }: OlkilAiChatViewProps) => {
                     </span>
                   </div>
                 ) : null}
-                {isUser || isSystem ? (
+                {isUser && m.liveTest ? (
+                  <div className={styles.userLiveTestLayout}>
+                    <div className={styles.userLiveTestBody}>
+                      <div className={styles.content}>{m.content || (m.pending ? '…' : '')}</div>
+                    </div>
+                    <span
+                      className={`${styles.testingBadgeOnPrompt} ${
+                        liveTesting ? styles.testingBadgeOnPromptLive : ''
+                      }`}
+                      title="Live browser test"
+                    >
+                      <ShieldStarIcon size={11} className={styles.testingBadgeIcon} />
+                      Testing
+                    </span>
+                  </div>
+                ) : isUser || isSystem ? (
                   <div className={styles.content}>{m.content || (m.pending ? '…' : '')}</div>
                 ) : (
                   <MarkdownMessage
@@ -1177,6 +1426,28 @@ export const OlkilAiChatView = ({ dormant = false }: OlkilAiChatViewProps) => {
           </div>
         ) : null}
 
+        {voActive ? (
+          <div className={styles.voBar}>
+            <label className={styles.voLabel} htmlFor="olkil-vo-assignee">
+              Assign to
+            </label>
+            <select
+              id="olkil-vo-assignee"
+              className={styles.voSelect}
+              value={voAssignee}
+              onChange={(e) =>
+                virtualOffice.setAssignee(e.target.value as VirtualOfficeAssigneeId)
+              }
+            >
+              {VIRTUAL_OFFICE_ASSIGNEES.map((a) => (
+                <option key={a.id} value={a.id}>
+                  {a.name} — {a.role}
+                </option>
+              ))}
+            </select>
+          </div>
+        ) : null}
+
         {attachments.length ? (
           <div className={styles.attachRow}>
             {attachments.map((a) => (
@@ -1237,7 +1508,11 @@ export const OlkilAiChatView = ({ dormant = false }: OlkilAiChatViewProps) => {
             className={styles.input}
             value={input}
             placeholder={
-              chatMode === 'ask'
+              voActive
+                ? voAssignee === 'manager'
+                  ? 'Task for Manager — they will assign a free developer…'
+                  : `Task for ${VIRTUAL_OFFICE_ASSIGNEES.find((a) => a.id === voAssignee)?.name || 'teammate'}…`
+                : chatMode === 'ask'
                 ? 'Ask about the code…  @codebase @Problems @Git @Selection'
                 : chatMode === 'agent'
                   ? 'Ask Agent…  @file · @codebase · drop images · Ctrl+K inline'

@@ -18,6 +18,7 @@ import {
   FileChangeKind,
   IOlkilAiNodeService,
   IOlkilChatService,
+  LiveTestResult,
   OlkilAiNodeServicePath,
   OllamaDownloadUiState,
   QueuedChatMessage,
@@ -43,6 +44,7 @@ import {
 import { loadProjectRules } from '../common/rules';
 import { buildDiffHunks, applyAcceptedHunks } from '../common/hunks';
 import { buildChangeSummary, buildDiffPreview, countLineStats } from '../common/diff';
+import { IOlkilVirtualOfficeService } from '../common/virtual-office';
 import { OlkilDiffDecorationManager } from './diff-decorations';
 import {
   findContentArtifact,
@@ -152,6 +154,9 @@ export class OlkilChatService extends Disposable implements IOlkilChatService {
   @Autowired(OlkilChatHistoryService)
   private chatHistoryStore!: OlkilChatHistoryService;
 
+  @Autowired(IOlkilVirtualOfficeService)
+  private virtualOffice!: IOlkilVirtualOfficeService;
+
   private readonly _onDidChange = new Emitter<void>();
   readonly onDidChange: Event<void> = this._onDidChange.event;
 
@@ -168,6 +173,12 @@ export class OlkilChatService extends Disposable implements IOlkilChatService {
   modelId = DEFAULT_MODEL_ID;
   modelName = findModel(DEFAULT_MODEL_ID).model;
   chatMode: ChatMode = DEFAULT_CHAT_MODE;
+  /** Active Live Test session — UI shows pink Testing badge; browser boot runs immediately. */
+  liveTesting = false;
+  private liveTestBootPromise: Promise<LiveTestResult | null> | null = null;
+  private liveTestBootResult: LiveTestResult | null = null;
+  /** Virtual Office Jasmine desk task while Live Test uses the Dev Studio browser loop. */
+  private voLiveQaTaskId: string | null = null;
   chatHistory: ChatHistorySummary[] = [];
   private sessionId = nextSessionId();
   private sessionCreatedAt = Date.now();
@@ -644,22 +655,81 @@ export class OlkilChatService extends Disposable implements IOlkilChatService {
       return;
     }
     this.chatMode = 'agent';
+    this.liveTesting = true;
+    this.liveTestBootResult = null;
     const focus = (goal || '').trim() || 'Test the application';
+
+    if (this.virtualOffice?.active) {
+      try {
+        this.voLiveQaTaskId = this.virtualOffice.beginLiveQa(focus);
+      } catch {
+        this.voLiveQaTaskId = null;
+      }
+    }
+
+    // Open Test Browser immediately — do not wait for the LLM.
+    this.liveTestBootPromise = this.bootstrapLiveBrowser(focus);
+    this.fire();
+
     const agentPrompt = `LIVE TEST MODE — Verify this project in a real browser (headed Chromium on my screen).
 
 User test goal:
 ${focus}
 
+IMPORTANT: Chromium is already launching on the user's screen right now. Do NOT stall on planning.
+
 Required loop:
-1. Call live_test (start_app true, headed true) with goal set to the user test goal above.
-2. Read the snapshot. Exercise the goal via browser_click / browser_fill using role+name.
+1. If bootstrap notes say the browser is ready, call browser_snapshot immediately. Otherwise call live_test (start_app true, headed true) once with goal set to the user test goal above.
+2. Exercise the goal via browser_click / browser_fill using role+name. Move fast — prefer actions over long explanations.
 3. File uploads: click Upload OR call browser_upload — OS dialogs are auto-handled (latest matching file from Downloads/Desktop: image→newest image, pdf→newest pdf). Never wait on a file picker.
 4. Call browser_console + browser_network. Use browser_screenshot only when needed (not every click). Treat pageerror / 4xx–5xx as bugs.
 5. Only if you need the visible inspector: browser_devtools panel=console|network (right dock). Close it when done.
 6. If broken: investigate_codepath / read_file → search_replace fix → browser_reload → retest the SAME goal.
 7. Max 5 fix rounds. End with PASS/FAIL, evidence (console/network), and files changed.
 8. Do not claim success without a successful retest in this turn. Start now.`;
-    await this.send(focus, [], { historyText: agentPrompt });
+    await this.send(focus, [], { historyText: agentPrompt, liveTest: true });
+    if (this.voLiveQaTaskId && !this.busy) {
+      this.finishVoLiveQa(this.cancelRequested ? 'cancelled' : 'completed');
+    }
+  }
+
+  /** Start / reuse the live app and open headed Chromium as fast as possible. */
+  private async bootstrapLiveBrowser(goal: string): Promise<LiveTestResult | null> {
+    try {
+      this.setStatus('Opening Test Browser…');
+      const result = await this.aiNode.liveTest({
+        workspaceRoot: this.workspaceRoot(),
+        goal,
+        startApp: true,
+        headed: true,
+      });
+      this.liveTestBootResult = result;
+      if (result.ok) {
+        this.setStatus(this.liveTesting ? 'Testing' : '');
+      } else {
+        this.setStatus(result.error || 'Browser launch issue');
+      }
+      return result;
+    } catch (e: any) {
+      const err = e?.message || String(e);
+      this.liveTestBootResult = null;
+      this.setStatus(`Browser failed: ${err}`);
+      return null;
+    }
+  }
+
+  private finishVoLiveQa(status: 'completed' | 'failed' | 'cancelled', summary?: string) {
+    const id = this.voLiveQaTaskId;
+    if (!id || !this.virtualOffice) {
+      this.voLiveQaTaskId = null;
+      return;
+    }
+    this.voLiveQaTaskId = null;
+    try {
+      this.virtualOffice.endLiveQa(id, { status, summary });
+    } catch {
+      // ignore
+    }
   }
 
   stop() {
@@ -668,6 +738,10 @@ Required loop:
     if (runId) {
       void this.aiNode.clineCancel(runId).catch(() => undefined);
     }
+    this.liveTesting = false;
+    this.liveTestBootPromise = null;
+    this.liveTestBootResult = null;
+    this.finishVoLiveQa('cancelled');
     this.status = 'Stopped';
     this.busy = false;
     this.fire();
@@ -1003,10 +1077,23 @@ Required loop:
   async send(
     userText: string,
     attachments: ChatAttachment[] = [],
-    opts?: { historyText?: string },
+    opts?: { historyText?: string; liveTest?: boolean },
   ) {
     const text = userText.trim();
     if (!text && !attachments.length) {
+      return;
+    }
+
+    const isLiveTestRun =
+      Boolean(opts?.liveTest) ||
+      this.liveTesting ||
+      /LIVE TEST MODE/i.test(opts?.historyText || '');
+
+    // Virtual Office mode: parallel assign — does not touch single-agent busy flag.
+    // Live Test is the exception: Jasmine (QA) animates on the floor, but the
+    // actual run uses the same Dev Studio browser loop (not Cline).
+    if (this.virtualOffice?.active && !isLiveTestRun) {
+      await this.sendVirtualOfficeAssignment(text, attachments, opts);
       return;
     }
 
@@ -1050,6 +1137,10 @@ Required loop:
     this.cancelRequested = false;
     this.stallAutoRetries = 0;
     this.busy = true;
+    if (isLiveTestRun) {
+      this.liveTesting = true;
+      this.chatMode = 'agent';
+    }
 
     const display =
       attachments.length > 0
@@ -1060,6 +1151,7 @@ Required loop:
       role: 'user',
       content: display || '(attachments)',
       attachments: attachments.length ? [...attachments] : undefined,
+      liveTest: isLiveTestRun || undefined,
     });
     if (this.messages.length > 160) {
       this.messages = this.messages.slice(-160);
@@ -1078,35 +1170,90 @@ Required loop:
 
     const pendingId = nextId();
     this.messages.push({ id: pendingId, role: 'assistant', content: '', pending: true });
-    this.setStatus(this.chatMode === 'agent' ? 'Thinking' : 'Planning');
+    this.setStatus(isLiveTestRun ? 'Testing' : this.chatMode === 'agent' ? 'Thinking' : 'Planning');
+
+    // Live Test: Chromium must open on send — never wait for Cline (no browser tools there).
+    if (isLiveTestRun && !this.liveTestBootPromise) {
+      this.liveTestBootPromise = this.bootstrapLiveBrowser(text || 'Test the application');
+    }
+    if (isLiveTestRun) {
+      this.pushActivity(pendingId, 'browsing', 'Opening Test Browser…');
+      void this.liveTestBootPromise?.then((boot) => {
+        if (this.cancelRequested) {
+          return;
+        }
+        const label = boot?.ok
+          ? boot.url
+            ? `Test Browser open · ${boot.url}`
+            : 'Test Browser open'
+          : boot?.error || 'Test Browser launch failed';
+        for (let i = this.messages.length - 1; i >= 0; i--) {
+          const m = this.messages[i];
+          if (
+            m.role === 'activity' &&
+            m.activity &&
+            !m.activity.done &&
+            /Opening (Test Browser|Chromium)/i.test(m.activity.label || m.content || '')
+          ) {
+            m.activity = { ...m.activity, done: true, label };
+            m.content = label;
+            break;
+          }
+        }
+        if (this.liveTesting) {
+          this.setStatus('Testing');
+        }
+        this.fire();
+      });
+    }
 
     try {
-      // Full Cline engine (@cline/sdk Agent + default tools). Falls back to legacy loop only if SDK fails to load.
       let reply = '';
-      try {
-        reply = await this.runClineEngine(pendingId, enriched);
-      } catch (clineErr: any) {
-        const msg = clineErr?.message || String(clineErr);
-        if (/Cannot find module|Failed to fetch dynamically|ERR_MODULE_NOT_FOUND|@cline\//i.test(msg)) {
-          this.pushUi('status', 'Agent engine unavailable — using built-in loop.');
-          reply = await this.runAgentLoop(pendingId);
-        } else {
-          throw clineErr;
+      if (isLiveTestRun) {
+        // Built-in loop owns live_test / browser_* tools. Cline does not.
+        reply = await this.runAgentLoop(pendingId);
+      } else {
+        // Full Cline engine (@cline/sdk Agent + default tools). Falls back to legacy loop only if SDK fails to load.
+        try {
+          reply = await this.runClineEngine(pendingId, enriched);
+        } catch (clineErr: any) {
+          const msg = clineErr?.message || String(clineErr);
+          if (/Cannot find module|Failed to fetch dynamically|ERR_MODULE_NOT_FOUND|@cline\//i.test(msg)) {
+            this.pushUi('status', 'Agent engine unavailable — using built-in loop.');
+            reply = await this.runAgentLoop(pendingId);
+          } else {
+            throw clineErr;
+          }
         }
       }
       let finalText = this.sanitizeUserFacingReply((reply || '').trim());
       // Empty / stall dump → silent auto-resume once (Cursor never asks "resend").
+      // Skip if the run already did real work (tools / edits) — re-running wastes time.
+      const hadProgress =
+        this.pendingChanges.length > 0 ||
+        this.messages.some(
+          (m) =>
+            m.id === pendingId
+              ? false
+              : m.role === 'activity' &&
+                m.activity &&
+                m.activity.kind !== 'thinking' &&
+                Boolean(m.activity.done),
+        );
       if (
         (!finalText || this.looksLikeStallFallback(finalText)) &&
         this.stallAutoRetries < 1 &&
-        !this.cancelRequested
+        !this.cancelRequested &&
+        !hadProgress
       ) {
         this.stallAutoRetries += 1;
         this.setStatus('Provider stall — auto-resuming…');
         this.setStatus('Auto-resuming…');
         await sleep(450);
         try {
-          const resumed = await this.runClineEngine(pendingId, enriched);
+          const resumed = isLiveTestRun
+            ? await this.runAgentLoop(pendingId)
+            : await this.runClineEngine(pendingId, enriched);
           finalText = this.sanitizeUserFacingReply((resumed || '').trim());
         } catch {
           const resumed = await this.runAgentLoop(pendingId);
@@ -1162,6 +1309,12 @@ Required loop:
         await this.typeOut(pendingId, msg);
         this.history.push({ role: 'assistant', content: msg });
         this.setStatus('');
+      } else if (/exceeded maxIterations/i.test(e?.message || String(e))) {
+        const msg =
+          'I hit the per-run step limit on this large task. Reply **continue** and I’ll keep going from where I left off.';
+        await this.typeOut(pendingId, msg);
+        this.history.push({ role: 'assistant', content: msg });
+        this.setStatus('');
       } else {
         this.patchUi(pendingId, {
           content: `Error: ${e?.message || String(e)}`,
@@ -1171,6 +1324,12 @@ Required loop:
       }
     } finally {
       this.busy = false;
+      if (this.liveTesting) {
+        this.liveTesting = false;
+        this.liveTestBootPromise = null;
+        this.liveTestBootResult = null;
+      }
+      this.finishVoLiveQa(this.cancelRequested ? 'cancelled' : 'completed');
       this.persistCurrentSession();
       this.fire();
       this.scheduleFlushQueue();
@@ -2301,6 +2460,92 @@ Read the highest-scoring evidence in trail order. For a bug, trace UI → handle
   }
 
   /**
+   * Virtual Office: assign via chat to Manager / developer without blocking single-agent.
+   */
+  private async sendVirtualOfficeAssignment(
+    text: string,
+    attachments: ChatAttachment[],
+    opts?: { historyText?: string },
+  ) {
+    const option = findModel(this.modelId);
+    if (option.provider === 'ollama') {
+      const phase = this.ollamaDownload.phase;
+      if (
+        phase === 'needs_download' ||
+        phase === 'error' ||
+        phase === 'downloading' ||
+        phase === 'starting'
+      ) {
+        this.pushUi('status', 'Finish Ollama model setup before assigning Virtual Office work.');
+        return;
+      }
+    }
+
+    const display =
+      attachments.length > 0
+        ? `${text}${text ? '\n' : ''}${attachments.map((a) => `@${a.name}`).join(' ')}`
+        : text;
+
+    const who =
+      this.virtualOffice.assigneeId === 'manager'
+        ? 'Manager'
+        : this.virtualOffice.assigneeId;
+
+    this.messages.push({
+      id: nextId(),
+      role: 'user',
+      content: `[Virtual Office → ${who}] ${display || '(attachments)'}`,
+      attachments: attachments.length ? [...attachments] : undefined,
+    });
+    if (this.messages.length > 160) {
+      this.messages = this.messages.slice(-160);
+    }
+
+    const pendingId = nextId();
+    this.messages.push({
+      id: pendingId,
+      role: 'assistant',
+      content: 'Assigning on the Virtual Office floor…',
+      pending: true,
+    });
+    this.setStatus('Virtual Office');
+    this.fire();
+
+    try {
+      const forAgent = (opts?.historyText || text).trim() || text;
+      const enriched = await this.buildUserContentWithAttachments(forAgent, attachments);
+      const task = await this.virtualOffice.assignFromChat(enriched, {
+        modelId: this.modelId,
+        mode: this.chatMode === 'ask' ? 'ask' : this.chatMode === 'plan' ? 'plan' : 'agent',
+      });
+
+      const msg = this.messages.find((m) => m.id === pendingId);
+      if (msg) {
+        msg.pending = false;
+        msg.content = [
+          `Assigned to **${task.workerName}** on the Virtual Office floor.`,
+          '',
+          `Task: ${task.title}`,
+          '',
+          who === 'Manager'
+            ? 'Manager picked a free developer. You can assign another task in parallel — pick someone else (or Manager again) in the dropdown.'
+            : 'They are working in parallel. Switch the dropdown to another free teammate for the next task.',
+        ].join('\n');
+      }
+      this.setStatus('');
+      this.fire();
+    } catch (err: any) {
+      const msg = this.messages.find((m) => m.id === pendingId);
+      if (msg) {
+        msg.pending = false;
+        msg.content = `Virtual Office assign failed: ${err?.message || err}`;
+      }
+      this.setStatus('');
+      this.fire();
+    }
+  }
+
+  /**
    * OLKIL coding agent (Cline-engine under the hood).
    * Live tools / thinking / file-change cards surface in the Olkil chat UI.
    */
@@ -2339,6 +2584,9 @@ Read the highest-scoring evidence in trail order. For a bug, trace UI → handle
     let thinkingStarted = false;
     let explorerRefreshTimer: ReturnType<typeof setTimeout> | null = null;
     const touchedExplorerPaths = new Set<string>();
+    let lastOpenedEditPath = '';
+    let lastUiFireAt = 0;
+    let pendingFire = false;
 
     const scheduleExplorerRefresh = (filePath: string) => {
       touchedExplorerPaths.add(filePath);
@@ -2350,6 +2598,23 @@ Read the highest-scoring evidence in trail order. For a bug, trace UI → handle
         explorerRefreshTimer = null;
         void this.refreshExplorerLive([...touchedExplorerPaths]);
         touchedExplorerPaths.clear();
+      }, 120);
+    };
+
+    const fireUiThrottled = () => {
+      const now = Date.now();
+      if (now - lastUiFireAt >= 120) {
+        lastUiFireAt = now;
+        pendingFire = false;
+        this.fire();
+        return;
+      }
+      if (pendingFire) return;
+      pendingFire = true;
+      setTimeout(() => {
+        pendingFire = false;
+        lastUiFireAt = Date.now();
+        this.fire();
       }, 120);
     };
 
@@ -2374,7 +2639,7 @@ Read the highest-scoring evidence in trail order. For a bug, trace UI → handle
                 ...m.activity,
                 resultPreview: st.reasoning.slice(0, 800),
               };
-              this.fire();
+              fireUiThrottled();
               break;
             }
           }
@@ -2386,7 +2651,7 @@ Read the highest-scoring evidence in trail order. For a bug, trace UI → handle
           const painted = this.bubbleSafeContent(st.text);
           if (painted.trim().length > 0) {
             this.patchUi(pendingId, { content: painted, pending: true });
-            this.fire();
+            fireUiThrottled();
           }
         }
       }
@@ -2401,12 +2666,38 @@ Read the highest-scoring evidence in trail order. For a bug, trace UI → handle
             command: a.command,
             argsPreview: a.argsPreview,
             toolCallId: a.id,
+            groupId: a.groupId,
+            parentId: a.parentId,
+            lineRange: a.lineRange,
+            filesExplored: a.filesExplored,
+            searchCount: a.searchCount,
+            resultPreview: a.resultPreview,
           });
+        } else if (!a.done) {
+          for (let i = this.messages.length - 1; i >= 0; i--) {
+            const m = this.messages[i];
+            if (m.role === 'activity' && m.activity?.toolCallId === a.id) {
+              m.activity = {
+                ...m.activity,
+                label: a.label,
+                resultPreview: a.resultPreview || m.activity.resultPreview,
+                filesExplored: a.filesExplored ?? m.activity.filesExplored,
+                searchCount: a.searchCount ?? m.activity.searchCount,
+                lineRange: a.lineRange || m.activity.lineRange,
+              };
+              m.content = a.label;
+              fireUiThrottled();
+              break;
+            }
+          }
         }
         if (a.done && !finishedActivities.has(a.id)) {
           finishedActivities.add(a.id);
           this.completeActivityByToolId(a.id, a.label, {
             resultPreview: a.resultPreview,
+            filesExplored: a.filesExplored,
+            searchCount: a.searchCount,
+            lineRange: a.lineRange,
           });
         }
       }
@@ -2424,8 +2715,11 @@ Read the highest-scoring evidence in trail order. For a bug, trace UI → handle
             afterContent: fc.afterContent,
           });
           scheduleExplorerRefresh(fc.path);
-          // Open as soon as the file exists so the user sees live progress.
-          void this.editorService.open(URI.file(fc.path)).catch(() => undefined);
+          // Open only when the focus file changes — avoid editor thrash mid-thinking.
+          if (fc.path !== lastOpenedEditPath) {
+            lastOpenedEditPath = fc.path;
+            void this.editorService.open(URI.file(fc.path)).catch(() => undefined);
+          }
         } catch {
           // ignore card errors
         }
@@ -2444,7 +2738,8 @@ Read the highest-scoring evidence in trail order. For a bug, trace UI → handle
         }
         const raced = await Promise.race([
           runPromise.then((r) => ({ kind: 'done' as const, r })),
-          sleep(80).then(() => ({ kind: 'tick' as const, r: null })),
+          // 120ms: less IPC than 80ms while still feeling live.
+          sleep(120).then(() => ({ kind: 'tick' as const, r: null })),
         ]);
         if (raced.kind === 'done') {
           await applyState(raced.r!);
@@ -2473,7 +2768,7 @@ Read the highest-scoring evidence in trail order. For a bug, trace UI → handle
 
   private async runAgentLoop(pendingId: string): Promise<string> {
     const latestUser = [...this.history].reverse().find((m) => m.role === 'user')?.content || '';
-    const liveTestIntent = this.isLiveTestIntent(latestUser);
+    const liveTestIntent = this.liveTesting || this.isLiveTestIntent(latestUser);
     const needsImplementation =
       this.chatMode === 'agent' && this.requiresImplementation(latestUser);
     // Implement tasks are never Ask — "can you fix…?" must mutate
@@ -2482,6 +2777,7 @@ Read the highest-scoring evidence in trail order. For a bug, trace UI → handle
       questionIntent && this.isCapabilityQuestionIntent(latestUser);
     const flowQuestion =
       questionIntent && !capabilityQuestion && this.isFlowQuestionIntent(latestUser);
+    // Keep in sync with cline-runtime maxIterations — large projects need many tool turns.
     const maxSteps = capabilityQuestion
       ? 12
       : flowQuestion
@@ -2489,12 +2785,12 @@ Read the highest-scoring evidence in trail order. For a bug, trace UI → handle
         : questionIntent
           ? 5
           : this.chatMode === 'ask'
-            ? 8
-            : this.chatMode === 'agent'
-              ? liveTestIntent
-                ? 48
-                : 36
-              : 12;
+            ? 24
+            : this.chatMode === 'plan'
+              ? 64
+              : this.chatMode === 'agent'
+                ? 200
+                : 12;
     const active = this.editorService.currentResource?.uri.codeUri.fsPath;
     const casual = this.isCasualMessage(latestUser);
 
@@ -2520,7 +2816,7 @@ Read the highest-scoring evidence in trail order. For a bug, trace UI → handle
       candidates: string[];
       strongEvidence?: boolean;
     }> | null = null;
-    if (!casual) {
+    if (!casual && !liveTestIntent) {
       this.pushActivity(
         pendingId,
         'indexing',
@@ -2606,14 +2902,30 @@ Read the highest-scoring evidence in trail order. For a bug, trace UI → handle
     if (liveTestIntent && this.chatMode === 'agent') {
       const urlMatch = /https?:\/\/[^\s)'"`]+/i.exec(latestUser);
       const url = urlMatch?.[0] || '';
+      // Wait briefly for Chromium bootstrap so the model gets a ready URL/snapshot hint.
+      if (this.liveTestBootPromise) {
+        try {
+          await Promise.race([this.liveTestBootPromise, sleep(12_000)]);
+        } catch {
+          // continue — agent can still call live_test
+        }
+      }
+      const boot = this.liveTestBootResult;
+      const bootHint = boot
+        ? `\nBootstrap result: ok=${boot.ok} url=${boot.url}` +
+          (boot.notes?.length ? `\nNotes: ${boot.notes.join(' | ')}` : '') +
+          (boot.error ? `\nError: ${boot.error}` : '') +
+          `\nBrowser window should already be visible. Prefer browser_snapshot next (skip re-calling live_test unless bootstrap failed).`
+        : `\nBootstrap still running or failed — call live_test headed=true once if needed.`;
       messages.push({
         role: 'system',
         content:
           `LIVE BROWSER TASK — prioritize tools now:\n` +
-          `1) Call live_test${url ? ` with url=${url}` : ' (or browser_goto the URL the user gave)'} headed=true.\n` +
-          `2) browser_snapshot → login/create-program flow with the credentials the user gave.\n` +
+          `1) Call live_test${url ? ` with url=${url}` : ' (or browser_goto the URL the user gave)'} headed=true ONLY if browser is not open yet.\n` +
+          `2) browser_snapshot → exercise the user goal with browser_click / browser_fill.\n` +
           `3) browser_console + browser_network for errors; fix code only if the UI fails.\n` +
-          `Do NOT spend many rounds only reading backend helpers — open the browser first.`,
+          `Do NOT spend many rounds only reading backend helpers — open/use the browser first.` +
+          bootHint,
       });
     }
 
@@ -2871,15 +3183,17 @@ Read the highest-scoring evidence in trail order. For a bug, trace UI → handle
       tryInjectLateResearch();
 
       this.setStatus(
-        step === 0
-          ? this.chatMode === 'agent'
-            ? 'Thinking'
-            : this.chatMode === 'ask'
+        liveTestIntent
+          ? 'Testing'
+          : step === 0
+            ? this.chatMode === 'agent'
               ? 'Thinking'
-              : 'Planning'
-          : 'Thinking',
+              : this.chatMode === 'ask'
+                ? 'Thinking'
+                : 'Planning'
+            : 'Thinking',
       );
-      if (step === 0) {
+      if (step === 0 && !liveTestIntent) {
         this.pushActivity(pendingId, 'thinking', 'Thinking');
       }
 

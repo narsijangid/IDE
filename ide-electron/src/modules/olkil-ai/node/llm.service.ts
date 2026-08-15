@@ -29,7 +29,7 @@ import {
 } from '../common';
 import { AI_MODELS, DEFAULT_MODEL_ID, findModel, AiProviderId } from '../common/models';
 import { AGENT_TOOLS } from '../common/tools';
-import { RepositoryIndexService } from './repository-index.service';
+import { getSharedRepositoryIndex } from './repository-index.service';
 import { ripgrepSearch } from './ripgrep';
 import {
   EMBEDDED_DEEPSEEK_API_KEY,
@@ -38,7 +38,7 @@ import {
 } from './embedded-secrets';
 import { CommandRunner } from './command-runner';
 import { BrowserTestService } from './browser-test.service';
-import { olkilClineRuntime } from './cline-runtime.service';
+import { getOlkilClineRuntime } from './cline-runtime.service';
 import type { ClineEngineRunRequest, ClineEngineRunState } from '../common';
 
 const POOLSIDE_URL = 'https://inference.poolside.ai/v1/chat/completions';
@@ -309,7 +309,7 @@ export class OlkilAiNodeService implements IOlkilAiNodeService {
   private serveStarted = false;
   private pullAbort: { abort: () => void } | null = null;
   private pullIntent: 'run' | 'pause' | 'cancel' = 'run';
-  private readonly repositoryIndex = new RepositoryIndexService();
+  private readonly repositoryIndex = getSharedRepositoryIndex();
   private readonly commandRunner = new CommandRunner();
   private readonly browserTest = new BrowserTestService(this.commandRunner);
 
@@ -461,15 +461,15 @@ export class OlkilAiNodeService implements IOlkilAiNodeService {
   }
 
   async clineRun(request: ClineEngineRunRequest): Promise<ClineEngineRunState> {
-    return olkilClineRuntime.run(request);
+    return getOlkilClineRuntime().run(request);
   }
 
   async clineGetState(runId: string): Promise<ClineEngineRunState> {
-    return olkilClineRuntime.getState(runId);
+    return getOlkilClineRuntime().getState(runId);
   }
 
   async clineCancel(runId: string): Promise<boolean> {
-    return olkilClineRuntime.cancel(runId);
+    return getOlkilClineRuntime().cancel(runId);
   }
 
   private getKey(provider: AiProviderId): string {

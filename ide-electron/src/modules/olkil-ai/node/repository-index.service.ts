@@ -1952,3 +1952,13 @@ export class RepositoryIndexService {
       .catch(() => undefined);
   }
 }
+
+let sharedRepositoryIndex: RepositoryIndexService | null = null;
+
+/** Process-wide index so chat warmup and the Cline orchestrator share one cache. */
+export function getSharedRepositoryIndex(): RepositoryIndexService {
+  if (!sharedRepositoryIndex) {
+    sharedRepositoryIndex = new RepositoryIndexService();
+  }
+  return sharedRepositoryIndex;
+}

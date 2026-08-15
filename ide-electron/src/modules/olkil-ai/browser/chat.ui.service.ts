@@ -59,6 +59,11 @@ export class OlkilChatUiService extends Disposable implements IOlkilChatUiServic
       this.editorService.onActiveResourceChange(() => {
         // Reading code wins over chatting: fold the panel into its pill so the
         // editor is never covered. Pinning (or a running turn) opts out.
+        // Virtual Office tab is the assignment board — keep chat open for prompts.
+        const uri = this.editorService.currentResource?.uri;
+        if (uri?.scheme === 'olkil-voffice') {
+          return;
+        }
         if (this.state === 'open' && !this.pinned && !this.chat.busy) {
           this.minimize();
         }

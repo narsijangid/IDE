@@ -2,11 +2,6 @@ import { accessSync, constants as fsConstants } from "node:fs";
 import { createRequire } from "node:module";
 import { delimiter, dirname, join } from "node:path";
 import type { GatewayResolvedProviderConfig } from "@olkil/shared";
-// Keep this import static so the VS Code extension bundle includes the SAP
-// provider. Hiding it behind a computed dynamic import leaves the published
-// extension trying to load @jerome-benoit/sap-ai-provider from node_modules at
-// runtime, but VSIX packaging uses the bundled extension output.
-import { createSAPAIProvider } from "@jerome-benoit/sap-ai-provider";
 import { createDifyProvider } from "dify-ai-provider";
 import { resolveApiKey } from "../http";
 import type { ProviderFactoryResult } from "./types";
@@ -343,6 +338,7 @@ function wrapSapModelWithServiceKey(
 export async function createSapAiCoreProviderModule(
 	config: GatewayResolvedProviderConfig,
 ): Promise<ProviderFactoryResult> {
+	const { createSAPAIProvider } = await import("@jerome-benoit/sap-ai-provider");
 	const options = readOptions(config);
 	const serviceKey = buildSapServiceKey(config, options);
 

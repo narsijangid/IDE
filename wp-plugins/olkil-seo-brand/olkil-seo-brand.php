@@ -2,7 +2,7 @@
 /**
  * Plugin Name: OLKIL SEO Brand
  * Description: Advanced OLKIL SEO + syncs Dazzlone pricing UI into the OLKIL theme.
- * Version: 1.3.0
+ * Version: 1.3.4
  * Author: OLKIL
  */
 
@@ -11,7 +11,7 @@ if ( ! defined( 'ABSPATH' ) ) {
 }
 
 define( 'OLKIL_SEO_BRAND_NAME', 'OLKIL' );
-define( 'OLKIL_SEO_BRAND_VERSION', '1.3.0' );
+define( 'OLKIL_SEO_BRAND_VERSION', '1.3.4' );
 define( 'OLKIL_SEO_BRAND_DIR', plugin_dir_path( __FILE__ ) );
 define( 'OLKIL_SEO_BRAND_URL', plugin_dir_url( __FILE__ ) );
 
@@ -31,6 +31,7 @@ function olkil_seo_brand_sync_theme_files() {
 	$map = array(
 		'theme-overrides/template-parts/olkil/sections/pricing.php' => 'template-parts/olkil/sections/pricing.php',
 		'theme-overrides/template-parts/olkil/sections/cta.php'     => 'template-parts/olkil/sections/cta.php',
+		'theme-overrides/template-parts/olkil/footer.php'           => 'template-parts/olkil/footer.php',
 		'theme-overrides/page-templates/template-pricing.php'       => 'page-templates/template-pricing.php',
 		'theme-overrides/assets/olkil/css/olkil.css'                => 'assets/olkil/css/olkil.css',
 		'theme-overrides/inc/olkil/olkil-branding.php'              => 'inc/olkil/olkil-branding.php',
@@ -99,7 +100,7 @@ function olkil_seo_brand_plans() {
 		array(
 			'slug'     => 'lite',
 			'name'     => 'Lite',
-			'price'    => '3',
+			'price'    => '249',
 			'blurb'    => 'Everyday AI coding, unlocked.',
 			'tokens'   => '100M',
 			'requests' => '~3,500',
@@ -108,7 +109,7 @@ function olkil_seo_brand_plans() {
 		array(
 			'slug'     => 'pro',
 			'name'     => 'Pro',
-			'price'    => '10',
+			'price'    => '849',
 			'blurb'    => 'Full project power for builders.',
 			'tokens'   => '350M',
 			'requests' => '~12,180',
@@ -117,7 +118,7 @@ function olkil_seo_brand_plans() {
 		array(
 			'slug'     => 'max',
 			'name'     => 'Max',
-			'price'    => '30',
+			'price'    => '2499',
 			'blurb'    => 'Advanced agents. Priority speed.',
 			'tokens'   => '1B',
 			'requests' => '~34,230',
@@ -126,7 +127,7 @@ function olkil_seo_brand_plans() {
 		array(
 			'slug'     => 'ultra',
 			'name'     => 'Ultra',
-			'price'    => '50',
+			'price'    => '4199',
 			'blurb'    => 'Unlimited ceiling. Parallel agents.',
 			'tokens'   => '2B',
 			'requests' => '~68,460',
@@ -198,7 +199,7 @@ function olkil_seo_brand_favicon_head() {
 add_action( 'wp_head', 'olkil_seo_brand_favicon_head', 2 );
 
 function olkil_seo_brand_head() {
-	$desc = 'OLKIL is a free AI code editor and AI IDE with multi-model AI, agents, autocomplete, unlimited browser testing, and chat. Plans: Dazzlone free, Lite $3 (100M tokens), Pro $10 (350M), Max $30 (1B), Ultra $50 (2B). Windows, macOS, and Linux.';
+	$desc = 'OLKIL is a free AI code editor and AI IDE with multi-model AI, agents, autocomplete, unlimited browser testing, and chat. Plans (INR): Dazzlone free, Lite ₹249 (100M tokens), Pro ₹849 (350M), Max ₹2499 (1B), Ultra ₹4199 (2B). Windows, macOS, and Linux.';
 	$url  = is_singular() ? get_permalink() : home_url( '/' );
 	$logo = olkil_seo_brand_asset( 'favicon-512.png' );
 
@@ -214,7 +215,7 @@ function olkil_seo_brand_head() {
 			'@type'         => 'Offer',
 			'name'          => 'OLKIL ' . $plan['name'],
 			'price'         => $plan['price'],
-			'priceCurrency' => 'USD',
+			'priceCurrency' => 'INR',
 			'url'           => home_url( '/pricing/#plan-' . $plan['slug'] ),
 			'availability'  => 'https://schema.org/InStock',
 			'category'      => $plan['name'],
@@ -295,7 +296,7 @@ function olkil_seo_brand_head() {
 					'name'           => 'Is OLKIL free?',
 					'acceptedAnswer' => array(
 						'@type' => 'Answer',
-						'text'  => 'Yes. OLKIL Dazzlone is free forever with local models, unlimited browser testing, basic autocomplete, AI chat, and code assistance. Paid plans start at $3/mo.',
+						'text'  => 'Yes. OLKIL Dazzlone is free forever with local models, unlimited browser testing, basic autocomplete, AI chat, and code assistance. Paid plans start at ₹249/mo.',
 					),
 				),
 				array(
@@ -303,7 +304,7 @@ function olkil_seo_brand_head() {
 					'name'           => 'How many tokens do OLKIL plans include?',
 					'acceptedAnswer' => array(
 						'@type' => 'Answer',
-						'text'  => 'Lite ($3) includes 100M tokens (~3,500 requests). Pro ($10) includes 350M tokens (~12,180). Max ($30) includes 1B tokens (~34,230). Ultra ($50) includes 2B tokens (~68,460). All plans include Unlimited Browser Testing.',
+						'text'  => 'Lite (₹249) includes 100M tokens (~3,500 requests). Pro (₹849) includes 350M tokens (~12,180). Max (₹2499) includes 1B tokens (~34,230). Ultra (₹4199) includes 2B tokens (~68,460). All plans include Unlimited Browser Testing. Prices in INR.',
 					),
 				),
 				array(
@@ -311,7 +312,7 @@ function olkil_seo_brand_head() {
 					'name'           => 'What is the difference between Pro, Max, and Ultra?',
 					'acceptedAnswer' => array(
 						'@type' => 'Answer',
-						'text'  => 'Pro ($10 · 350M tokens) includes unlimited autocomplete, unlimited browser testing, AI coding agent, and full project context. Max ($30 · 1B tokens) adds Advanced Agent, large context, and priority compute. Ultra ($50 · 2B tokens) adds unlimited agent usage, maximum context, and parallel agents.',
+						'text'  => 'Pro (₹849 · 350M tokens) includes unlimited autocomplete, unlimited browser testing, AI coding agent, and full project context. Max (₹2499 · 1B tokens) adds Advanced Agent, large context, and priority compute. Ultra (₹4199 · 2B tokens) adds unlimited agent usage, maximum context, and parallel agents.',
 					),
 				),
 				array(

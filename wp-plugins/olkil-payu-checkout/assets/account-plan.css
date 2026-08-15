@@ -1,0 +1,247 @@
+/* Plan badge + credits + dashboard (OLKIL) */
+
+.olkil-plan-badge {
+  display: inline-flex;
+  align-items: center;
+  margin: 0.35rem 0 0;
+  padding: 0.15rem 0.55rem;
+  border-radius: 999px;
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: #fff;
+  background: linear-gradient(135deg, #fe019a, #ff4d8d);
+  vertical-align: middle;
+}
+
+.olkil-plan-badge--chip {
+  margin: 0.15rem 0 0;
+  font-size: 0.62rem;
+  padding: 0.1rem 0.45rem;
+}
+
+.olkil-profile-plan {
+  margin: 1.25rem 0 0.5rem;
+  padding: 1rem 1.1rem;
+  border-radius: 14px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.olkil-profile-plan__row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 1rem;
+  margin-bottom: 1rem;
+}
+
+.olkil-profile-plan__label {
+  margin: 0;
+  font-size: 0.75rem;
+  color: rgba(255, 255, 255, 0.5);
+}
+
+.olkil-profile-plan__value {
+  margin: 0.2rem 0 0;
+  font-size: 0.98rem;
+  font-weight: 600;
+  color: #fff;
+}
+
+.olkil-profile-plan__credits-top {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  margin-bottom: 0.45rem;
+  font-size: 0.82rem;
+  color: rgba(255, 255, 255, 0.7);
+}
+
+.olkil-profile-plan__hint {
+  margin: 0.5rem 0 0;
+  font-size: 0.78rem;
+  color: rgba(255, 255, 255, 0.45);
+}
+
+.olkil-dash__bar {
+  height: 8px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.08);
+  overflow: hidden;
+}
+
+.olkil-dash__bar > span {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, #fe019a, #ff7aa8);
+  transition: width 0.35s ease;
+}
+
+/* Dashboard */
+.olkil-dash {
+  max-width: 880px;
+  margin: 2rem auto 4rem;
+  padding: 0 1rem;
+  color: #f4f4f5;
+}
+
+.olkil-dash__guest {
+  text-align: center;
+  padding: 3rem 1rem;
+}
+
+.olkil-dash__guest h1 {
+  margin: 0 0 0.5rem;
+}
+
+.olkil-dash__top {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 1rem;
+  margin-bottom: 1.5rem;
+}
+
+.olkil-dash__eyebrow {
+  margin: 0;
+  font-size: 0.8rem;
+  color: rgba(255, 255, 255, 0.5);
+}
+
+.olkil-dash__top h1 {
+  margin: 0.25rem 0 0;
+  font-size: 1.75rem;
+  letter-spacing: -0.02em;
+}
+
+.olkil-dash__card {
+  background: #141416;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 16px;
+  padding: 1.25rem 1.35rem;
+  margin-bottom: 1rem;
+}
+
+.olkil-dash__credits {
+  background:
+    radial-gradient(120% 80% at 100% 0%, rgba(254, 1, 154, 0.12), transparent 55%),
+    #141416;
+}
+
+.olkil-dash__credits-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 1rem;
+  margin-bottom: 0.85rem;
+}
+
+.olkil-dash__credits-head h2 {
+  margin: 0;
+  font-size: 1rem;
+}
+
+.olkil-dash__credits-head p {
+  margin: 0;
+  font-size: 1.35rem;
+  font-weight: 700;
+}
+
+.olkil-dash__credits-meta {
+  margin: 0.65rem 0 0;
+  font-size: 0.82rem;
+  color: rgba(255, 255, 255, 0.5);
+}
+
+.olkil-dash__grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 1rem;
+}
+
+.olkil-dash__card h3 {
+  margin: 0 0 0.35rem;
+  font-size: 0.78rem;
+  font-weight: 500;
+  color: rgba(255, 255, 255, 0.5);
+}
+
+.olkil-dash__plan-name {
+  margin: 0;
+  font-size: 1.35rem;
+  font-weight: 700;
+}
+
+.olkil-dash__muted {
+  margin: 0.35rem 0 0;
+  font-size: 0.85rem;
+  color: rgba(255, 255, 255, 0.5);
+}
+
+.olkil-dash__upgrades {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 1rem;
+  margin: 1.25rem 0;
+}
+
+.olkil-dash__upgrade {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  padding: 1.1rem 1.2rem;
+  border-radius: 14px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  background: #121214;
+  color: inherit;
+  text-decoration: none;
+  transition: border-color 0.15s ease, transform 0.12s ease;
+}
+
+.olkil-dash__upgrade:hover {
+  border-color: rgba(254, 1, 154, 0.45);
+  transform: translateY(-1px);
+}
+
+.olkil-dash__upgrade strong {
+  font-size: 1.05rem;
+}
+
+.olkil-dash__upgrade span {
+  font-size: 0.82rem;
+  color: rgba(255, 255, 255, 0.55);
+}
+
+.olkil-dash__upgrade em {
+  margin-top: 0.55rem;
+  font-style: normal;
+  font-size: 0.82rem;
+  font-weight: 650;
+  color: #ff7aa8;
+}
+
+.olkil-dash__links {
+  display: flex;
+  gap: 1rem;
+  flex-wrap: wrap;
+  font-size: 0.9rem;
+}
+
+.olkil-dash__links a {
+  color: rgba(255, 255, 255, 0.55);
+  text-decoration: none;
+}
+
+.olkil-dash__links a:hover {
+  color: #fff;
+}
+
+@media (max-width: 640px) {
+  .olkil-dash__grid,
+  .olkil-dash__upgrades,
+  .olkil-profile-plan__row {
+    grid-template-columns: 1fr;
+  }
+}

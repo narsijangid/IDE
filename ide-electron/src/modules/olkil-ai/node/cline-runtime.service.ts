@@ -14,6 +14,8 @@ import {
   EMBEDDED_ENV,
   EMBEDDED_POOLSIDE_API_KEY,
 } from './embedded-secrets';
+import { startOrchestrator } from './orchestrator';
+import type { ActivitySinkEvent } from './orchestrator/types';
 
 export type ClineRuntimeMode = ChatMode;
 
@@ -30,13 +32,18 @@ export interface ClineRunRequest {
 
 export interface ClineRuntimeActivity {
   id: string;
-  kind: 'thinking' | 'reading' | 'searching' | 'editing' | 'running' | 'browsing' | 'todo' | 'done';
+  kind: 'thinking' | 'reading' | 'searching' | 'editing' | 'running' | 'browsing' | 'todo' | 'done' | 'indexing' | 'info';
   label: string;
   done?: boolean;
   filePath?: string;
   command?: string;
   argsPreview?: string;
   resultPreview?: string;
+  groupId?: string;
+  parentId?: string;
+  lineRange?: string;
+  filesExplored?: number;
+  searchCount?: number;
 }
 
 export interface ClineRuntimeFileChange {
@@ -61,20 +68,64 @@ export interface ClineRuntimeState {
 type ClineSdk = {
   Agent: new (config: any) => {
     run: (input: string) => Promise<any>;
+    continue: (input?: string) => Promise<any>;
     abort: (reason?: unknown) => void;
   };
   createDefaultExecutors: (options?: any) => any;
   createDefaultTools: (options: any) => Array<{ name: string }>;
 };
 
+/** Per-run tool-loop budget. Large repos need many read/search/edit turns. */
+function maxIterationsForMode(mode: ClineRuntimeMode, hasWorkspace: boolean): number {
+  if (!hasWorkspace) {
+    return 4;
+  }
+  if (mode === 'ask') {
+    return 32;
+  }
+  if (mode === 'plan') {
+    return 64;
+  }
+  return 200;
+}
+
+function isMaxIterationsError(error: unknown): boolean {
+  const msg =
+    error instanceof Error
+      ? error.message
+      : typeof error === 'string'
+        ? error
+        : error && typeof error === 'object' && 'message' in error
+          ? String((error as { message?: unknown }).message || '')
+          : String(error || '');
+  return /exceeded maxIterations/i.test(msg);
+}
+
 let sdkPromise: Promise<ClineSdk> | null = null;
 let runtimeGlobalsReady = false;
+
+function patchUtilStyleText(): void {
+  const apply = (id: string) => {
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-var-requires
+      const util = require(id) as { styleText?: unknown };
+      if (typeof util.styleText !== 'function') {
+        util.styleText = (_format: unknown, text: unknown) => String(text ?? '');
+      }
+    } catch {
+      // ignore
+    }
+  };
+  apply('util');
+  apply('node:util');
+}
 
 function ensureClineRuntimeGlobals(): void {
   if (runtimeGlobalsReady) {
     return;
   }
   runtimeGlobalsReady = true;
+  patchUtilStyleText();
   const g = globalThis as any;
 
   try {
@@ -122,6 +173,81 @@ async function loadSdk(): Promise<ClineSdk> {
     });
   }
   return sdkPromise;
+}
+
+/** Fire-and-forget warm-up so the first chat turn does not pay SDK import latency. */
+export function prewarmClineSdk(): void {
+  void loadSdk().catch(() => undefined);
+}
+
+/**
+ * Do not warm the engine while the IDE is still starting. Importing @olkil/engine
+ * pulls a Node-22 ESM graph (OpenTelemetry, SAP provider, …) that starves the
+ * extension-host IPC listen and used to show "Extension Host Process is restarting".
+ */
+export function scheduleClineSdkPrewarm(delayMs = 20_000): void {
+  setTimeout(() => {
+    prewarmClineSdk();
+  }, delayMs).unref?.();
+}
+
+const TOOL_RESULT_KEEP_FULL = 6;
+const TOOL_RESULT_MAX_CHARS = 6_000;
+
+function truncateToolOutput(output: unknown, maxChars: number): unknown {
+  if (typeof output === 'string') {
+    if (output.length <= maxChars) return output;
+    return `${output.slice(0, maxChars)}\n…[truncated for speed]`;
+  }
+  if (output == null) return output;
+  try {
+    const raw = JSON.stringify(output);
+    if (raw.length <= maxChars) return output;
+    return `${raw.slice(0, maxChars)}…[truncated for speed]`;
+  } catch {
+    return output;
+  }
+}
+
+/** Shrink older tool results in the *provider request only* so later turns stay fast. */
+function prepareTurnForSpeed(context: {
+  iteration: number;
+  messages: readonly any[];
+}): { messages: any[] } | undefined {
+  if (context.iteration < 4 || !Array.isArray(context.messages) || context.messages.length < 8) {
+    return undefined;
+  }
+  const toolMsgIndexes: number[] = [];
+  for (let i = 0; i < context.messages.length; i++) {
+    const m = context.messages[i];
+    if (m?.role === 'tool') {
+      toolMsgIndexes.push(i);
+    } else if (
+      Array.isArray(m?.content) &&
+      m.content.some((p: any) => p?.type === 'tool-result')
+    ) {
+      toolMsgIndexes.push(i);
+    }
+  }
+  if (toolMsgIndexes.length <= TOOL_RESULT_KEEP_FULL) {
+    return undefined;
+  }
+  const trimSet = new Set(toolMsgIndexes.slice(0, -TOOL_RESULT_KEEP_FULL));
+  const messages = context.messages.map((msg, idx) => {
+    if (!trimSet.has(idx)) return msg;
+    if (!Array.isArray(msg.content)) return msg;
+    return {
+      ...msg,
+      content: msg.content.map((part: any) => {
+        if (part?.type !== 'tool-result') return part;
+        return {
+          ...part,
+          output: truncateToolOutput(part.output, TOOL_RESULT_MAX_CHARS),
+        };
+      }),
+    };
+  });
+  return { messages };
 }
 
 function readEnvFile(): Record<string, string> {
@@ -198,7 +324,13 @@ function toolKind(name: string): ClineRuntimeActivity['kind'] {
   const n = (name || '').toLowerCase();
   if (/list_dir|list_files|glob|ls\b/.test(n)) return 'searching';
   if (/read|file/.test(n) && !/edit|write|create|replace/.test(n)) return 'reading';
-  if (/search|grep|find|codebase/.test(n)) return 'searching';
+  if (
+    /search|grep|find|codebase|investigate|definition|reference|module|related_files|exact_code|git_info/.test(
+      n,
+    )
+  ) {
+    return /git_info/.test(n) ? 'running' : 'searching';
+  }
   if (/edit|write|patch|apply|create|replace|insert/.test(n)) return 'editing';
   if (/run|bash|shell|command/.test(n)) return 'running';
   if (/web|fetch|browser/.test(n)) return 'browsing';
@@ -223,8 +355,20 @@ function olkilStatus(raw?: string): string {
     .trim();
 }
 
+function firstReadRequest(input: any): any {
+  if (Array.isArray(input?.files) && input.files[0]) return input.files[0];
+  if (Array.isArray(input?.paths) && input.paths[0]) {
+    return typeof input.paths[0] === 'string' ? { path: input.paths[0] } : input.paths[0];
+  }
+  return input;
+}
+
 function toolFileBase(input: any): string {
+  const req = firstReadRequest(input);
   const file =
+    req?.path ||
+    req?.file_path ||
+    req?.filePath ||
     input?.path ||
     input?.file_path ||
     input?.filePath ||
@@ -234,22 +378,39 @@ function toolFileBase(input: any): string {
   return file ? path.basename(String(file)) : '';
 }
 
+function toolLineRange(input: any): string | undefined {
+  const req = firstReadRequest(input);
+  const start = req?.start_line ?? req?.startLine;
+  const end = req?.end_line ?? req?.endLine;
+  if (start == null && end == null) return undefined;
+  return `L${start ?? 1}-${end ?? 'EOF'}`;
+}
+
 /** Cursor-style present-tense labels while a step is live. */
 function friendlyToolLabel(toolName: string, input: any): string {
   const n = (toolName || 'tool').toLowerCase();
   const base = toolFileBase(input);
-  if (/read_files|read_file|read/.test(n)) return base ? `Reading ${base}` : 'Reading';
+  if (/read_files|read_file|read/.test(n)) {
+    const range = toolLineRange(input);
+    return base ? `Reading ${base}${range ? ` ${range}` : ''}` : 'Reading';
+  }
   if (/list_dir|list_files|glob|ls\b/.test(n)) {
     const p = input?.path || input?.target_directory || '.';
     return p && p !== '.' ? `Exploring ${truncate(String(p), 40)}` : 'Exploring';
   }
-  if (/search_codebase|search|grep|find/.test(n)) {
-    const q = input?.query || input?.pattern || '';
-    if (/grep/.test(n)) {
-      return q ? `Grepping “${truncate(String(q), 36)}”` : 'Grepping';
+  if (/search_codebase|repository_search|exact_code|find_module|investigate/.test(n)) {
+    const q = input?.query || input?.pattern || input?.queries?.[0] || input?.symbol || '';
+    if (/grep|exact/.test(n)) {
+      return q ? `Searching for “${truncate(String(q), 36)}”` : 'Searching';
     }
     return q ? `Exploring “${truncate(String(q), 36)}”` : 'Exploring';
   }
+  if (/goto_definition|find_references/.test(n)) {
+    const q = input?.symbol || '';
+    return q ? `Searching references “${truncate(String(q), 36)}”` : 'Searching references';
+  }
+  if (/git_info/.test(n)) return 'Checking git';
+  if (/related_files/.test(n)) return 'Checking related files';
   if (/run_commands|bash|shell|command/.test(n)) {
     const cmd = typeof input?.command === 'string' ? input.command : '';
     return cmd ? `Running ${truncate(cmd, 48)}` : 'Running command';
@@ -266,7 +427,10 @@ function friendlyToolLabel(toolName: string, input: any): string {
 function completedToolLabel(toolName: string, input: any, liveLabel?: string): string {
   const n = (toolName || 'tool').toLowerCase();
   const base = toolFileBase(input);
-  if (/read_files|read_file|read/.test(n)) return base ? `Read ${base}` : 'Read files';
+  if (/read_files|read_file|read/.test(n)) {
+    const range = toolLineRange(input);
+    return base ? `Read ${base}${range ? ` ${range}` : ''}` : 'Read files';
+  }
   if (/list_dir|list_files|glob|ls\b/.test(n)) return 'Explored';
   if (/search_codebase|search|find/.test(n) && !/grep/.test(n)) {
     const q = input?.query || input?.pattern || '';
@@ -387,6 +551,30 @@ function wrapEditorForFileChanges(
   };
 }
 
+interface RunGrouping {
+  phase: 'explore' | 'apply' | 'validate';
+  liveBatch: string[];
+  orch?: { noteTools: (names: string[]) => void };
+}
+
+function phaseForTool(name: string, command?: string): RunGrouping['phase'] {
+  const n = (name || '').toLowerCase();
+  if (/edit|write|patch|apply|create|replace|insert/.test(n)) return 'apply';
+  if (
+    /run|bash|shell|command/.test(n) &&
+    /test|lint|typecheck|tsc|jest|vitest|eslint|validate/i.test(command || name)
+  ) {
+    return 'validate';
+  }
+  return 'explore';
+}
+
+function groupMeta(phase: RunGrouping['phase']): { groupId: string; parentLabel: string } {
+  if (phase === 'apply') return { groupId: 'apply_changes', parentLabel: 'Applying changes' };
+  if (phase === 'validate') return { groupId: 'validate_changes', parentLabel: 'Validating' };
+  return { groupId: 'explore_loop', parentLabel: 'Exploring files' };
+}
+
 export class OlkilClineRuntimeHost {
   private states = new Map<string, ClineRuntimeState>();
   private aborts = new Map<string, { abort: (reason?: unknown) => void }>();
@@ -433,6 +621,7 @@ export class OlkilClineRuntimeHost {
       status: 'Thinking',
     };
     this.states.set(runId, state);
+    let orchFinish: ((ok: boolean) => void) | undefined;
 
     try {
       const sdk = await loadSdk();
@@ -455,13 +644,46 @@ export class OlkilClineRuntimeHost {
       const mode = request.mode;
       const userMode = chatModeToUserMode(mode);
 
+      const prefetchAbort = new AbortController();
+      let agentRef: { abort: (reason?: unknown) => void } | null = null;
+      this.aborts.set(runId, {
+        abort: (reason?: unknown) => {
+          prefetchAbort.abort();
+          try {
+            agentRef?.abort(reason);
+          } catch {
+            // ignore
+          }
+        },
+      });
+
+      const grouping: RunGrouping = { phase: 'explore', liveBatch: [] };
+      const orch = await startOrchestrator({
+        runId,
+        prompt: request.prompt,
+        workspaceRoot: cwd,
+        activeFile: request.activeFile,
+        mode,
+        signal: prefetchAbort.signal,
+        onActivity: (event) => this.applyOrchestratorActivity(state, event),
+      });
+      grouping.orch = orch;
+      orchFinish = (ok) => orch.finish(ok);
+      if (prefetchAbort.signal.aborted) {
+        state.status = 'Stopped';
+        state.done = true;
+        orchFinish?.(false);
+        return state;
+      }
+      state.status = 'Thinking';
+
       const systemPrompt = buildClineStyleSystemPrompt({
         mode,
         workspaceRoot: cwd || '(no folder open)',
         activeFile: request.activeFile,
         platform: `${os.platform()} ${os.release()}`,
         ideName: 'OLKIL',
-        rules: request.rules,
+        rules: [request.rules, orch.orchestrationRules].filter(Boolean).join('\n\n'),
         identity: `# Identity
 - Product / IDE: OLKIL. You are the coding agent inside OLKIL.
 - Never claim to be Cline, ChatGPT, Claude, Gemini, Laguna, or Poolside as the product name.
@@ -483,11 +705,12 @@ ${
           })
         : {};
 
+      const orchExecutors = hasWorkspace ? orch.wrapExecutors(baseExecutors) : {};
       const executors = hasWorkspace
         ? {
-            ...baseExecutors,
+            ...orchExecutors,
             editor: wrapEditorForFileChanges(
-              baseExecutors.editor,
+              orchExecutors.editor || baseExecutors.editor,
               (change) => {
                 const existing = state.fileChanges.find(
                   (c) => path.resolve(c.path) === path.resolve(change.path),
@@ -508,14 +731,15 @@ ${
       const isPlanOrAsk = mode === 'plan' || mode === 'ask';
       // Only attach filesystem tools when a real project folder is open.
       // Never pass process.cwd() — that would point at the IDE itself.
-      const tools = hasWorkspace
+      const defaultTools = hasWorkspace
         ? sdk.createDefaultTools({
             executors,
             cwd,
             enableReadFiles: true,
             enableSearch: true,
-            enableBash: true,
-            enableWebFetch: true,
+            enableBash: mode !== 'ask',
+            // Web fetch is rarely needed for IDE coding and slows tool selection + turns.
+            enableWebFetch: false,
             enableEditor: !isPlanOrAsk,
             enableApplyPatch: false,
             enableSkills: false,
@@ -523,8 +747,36 @@ ${
             enableSubmitAndExit: false,
           })
         : [];
+      const extraTools =
+        orch.route.size === 'simple'
+          ? orch.extraTools.filter((t: { name: string }) =>
+              /^(repository_search|exact_code_search|goto_definition|git_info)$/.test(t.name),
+            )
+          : orch.extraTools;
+      const tools = hasWorkspace ? [...defaultTools, ...extraTools] : [];
 
       const autoApprove = request.autoApprove !== false && mode === 'agent';
+      const maxIterations = hasWorkspace
+        ? Math.min(orch.route.maxIterations, maxIterationsForMode(mode, hasWorkspace))
+        : maxIterationsForMode(mode, hasWorkspace);
+      const maxContinues = hasWorkspace
+        ? mode === 'ask'
+          ? 1
+          : orch.route.maxContinues
+        : 0;
+
+      // Match legacy llm.service: disable extended thinking for agent speed/cost.
+      // Simple tasks get a smaller completion budget so the model finishes faster.
+      const modelOptions: Record<string, unknown> = {
+        thinking: false,
+        temperature: 0.2,
+      };
+      if (option.provider === 'poolside') {
+        modelOptions.chat_template_kwargs = { enable_thinking: false };
+        modelOptions.maxTokens = orch.route.size === 'simple' ? 1400 : 2048;
+      } else if (option.provider === 'deepseek') {
+        modelOptions.maxTokens = orch.route.size === 'simple' ? 2200 : 4096;
+      }
 
       const AgentCtor = sdk.Agent;
       const agent = new AgentCtor({
@@ -534,31 +786,67 @@ ${
         baseUrl,
         systemPrompt,
         tools,
-        maxIterations: hasWorkspace ? (mode === 'ask' ? 12 : mode === 'plan' ? 16 : 48) : 4,
+        maxIterations,
+        modelOptions,
         toolExecution: 'parallel',
+        prepareTurn: (ctx: any) => orch.prepareTurn(ctx) || prepareTurnForSpeed(ctx),
         requestToolApproval: async () => ({ approved: autoApprove || mode === 'agent' }),
         onEvent: (event: any) => {
-          this.handleEvent(state, event);
+          this.handleEvent(state, event, grouping);
         },
       } as any);
+      agentRef = agent;
 
-      this.aborts.set(runId, agent);
       state.status = 'Thinking';
 
-      const wrappedPrompt = `<user_input mode="${userMode}">${request.prompt}</user_input>`;
-      const result = await agent.run(wrappedPrompt);
+      const wrappedPrompt = `<user_input mode="${userMode}">${orch.wrapPrompt(request.prompt)}</user_input>`;
+      let result = await agent.run(wrappedPrompt);
+      let continues = 0;
+      while (
+        result?.error &&
+        isMaxIterationsError(result.error) &&
+        continues < maxContinues &&
+        this.aborts.has(runId) &&
+        !state.done
+      ) {
+        continues += 1;
+        state.status = `Continuing work (${continues}/${maxContinues})…`;
+        state.error = undefined;
+        result = await agent.continue(
+          `[SYSTEM] Iteration budget refreshed (${continues}/${maxContinues}). ` +
+            `Continue the unfinished task from where you left off — do not restart from scratch. ` +
+            `Prefer finishing remaining edits/checks over re-exploring the whole repo.`,
+        );
+      }
 
       state.text = (result?.outputText || state.text || '').trim();
+      if (state.status === 'Stopped') {
+        state.done = true;
+        orchFinish?.(false);
+        return state;
+      }
       if (result?.error) {
-        state.error = result.error.message || String(result.error);
+        if (isMaxIterationsError(result.error) && state.text) {
+          // Soft-stop: keep progress instead of failing the whole turn.
+          state.error = undefined;
+          if (!/say\s+[“"]?continue/i.test(state.text)) {
+            state.text =
+              `${state.text}\n\n---\nStopped after a long run to avoid an endless loop. ` +
+              `Reply **continue** if you want me to keep going.`;
+          }
+        } else if (!/abort|cancel/i.test(String(result.error?.message || result.error))) {
+          state.error = result.error.message || String(result.error);
+        }
       }
       state.status = state.error ? 'Failed' : 'Done';
       state.done = true;
+      orchFinish?.(!state.error);
       return state;
     } catch (e: any) {
       state.error = e?.message || String(e);
       state.status = 'Failed';
       state.done = true;
+      orchFinish?.(false);
       return state;
     } finally {
       this.aborts.delete(runId);
@@ -571,7 +859,68 @@ ${
     }
   }
 
-  private handleEvent(state: ClineRuntimeState, event: any) {
+  private applyOrchestratorActivity(state: ClineRuntimeState, event: ActivitySinkEvent) {
+    const existing = state.activities.find((a) => a.id === event.id);
+    const row: ClineRuntimeActivity = {
+      id: event.id,
+      kind: event.kind === 'indexing' || event.kind === 'info' ? 'searching' : event.kind,
+      label: event.label,
+      done: event.done,
+      filePath: event.filePath,
+      command: event.command,
+      argsPreview: event.argsPreview,
+      resultPreview: event.resultPreview,
+      groupId: event.groupId,
+      parentId: event.parentId,
+      lineRange: event.lineRange,
+      filesExplored: event.filesExplored,
+      searchCount: event.searchCount,
+    };
+    if (existing) {
+      Object.assign(existing, row);
+    } else {
+      state.activities.push(row);
+    }
+    if (event.filesExplored != null && event.searchCount != null && event.done) {
+      state.status = event.label;
+    } else if (!event.done) {
+      state.status = event.label;
+    }
+  }
+
+  private ensurePhaseGroup(state: ClineRuntimeState, grouping: RunGrouping, phase: RunGrouping['phase']) {
+    if (grouping.phase !== phase) {
+      const prev = groupMeta(grouping.phase);
+      const prevRow = state.activities.find((a) => a.id === prev.groupId && !a.parentId);
+      if (prevRow && !prevRow.done) {
+        const kids = state.activities.filter((a) => a.parentId === prev.groupId);
+        const files = new Set(kids.map((k) => k.filePath).filter(Boolean)).size;
+        const searches = kids.filter((k) => k.kind === 'searching').length;
+        prevRow.done = true;
+        prevRow.filesExplored = files;
+        prevRow.searchCount = searches;
+        if (grouping.phase === 'explore') {
+          prevRow.label = `Explored ${files} files, ${searches} searches`;
+        } else {
+          prevRow.label = prevRow.label.replace(/ing\b/, 'ed');
+        }
+      }
+      grouping.phase = phase;
+    }
+    const meta = groupMeta(phase);
+    if (!state.activities.some((a) => a.id === meta.groupId)) {
+      state.activities.push({
+        id: meta.groupId,
+        kind: phase === 'apply' ? 'editing' : phase === 'validate' ? 'running' : 'searching',
+        label: meta.parentLabel,
+        done: false,
+        groupId: meta.groupId,
+      });
+    }
+    return meta;
+  }
+
+  private handleEvent(state: ClineRuntimeState, event: any, grouping?: RunGrouping) {
     if (!event || !event.type) return;
     switch (event.type) {
       case 'assistant-text-delta':
@@ -581,7 +930,6 @@ ${
       case 'assistant-reasoning-delta': {
         state.reasoning = event.accumulatedText || state.reasoning || '';
         state.status = 'Thinking';
-        // Mirror reasoning into a live thinking activity for the chat timeline
         const thinkId = 'thinking_live';
         let row = state.activities.find((a) => a.id === thinkId);
         if (!row) {
@@ -594,7 +942,6 @@ ${
           };
           state.activities.push(row);
         } else if (row.done) {
-          // New thinking phase after tools
           row.done = false;
           row.label = 'Thinking';
         }
@@ -621,21 +968,28 @@ ${
         const id = tc.toolCallId || tc.id || `tool_${state.activities.length + 1}`;
         const input = (typeof tc.input === 'object' && tc.input) || tc.arguments || {};
         const label = friendlyToolLabel(name, input);
-        const filePath = input.path || input.file_path || input.filePath || input.target_file;
-        // Close previous thinking row when tools begin
+        const req = firstReadRequest(input);
+        const filePath = req?.path || req?.file_path || input.path || input.file_path || input.filePath || input.target_file;
+        const command = typeof input.command === 'string' ? input.command : Array.isArray(input.commands) ? String(input.commands[0] || '') : undefined;
         const think = state.activities.find((a) => a.id === 'thinking_live' && !a.done);
         if (think) {
           think.done = true;
           think.label = 'Thought';
         }
+        const phase = grouping ? phaseForTool(name, command) : 'explore';
+        const meta = grouping ? this.ensurePhaseGroup(state, grouping, phase) : undefined;
+        grouping?.liveBatch.push(name);
         state.activities.push({
           id,
           kind: toolKind(name),
           label,
           done: false,
           filePath: filePath ? String(filePath) : undefined,
-          command: typeof input.command === 'string' ? input.command : undefined,
+          command,
           argsPreview: truncate(JSON.stringify(input)),
+          groupId: meta?.groupId,
+          parentId: meta?.groupId,
+          lineRange: toolLineRange(input),
         });
         state.status = label;
         break;
@@ -665,11 +1019,17 @@ ${
             .join('\n');
           if (preview) row.resultPreview = truncate(preview, 600);
         }
-        // Between tools Cursor shows Thinking again
+        if (grouping) {
+          grouping.liveBatch = grouping.liveBatch.filter((n) => n !== name);
+          grouping.orch?.noteTools([name]);
+        }
         const stillLive = state.activities.some((a) => !a.done && a.id !== 'thinking_live');
-        state.status = stillLive
-          ? state.activities.filter((a) => !a.done).slice(-1)[0]?.label || 'Thinking'
-          : 'Thinking';
+        const liveKids = state.activities.filter((a) => !a.done && a.id !== 'thinking_live' && Boolean(a.parentId));
+        state.status = liveKids.length
+          ? liveKids[liveKids.length - 1]?.label || 'Thinking'
+          : stillLive
+            ? state.activities.filter((a) => !a.done).slice(-1)[0]?.label || 'Thinking'
+            : 'Thinking';
         break;
       }
       case 'status-notice':
@@ -684,6 +1044,12 @@ ${
           state.text = event.result.outputText;
         }
         state.status = 'Done';
+        if (grouping) {
+          this.ensurePhaseGroup(state, grouping, grouping.phase);
+          const meta = groupMeta(grouping.phase);
+          const parent = state.activities.find((a) => a.id === meta.groupId);
+          if (parent) parent.done = true;
+        }
         break;
       default:
         break;
@@ -691,4 +1057,11 @@ ${
   }
 }
 
-export const olkilClineRuntime = new OlkilClineRuntimeHost();
+let runtimeHost: OlkilClineRuntimeHost | null = null;
+
+export function getOlkilClineRuntime(): OlkilClineRuntimeHost {
+  if (!runtimeHost) {
+    runtimeHost = new OlkilClineRuntimeHost();
+  }
+  return runtimeHost;
+}

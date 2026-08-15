@@ -1,6 +1,6 @@
 <?php
 /**
- * Pricing — Dazzlone → Ultra
+ * Pricing — Dazzlone → Ultra (INR for PayU)
  *
  * @package OLKIL
  */
@@ -33,7 +33,7 @@ $plans = array(
 	array(
 		'slug'     => 'lite',
 		'name'     => 'Lite',
-		'price'    => '3',
+		'price'    => '249',
 		'period'   => __( '/ mo', 'olkil' ),
 		'badge'    => __( 'Starter', 'olkil' ),
 		'blurb'    => __( 'Everyday AI coding, unlocked.', 'olkil' ),
@@ -48,14 +48,14 @@ $plans = array(
 			__( 'Project Context', 'olkil' ),
 		),
 		'cta'      => __( 'Get Lite', 'olkil' ),
-		'href'     => home_url( '/login/?plan=lite' ),
+		'href'     => home_url( '/checkout/?plan=lite' ),
 		'featured' => false,
 		'accent'   => 'lite',
 	),
 	array(
 		'slug'     => 'pro',
 		'name'     => 'Pro',
-		'price'    => '10',
+		'price'    => '849',
 		'period'   => __( '/ mo', 'olkil' ),
 		'badge'    => __( 'Popular', 'olkil' ),
 		'blurb'    => __( 'Full project power for builders.', 'olkil' ),
@@ -70,14 +70,14 @@ $plans = array(
 			__( 'Full Project Context', 'olkil' ),
 		),
 		'cta'      => __( 'Get Pro', 'olkil' ),
-		'href'     => home_url( '/login/?plan=pro' ),
+		'href'     => home_url( '/checkout/?plan=pro' ),
 		'featured' => true,
 		'accent'   => 'pro',
 	),
 	array(
 		'slug'     => 'max',
 		'name'     => 'Max',
-		'price'    => '30',
+		'price'    => '2,499',
 		'period'   => __( '/ mo', 'olkil' ),
 		'badge'    => __( 'Power', 'olkil' ),
 		'blurb'    => __( 'Advanced agents. Priority speed.', 'olkil' ),
@@ -93,14 +93,14 @@ $plans = array(
 			__( 'Priority Compute', 'olkil' ),
 		),
 		'cta'      => __( 'Get Max', 'olkil' ),
-		'href'     => home_url( '/login/?plan=max' ),
+		'href'     => home_url( '/checkout/?plan=max' ),
 		'featured' => false,
 		'accent'   => 'max',
 	),
 	array(
 		'slug'     => 'ultra',
 		'name'     => 'Ultra',
-		'price'    => '50',
+		'price'    => '4,199',
 		'period'   => __( '/ mo', 'olkil' ),
 		'badge'    => __( 'Flagship', 'olkil' ),
 		'blurb'    => __( 'Unlimited ceiling. Parallel agents.', 'olkil' ),
@@ -117,7 +117,7 @@ $plans = array(
 			__( 'Priority Compute', 'olkil' ),
 		),
 		'cta'      => __( 'Get Ultra', 'olkil' ),
-		'href'     => home_url( '/login/?plan=ultra' ),
+		'href'     => home_url( '/checkout/?plan=ultra' ),
 		'featured' => false,
 		'accent'   => 'ultra',
 	),
@@ -126,9 +126,9 @@ $plans = array(
 <section class="olkil-section olkil-pricing" id="pricing" aria-labelledby="olkil-pricing-title">
 	<div class="olkil-wrap">
 		<div class="olkil-section__head olkil-reveal">
-			<p class="olkil-pricing__kicker"><?php esc_html_e( 'Plans', 'olkil' ); ?></p>
+			<p class="olkil-pricing__kicker"><?php esc_html_e( 'Plans · Prices in INR', 'olkil' ); ?></p>
 			<h2 id="olkil-pricing-title"><?php esc_html_e( 'Choose your velocity.', 'olkil' ); ?></h2>
-			<p><?php esc_html_e( 'From free local models to 2B tokens — pick the plan that matches how you ship. Unlimited Browser Testing on every plan.', 'olkil' ); ?></p>
+			<p><?php esc_html_e( 'Digital AI coding subscriptions priced in Indian Rupees (INR). Unlimited Browser Testing on every plan. No physical shipping.', 'olkil' ); ?></p>
 		</div>
 
 		<div class="olkil-price-grid olkil-reveal" role="list">
@@ -143,7 +143,7 @@ $plans = array(
 					<?php endif; ?>
 					<h3 class="olkil-price-card__name"><?php echo esc_html( $plan['name'] ); ?></h3>
 					<p class="olkil-price-card__amount">
-						<span class="olkil-price-card__currency">$</span><?php echo esc_html( $plan['price'] ); ?>
+						<span class="olkil-price-card__currency">₹</span><?php echo esc_html( $plan['price'] ); ?>
 						<span class="olkil-price-card__period"><?php echo esc_html( $plan['period'] ); ?></span>
 					</p>
 					<?php if ( ! empty( $plan['tokens'] ) ) : ?>
@@ -174,6 +174,6 @@ $plans = array(
 				</article>
 			<?php endforeach; ?>
 		</div>
-		<p class="olkil-pricing__footnote olkil-reveal"><?php esc_html_e( '* Fair-use limits may apply on Unlimited Agent Usage. Token estimates are approximate. Cancel anytime.', 'olkil' ); ?></p>
+		<p class="olkil-pricing__footnote olkil-reveal"><?php esc_html_e( '* Fair-use limits may apply on Unlimited Agent Usage. Token estimates are approximate. Prices in INR. Cancel anytime.', 'olkil' ); ?></p>
 	</div>
 </section>

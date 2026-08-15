@@ -133,3 +133,18 @@ export const HistoryIcon = ({ size, className }: IconProps) => (
     <path d="M12 7.8v4.6l3.1 1.9" {...stroke} />
   </Svg>
 );
+
+export const ShieldStarIcon = ({ size, className }: IconProps) => (
+  <Svg size={size} className={className}>
+    <path
+      d="M12 3.2l7 2.6v5.4c0 4.2-2.9 7.2-7 8.8-4.1-1.6-7-4.6-7-8.8V5.8l7-2.6z"
+      {...stroke}
+      strokeWidth={1.6}
+    />
+    <path
+      d="M12 8.1l.85 1.72 1.9.28-1.38 1.34.32 1.88L12 12.32l-1.69.99.32-1.88-1.38-1.34 1.9-.28L12 8.1z"
+      fill="currentColor"
+      stroke="none"
+    />
+  </Svg>
+);

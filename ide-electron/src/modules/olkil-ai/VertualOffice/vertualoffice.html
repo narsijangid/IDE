@@ -1,0 +1,2244 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>AI Office — Manager & Team</title>
+    <style>
+        :root {
+            --bg-deep: #0f1218;
+            --bg-panel: #171b23;
+            --wall-1: #1c212b;
+            --wall-2: #232a36;
+            --line: rgba(255, 255, 255, .07);
+            --line-2: rgba(255, 255, 255, .12);
+            --text: #eef1f6;
+            --text-dim: #8993a4;
+            --text-dimmer: #5c6373;
+
+            --amber: #e8b34a;
+            /* Manager */
+            --blue: #5eb3f2;
+            /* Alex */
+            --violet: #a684f2;
+            /* Elon */
+            --rose: #f2789e;
+            /* Sophia */
+            --green: #52d68a;
+            /* Robert */
+            --coral: #f2825f;
+            /* Jasmine */
+
+            --radius-lg: 22px;
+            --radius-md: 14px;
+            --radius-sm: 8px;
+
+            /* premium easing set — smooth, slightly springy, never abrupt */
+            --ease: cubic-bezier(.22, .9, .32, 1);
+            --ease-soft: cubic-bezier(.4, 0, .2, 1);
+            --ease-spring: cubic-bezier(.34, 1.56, .64, 1);
+            --ease-walk: cubic-bezier(.45, .05, .55, .95);
+        }
+
+        * {
+            box-sizing: border-box;
+        }
+
+        html,
+        body {
+            height: 100%;
+        }
+
+        body {
+            margin: 0;
+            min-height: 100%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 32px 16px;
+            background:
+                radial-gradient(1200px 600px at 50% -10%, #1a2130 0%, var(--bg-deep) 60%);
+            font-family: ui-sans-serif, -apple-system, "Segoe UI", Inter, Roboto, sans-serif;
+            color: var(--text);
+        }
+
+        .oa-mono {
+            font-family: ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
+        }
+
+        /* ---------- App shell ---------- */
+        .officeai {
+            width: 100%;
+            max-width: 1120px;
+        }
+
+        .oa-header {
+            display: flex;
+            align-items: baseline;
+            justify-content: space-between;
+            margin-bottom: 14px;
+            padding: 0 4px;
+            gap: 12px;
+            flex-wrap: wrap;
+        }
+
+        .oa-title {
+            font-size: 15px;
+            font-weight: 600;
+            letter-spacing: .2px;
+            color: var(--text);
+        }
+
+        .oa-title span {
+            color: var(--text-dimmer);
+            font-weight: 500;
+        }
+
+        .oa-live {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            font-size: 12px;
+            color: var(--text-dim);
+        }
+
+        .oa-live i {
+            width: 7px;
+            height: 7px;
+            border-radius: 50%;
+            background: var(--green);
+            box-shadow: 0 0 0 3px rgba(82, 214, 138, .15);
+            animation: oa-pulse 1.8s ease-in-out infinite;
+        }
+
+        @keyframes oa-pulse {
+
+            0%,
+            100% {
+                opacity: 1
+            }
+
+            50% {
+                opacity: .35
+            }
+        }
+
+        /* ---------- Scene ---------- */
+        .oa-scene {
+            position: relative;
+            background:
+                linear-gradient(180deg, var(--wall-1) 0%, var(--wall-2) 100%);
+            border: 1px solid var(--line);
+            border-radius: var(--radius-lg);
+            padding: 30px 26px 22px;
+            box-shadow: 0 30px 60px -20px rgba(0, 0, 0, .6), inset 0 1px 0 rgba(255, 255, 255, .03);
+            overflow: hidden;
+        }
+
+        .oa-scene::before {
+            /* subtle floor gradient */
+            content: "";
+            position: absolute;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            height: 120px;
+            background: linear-gradient(180deg, transparent, rgba(0, 0, 0, .28));
+            pointer-events: none;
+        }
+
+        /* ---------- Shared lounge (where idle workers hang out) ---------- */
+        .oa-lounge {
+            position: relative;
+            height: 92px;
+            margin: 4px 10px 4px;
+        }
+
+        .oa-couch {
+            position: absolute;
+            left: 50%;
+            bottom: 6px;
+            transform: translateX(-50%);
+            width: min(92%, 430px);
+            height: 34px;
+            border-radius: 14px;
+            background: linear-gradient(180deg, #262d3a, #1c212b);
+            border: 1px solid var(--line-2);
+            box-shadow: inset 0 8px 14px rgba(0, 0, 0, .3), 0 10px 18px -8px rgba(0, 0, 0, .5);
+        }
+
+        .oa-couch::before {
+            /* cushion seams */
+            content: "";
+            position: absolute;
+            inset: 6px 8px;
+            background-image: repeating-linear-gradient(90deg, transparent 0 78px, rgba(255, 255, 255, .05) 78px 79px);
+        }
+
+        .oa-lounge-caption {
+            position: absolute;
+            left: 50%;
+            bottom: -16px;
+            transform: translateX(-50%);
+            font-size: 10px;
+            color: var(--text-dimmer);
+            white-space: nowrap;
+        }
+
+        .oa-seat {
+            position: absolute;
+            bottom: 16px;
+            width: 10px;
+            height: 10px;
+            /* pure anchor, invisible */
+        }
+
+        /* ---------- Manager's office ---------- */
+        .oa-manager-row {
+            display: flex;
+            align-items: flex-end;
+            gap: 16px;
+            margin: 22px 6px 6px;
+        }
+
+        .oa-manager-office {
+            position: relative;
+            flex: 0 0 auto;
+            width: 126px;
+            height: 98px;
+            border-radius: 14px 14px 8px 8px;
+            background: linear-gradient(180deg, rgba(232, 179, 74, .12), rgba(232, 179, 74, .02) 65%), var(--bg-panel);
+            border: 1px solid rgba(232, 179, 74, .32);
+            border-top: 2px solid var(--amber);
+            box-shadow: 0 16px 32px -18px rgba(232, 179, 74, .4), inset 0 1px 0 rgba(255, 255, 255, .05);
+            padding: 9px;
+            overflow: hidden;
+        }
+
+        .oa-office-glass {
+            position: absolute;
+            inset: 6px;
+            border-radius: 10px;
+            border: 1px solid rgba(255, 255, 255, .09);
+            background: linear-gradient(160deg, rgba(255, 255, 255, .05), transparent 60%);
+            pointer-events: none;
+        }
+
+        .oa-office-plate {
+            position: relative;
+            z-index: 1;
+            font-size: 8.5px;
+            font-weight: 800;
+            letter-spacing: .6px;
+            color: var(--amber);
+        }
+
+        .oa-office-plate span {
+            display: block;
+            font-size: 7px;
+            font-weight: 600;
+            color: var(--text-dimmer);
+            letter-spacing: .2px;
+            margin-top: 1px;
+        }
+
+        .oa-office-plant {
+            position: absolute;
+            right: 9px;
+            top: 9px;
+            font-size: 14px;
+            filter: saturate(1.15);
+        }
+
+        .oa-office-desk {
+            position: absolute;
+            left: 50%;
+            bottom: 9px;
+            transform: translateX(-50%);
+            width: 74px;
+            height: 26px;
+            border-radius: 4px 4px 2px 2px;
+            background: linear-gradient(180deg, #1a1006, #0d0904);
+            border: 1px solid rgba(255, 255, 255, .08);
+            border-top: 1px solid rgba(255, 255, 255, .16);
+            box-shadow: 0 4px 8px rgba(0, 0, 0, .4), inset 0 1px 0 rgba(255, 255, 255, .05);
+        }
+
+        /* legs, to sell "desk" instead of a plain block */
+        .oa-office-desk::before,
+        .oa-office-desk::after {
+            content: "";
+            position: absolute;
+            bottom: -5px;
+            width: 3px;
+            height: 6px;
+            background: #0a0603;
+            border-radius: 0 0 2px 2px;
+        }
+
+        .oa-office-desk::before {
+            left: 5px;
+        }
+
+        .oa-office-desk::after {
+            right: 5px;
+        }
+
+        .oa-office-monitor {
+            position: absolute;
+            left: 50%;
+            top: -18px;
+            transform: translateX(-50%);
+            width: 30px;
+            height: 19px;
+            border-radius: 3px;
+            background: #05070b;
+            border: 1px solid rgba(232, 179, 74, .5);
+            box-shadow: 0 0 9px rgba(232, 179, 74, .28), inset 0 0 0 1px rgba(0, 0, 0, .5);
+            padding: 1.5px;
+            overflow: hidden;
+        }
+
+        .oa-office-monitor::before {
+            /* screen content glow */
+            content: "";
+            position: absolute;
+            inset: 2px;
+            border-radius: 1px;
+            background:
+                repeating-linear-gradient(180deg, rgba(232, 179, 74, .55) 0 1.6px, transparent 1.6px 4px);
+            opacity: .8;
+        }
+
+        .oa-office-monitor::after {
+            /* monitor stand + base, anchors it to the desk */
+            content: "";
+            position: absolute;
+            left: 50%;
+            bottom: -6px;
+            transform: translateX(-50%);
+            width: 3px;
+            height: 6px;
+            background: #05070b;
+            box-shadow: -6px 5px 0 -1.4px #05070b, 6px 5px 0 -1.4px #05070b;
+        }
+
+        .oa-office-keyboard {
+            position: absolute;
+            left: 50%;
+            top: -6px;
+            transform: translateX(-50%);
+            width: 34px;
+            height: 6px;
+            border-radius: 2px;
+            background: linear-gradient(180deg, #232831, #14171d);
+            border: 1px solid rgba(255, 255, 255, .1);
+            box-shadow: inset 0 0 0 1px rgba(0, 0, 0, .3);
+        }
+
+        .oa-office-keyboard::before {
+            content: "";
+            position: absolute;
+            inset: 1px 2px;
+            background-image: repeating-linear-gradient(90deg, rgba(255, 255, 255, .12) 0 2px, transparent 2px 3.2px);
+            opacity: .5;
+        }
+
+        .oa-office-mouse {
+            position: absolute;
+            top: -5px;
+            right: 4px;
+            width: 4px;
+            height: 6px;
+            border-radius: 2px 2px 3px 3px;
+            background: linear-gradient(180deg, #2c323e, #171a20);
+            border: 1px solid rgba(255, 255, 255, .12);
+        }
+
+        .oa-office-mug {
+            position: absolute;
+            top: -6px;
+            left: 5px;
+            width: 5px;
+            height: 6px;
+            border-radius: 1px 1px 2px 2px;
+            background: linear-gradient(180deg, #d6663f, #a8492a);
+        }
+
+        .oa-office-mug::after {
+            content: "";
+            position: absolute;
+            right: -2.6px;
+            top: 1px;
+            width: 2.6px;
+            height: 3px;
+            border: 1px solid #a8492a;
+            border-left: none;
+            border-radius: 0 2px 2px 0;
+        }
+
+        .oa-office-chair {
+            position: absolute;
+            left: 50%;
+            bottom: 6px;
+            transform: translateX(-50%);
+            width: 26px;
+            height: 30px;
+            z-index: 1;
+        }
+
+        /* realistic-ish executive chair: backrest + headrest + seat + base */
+        .oa-office-chair::before {
+            /* backrest / headrest, sits behind the seat */
+            content: "";
+            position: absolute;
+            left: 50%;
+            top: 0;
+            transform: translateX(-50%);
+            width: 18px;
+            height: 24px;
+            border-radius: 8px 8px 4px 4px;
+            background: linear-gradient(180deg, #2c2013, #1a1408);
+            border: 1px solid rgba(232, 179, 74, .18);
+            box-shadow: inset 0 3px 5px rgba(255, 255, 255, .04), inset 0 -4px 8px rgba(0, 0, 0, .35);
+        }
+
+        .oa-office-chair::after {
+            /* seat base + single center leg, grounds the chair */
+            content: "";
+            position: absolute;
+            left: 50%;
+            bottom: 0;
+            transform: translateX(-50%);
+            width: 3px;
+            height: 8px;
+            background: #14100a;
+        }
+
+        /* ---------- Manager walkway ---------- */
+        .oa-manager-track {
+            position: relative;
+            flex: 1 1 auto;
+            height: 78px;
+            border-bottom: 1px dashed var(--line-2);
+        }
+
+        .oa-manager {
+            position: absolute;
+            left: 0;
+            top: 0;
+            bottom: 10px;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            transform: translateX(0px);
+            transition: transform .95s var(--ease), opacity .5s var(--ease-soft);
+            width: 58px;
+            z-index: 6;
+        }
+
+        .oa-speech {
+            position: absolute;
+            bottom: 100%;
+            left: 50%;
+            margin-bottom: 10px;
+            transform: translate(-50%, 6px) scale(.94);
+            background: var(--bg-panel);
+            color: var(--text);
+            border: 1px solid var(--line-2);
+            padding: 5px 14px;
+            border-radius: 11px;
+            font-size: 12px;
+            line-height: 1.3;
+            max-width: 380px;
+            width: max-content;
+            white-space: normal;
+            text-align: left;
+            box-shadow: 0 12px 24px -8px rgba(0, 0, 0, .5);
+            opacity: 0;
+            pointer-events: none;
+            transition: opacity .3s var(--ease-soft), transform .32s var(--ease-spring);
+        }
+
+        .oa-speech::after {
+            content: "";
+            position: absolute;
+            top: 100%;
+            left: 50%;
+            transform: translateX(-50%);
+            border: 6px solid transparent;
+            border-top-color: var(--bg-panel);
+        }
+
+        .oa-speech.show {
+            opacity: 1;
+            transform: translate(-50%, 0) scale(1);
+        }
+
+        .oa-manager-tag {
+            margin-top: 6px;
+            font-size: 10px;
+            font-weight: 700;
+            letter-spacing: .4px;
+            color: var(--amber);
+            text-transform: uppercase;
+        }
+
+        /* ---------- Figures (manager + workers) ---------- */
+        .oa-figure {
+            position: relative;
+            width: 46px;
+            height: 58px;
+        }
+
+        .oa-figure::before {
+            /* soft contact shadow, grounds the figure */
+            content: "";
+            position: absolute;
+            left: 50%;
+            bottom: -3px;
+            width: 34px;
+            height: 8px;
+            transform: translateX(-50%);
+            background: radial-gradient(ellipse at center, rgba(0, 0, 0, .38), transparent 72%);
+            border-radius: 50%;
+            z-index: 0;
+            transition: width .4s var(--ease), opacity .4s var(--ease);
+        }
+
+        .oa-figure.is-working::before {
+            width: 28px;
+            opacity: .75;
+        }
+
+        .oa-figure .oa-head {
+            width: 26px;
+            height: 26px;
+            border-radius: 50%;
+            background: linear-gradient(155deg, #f4d3ae, #e8bd91);
+            margin: 0 auto;
+            position: relative;
+            z-index: 2;
+            box-shadow: inset -4px -4px 8px rgba(0, 0, 0, .16), inset 3px 3px 6px rgba(255, 255, 255, .35);
+            transition: transform .5s var(--ease), background .4s var(--ease-soft), box-shadow .4s var(--ease-soft);
+            will-change: transform;
+        }
+
+        .oa-blush {
+            position: absolute;
+            top: 15px;
+            width: 5px;
+            height: 3.5px;
+            border-radius: 50%;
+            background: rgba(255, 120, 120, .4);
+            z-index: 3;
+            transition: opacity .3s var(--ease-soft);
+        }
+
+        .oa-blush.l {
+            left: 2px;
+        }
+
+        .oa-blush.r {
+            right: 2px;
+        }
+
+        .oa-eye {
+            position: absolute;
+            top: 10px;
+            width: 2.4px;
+            height: 2.4px;
+            border-radius: 50%;
+            background: rgba(60, 40, 30, .75);
+            z-index: 3;
+            transition: transform .4s var(--ease), opacity .3s var(--ease-soft);
+        }
+
+        .oa-eye.l {
+            left: 7px;
+        }
+
+        .oa-eye.r {
+            right: 7px;
+        }
+
+        /* mouth is its own element inside oa-head, so it always inherits the head's
+     rotate/translate as a whole, then gets a small matched offset in
+     look/laugh states — this keeps it perfectly in sync with the eyes. */
+        .oa-mouth {
+            position: absolute;
+            left: 50%;
+            top: 16px;
+            width: 8.5px;
+            height: 4px;
+            transform: translateX(-50%);
+            border-bottom: 2px solid rgba(112, 64, 38, .5);
+            border-radius: 0 0 10px 10px;
+            z-index: 3;
+            transition: transform .4s var(--ease), width .28s var(--ease-spring), height .28s var(--ease-spring), border-color .25s var(--ease-soft), opacity .3s var(--ease-soft);
+        }
+
+        /* hair now uses CSS custom properties for its base pose, so a single
+     transform formula can layer state-based rotation/shift on top —
+     this is what keeps hair glued to the head instead of floating
+     independently while the head turns or leans. */
+        .oa-hair {
+            position: absolute;
+            left: 50%;
+            top: -4px;
+            z-index: 1;
+            background: var(--hair-color, #3b2a1e);
+            --hbase-x: -50%;
+            --hbase-rot: 0deg;
+            --hrot: 0deg;
+            --htx: 0px;
+            --hty: 0px;
+            transform-origin: 50% 88%;
+            transform: translateX(var(--hbase-x)) translateY(var(--hty)) rotate(calc(var(--hbase-rot) + var(--hrot))) translateX(var(--htx));
+            transition: transform .5s var(--ease);
+            will-change: transform;
+        }
+
+        .oa-hair--short {
+            width: 29px;
+            height: 15px;
+            border-radius: 50% 50% 8px 8px;
+            top: -5px;
+        }
+
+        .oa-hair--side {
+            width: 29px;
+            height: 15px;
+            border-radius: 60% 40% 8px 8px;
+            top: -5px;
+            --hbase-x: -54%;
+            --hbase-rot: -4deg;
+        }
+
+        .oa-hair--long {
+            width: 33px;
+            height: 44px;
+            border-radius: 50% 50% 46% 46%;
+            top: -5px;
+        }
+
+        .oa-hair--wavy {
+            width: 34px;
+            height: 44px;
+            border-radius: 55% 45% 50% 40%;
+            top: -5px;
+            --hbase-x: -52%;
+            --hbase-rot: 3deg;
+        }
+
+        .oa-hair--exec {
+            width: 28px;
+            height: 13px;
+            border-radius: 50% 50% 10px 10px;
+            top: -4px;
+        }
+
+        .oa-figure .oa-body {
+            width: var(--body-w, 38px);
+            height: 30px;
+            margin: -6px auto 0;
+            border-radius: 16px 16px 8px 8px;
+            background: linear-gradient(160deg, var(--fig-color, var(--amber)), rgba(0, 0, 0, .18));
+            position: relative;
+            z-index: 1;
+            box-shadow: inset 0 -6px 10px rgba(0, 0, 0, .2), inset 0 3px 4px rgba(255, 255, 255, .14);
+            transition: transform .5s var(--ease);
+            will-change: transform;
+        }
+
+        /* collar — turns the plain torso block into a proper shirt/polo silhouette */
+        .oa-collar {
+            position: absolute;
+            left: 50%;
+            top: -2px;
+            width: 15px;
+            height: 9px;
+            transform: translateX(-50%);
+            background: rgba(255, 255, 255, .16);
+            clip-path: polygon(50% 100%, 4% 0%, 96% 0%);
+            z-index: 2;
+            opacity: .85;
+        }
+
+        .oa-placket {
+            /* subtle center seam so the torso doesn't read as a plain block */
+            position: absolute;
+            left: 50%;
+            top: 7px;
+            width: 1.4px;
+            height: 18px;
+            background: rgba(0, 0, 0, .14);
+            transform: translateX(-50%);
+            z-index: 1;
+            border-radius: 1px;
+        }
+
+        .oa-lanyard {
+            position: absolute;
+            left: 50%;
+            top: -4px;
+            width: 2px;
+            height: 8px;
+            background: rgba(255, 255, 255, .55);
+            transform: translateX(-50%);
+            z-index: 2;
+        }
+
+        .oa-id {
+            position: absolute;
+            left: 50%;
+            top: 3px;
+            width: 9px;
+            height: 6px;
+            border-radius: 2px;
+            background: #eef1f6;
+            box-shadow: 0 0 0 1px rgba(0, 0, 0, .25) inset;
+            transform: translateX(-50%);
+            z-index: 2;
+        }
+
+        .oa-figure .oa-arm {
+            position: absolute;
+            top: 26px;
+            width: 7px;
+            height: 16px;
+            border-radius: 5px;
+            background: var(--fig-color, var(--amber));
+            opacity: .92;
+            transform-origin: top center;
+            transition: transform .4s var(--ease-soft);
+        }
+
+        .oa-figure .oa-arm.l {
+            left: 2px;
+            transform: rotate(18deg);
+        }
+
+        .oa-figure .oa-arm.r {
+            right: 2px;
+            transform: rotate(-18deg);
+        }
+
+        /* employees AND manager: hands/arms removed entirely per request */
+        .oa-traveler .oa-arm,
+        .oa-manager .oa-arm {
+            display: none;
+        }
+
+        /* phone prop, tucked near the right hand, hidden until "show-phone" is toggled */
+        .oa-phone {
+            position: absolute;
+            right: -3px;
+            bottom: 15px;
+            width: 9px;
+            height: 15px;
+            border-radius: 3px;
+            background: #111319;
+            border: 1px solid rgba(255, 255, 255, .28);
+            opacity: 0;
+            transform: scale(.4) rotate(24deg);
+            transform-origin: bottom right;
+            transition: opacity .35s var(--ease-soft), transform .35s var(--ease-spring);
+            z-index: 4;
+            box-shadow: 0 0 7px rgba(120, 180, 255, .55);
+        }
+
+        .oa-phone::after {
+            content: "";
+            position: absolute;
+            inset: 1.5px;
+            border-radius: 1.5px;
+            background: linear-gradient(160deg, #9fd6ff, #4a7fd6);
+            opacity: .9;
+        }
+
+        .oa-figure.show-phone .oa-phone {
+            opacity: 1;
+            transform: scale(1) rotate(-8deg);
+        }
+
+        /* idle pose: relaxed on the couch, arms loose, head tilted up toward the portal */
+        .oa-figure.is-idle .oa-head {
+            transform: translateY(0) rotate(-10deg);
+        }
+
+        .oa-figure.is-idle .oa-hair {
+            --hrot: -10deg;
+        }
+
+        .oa-figure.is-idle .oa-body {
+            transform: rotate(-6deg) translateX(-2px);
+        }
+
+        .oa-figure.is-idle .oa-arm.l {
+            transform: rotate(34deg);
+        }
+
+        .oa-figure.is-idle .oa-arm.r {
+            transform: rotate(-6deg);
+        }
+
+        .oa-figure.is-idle {
+            animation: oa-breathe 3.8s ease-in-out infinite;
+        }
+
+        @keyframes oa-breathe {
+
+            0%,
+            100% {
+                transform: translateY(0);
+            }
+
+            50% {
+                transform: translateY(-2px);
+            }
+        }
+
+        /* chatting pose: idle worker visibly turns head+hair+eyes+mouth+torso toward the
+     neighbour beside them, all moving together instead of drifting apart.
+     --look-deg (rotation) and --look-x (px shift) are set together in JS. */
+        .oa-figure.is-idle.is-chatting .oa-head {
+            transform: rotate(var(--look-deg, 22deg)) translateX(var(--look-x, 5px)) translateY(-1px);
+        }
+
+        .oa-figure.is-idle.is-chatting .oa-hair {
+            --hrot: var(--look-deg, 22deg);
+            --htx: var(--look-x, 5px);
+        }
+
+        .oa-figure.is-idle.is-chatting .oa-body {
+            transform: rotate(calc(var(--look-deg, 22deg) * 0.55)) translateX(calc(var(--look-x, 5px) * 0.6));
+        }
+
+        .oa-figure.is-idle.is-chatting .oa-eye.l,
+        .oa-figure.is-idle.is-chatting .oa-eye.r {
+            transform: translateX(calc(var(--look-x, 5px) * 0.7)) scale(.9);
+        }
+
+        .oa-figure.is-idle.is-chatting .oa-mouth {
+            transform: translateX(calc(-50% + var(--look-x, 5px) * 0.7));
+            width: 9.5px;
+        }
+
+        .oa-figure.is-idle.is-chatting .oa-arm.r {
+            transform: rotate(-26deg);
+        }
+
+        .oa-figure.is-idle.is-chatting .oa-arm.l {
+            transform: rotate(40deg);
+        }
+
+        /* laugh burst: a couple of quick head+hair bounces, plus a genuine wider grin,
+     layered on whatever pose (idle or chatting) is already active */
+        .oa-figure.is-laughing .oa-head {
+            animation: oa-laugh .42s var(--ease-spring) 2;
+        }
+
+        .oa-figure.is-laughing .oa-hair {
+            animation: oa-laugh-hair .42s var(--ease-spring) 2;
+        }
+
+        .oa-figure.is-laughing .oa-mouth {
+            width: 12px;
+            height: 6px;
+            border-bottom-width: 2.6px;
+            border-color: rgba(112, 64, 38, .68);
+        }
+
+        .oa-figure.is-laughing .oa-eye.l,
+        .oa-figure.is-laughing .oa-eye.r {
+            transform: scaleY(.5) translateX(calc(var(--look-x, 0px) * 0.7));
+        }
+
+        @keyframes oa-laugh {
+
+            0%,
+            100% {
+                transform: rotate(var(--look-deg, -10deg)) translateX(var(--look-x, -5px)) translateY(0) scale(1);
+            }
+
+            50% {
+                transform: rotate(var(--look-deg, -10deg)) translateX(var(--look-x, -5px)) translateY(-3px) scale(1.08);
+            }
+        }
+
+        @keyframes oa-laugh-hair {
+
+            0%,
+            100% {
+                transform: translateX(var(--hbase-x)) translateY(0) rotate(calc(var(--hbase-rot) + var(--hrot))) translateX(var(--htx));
+            }
+
+            50% {
+                transform: translateX(var(--hbase-x)) translateY(-3px) rotate(calc(var(--hbase-rot) + var(--hrot))) translateX(var(--htx)) scale(1.05);
+            }
+        }
+
+        /* working pose: leaned in toward the monitor, hair follows the lean.
+     Employees are shown from BEHIND while working (seated at their desk,
+     facing their computer) — face features are hidden and the head reads
+     as the back of the head/hair, matching how you'd actually see someone
+     from behind their monitor. Manager is unaffected (never gets is-working). */
+        .oa-figure.is-working .oa-head {
+            transform: translateY(1px) translateX(3px) rotate(5deg);
+        }
+
+        .oa-figure.is-working .oa-hair {
+            --hty: 1px;
+            --htx: 3px;
+            --hrot: 5deg;
+        }
+
+        .oa-figure.is-working .oa-body {
+            transform: rotate(6deg) translateX(4px);
+        }
+
+        .oa-figure.is-working .oa-mouth {
+            width: 7px;
+            transform: translateX(calc(-50% + 1px));
+            border-color: rgba(112, 64, 38, .42);
+        }
+
+        /* back-of-head look: only applied to employees (travelers), manager keeps facing us */
+        .oa-traveler .oa-figure.is-working .oa-eye,
+        .oa-traveler .oa-figure.is-working .oa-mouth,
+        .oa-traveler .oa-figure.is-working .oa-blush {
+            opacity: 0;
+        }
+
+        .oa-traveler .oa-figure.is-working .oa-head {
+            background: linear-gradient(155deg, var(--hair-color, #3b2a1e), rgba(0, 0, 0, .35));
+            box-shadow: inset -4px -4px 9px rgba(0, 0, 0, .3), inset 3px 3px 5px rgba(255, 255, 255, .06);
+        }
+
+        .oa-figure .oa-arm {
+            animation: none;
+        }
+
+        .oa-figure.is-working .oa-arm.l {
+            animation: oa-type 0.5s var(--ease-soft) infinite;
+        }
+
+        .oa-figure.is-working .oa-arm.r {
+            animation: oa-type 0.5s var(--ease-soft) infinite .22s;
+        }
+
+        @keyframes oa-type {
+
+            0%,
+            100% {
+                transform: rotate(-2deg) translateY(0);
+            }
+
+            50% {
+                transform: rotate(6deg) translateY(2px);
+            }
+        }
+
+        /* walking pose: mid-transit bounce, used on the traveling worker + manager while moving */
+        .is-moving .oa-figure {
+            animation: oa-walk .34s var(--ease-walk) infinite;
+        }
+
+        @keyframes oa-walk {
+
+            0%,
+            100% {
+                transform: translateY(0) rotate(-2deg);
+            }
+
+            50% {
+                transform: translateY(-4px) rotate(2deg);
+            }
+        }
+
+        .oa-manager .oa-figure {
+            --fig-color: var(--amber);
+            --body-w: 42px;
+            width: 52px;
+        }
+
+        .oa-manager .oa-figure .oa-head {
+            width: 28px;
+            height: 28px;
+        }
+
+        .oa-manager .oa-figure .oa-body::before {
+            /* tie */
+            content: "";
+            position: absolute;
+            left: 50%;
+            top: 1px;
+            width: 6px;
+            height: 15px;
+            clip-path: polygon(50% 0%, 100% 22%, 64% 100%, 36% 100%, 0% 22%);
+            background: linear-gradient(180deg, #7a2020, #5c1717);
+            transform: translateX(-50%);
+            z-index: 2;
+        }
+
+        /* ---------- Traveling worker figures (live in the scene, not in a cabin) ---------- */
+        .oa-traveler {
+            position: absolute;
+            left: 0;
+            top: 0;
+            transform: translate(-50%, -50%);
+            transition: left .9s var(--ease), top .9s var(--ease);
+            z-index: 5;
+            pointer-events: none;
+        }
+
+        /* ---------- Cabins ---------- */
+        .oa-cabins {
+            display: flex;
+            gap: 14px;
+            flex-wrap: wrap;
+            justify-content: center;
+        }
+
+        .oa-cabin {
+            --c: var(--blue);
+            flex: 1 1 170px;
+            max-width: 206px;
+            min-width: 150px;
+            background: linear-gradient(180deg, rgba(255, 255, 255, .025), rgba(255, 255, 255, 0) 40%), var(--bg-panel);
+            border: 1px solid var(--line);
+            border-top: 2px solid color-mix(in srgb, var(--c) 55%, var(--line));
+            border-radius: var(--radius-md);
+            padding: 12px 12px 14px;
+            position: relative;
+            transition: box-shadow .4s var(--ease), transform .4s var(--ease), border-color .4s var(--ease);
+        }
+
+        .oa-cabin.is-working {
+            box-shadow: 0 0 0 1px color-mix(in srgb, var(--c) 45%, transparent), 0 16px 34px -14px color-mix(in srgb, var(--c) 55%, transparent);
+            transform: translateY(-2px);
+        }
+
+        .oa-cabin.is-selected {
+            box-shadow: 0 0 0 2px color-mix(in srgb, var(--c) 70%, #fff 10%), 0 18px 36px -14px color-mix(in srgb, var(--c) 50%, transparent);
+            border-color: color-mix(in srgb, var(--c) 55%, var(--line));
+        }
+
+        .oa-traveler.is-selected .oa-figure {
+            filter: drop-shadow(0 0 8px color-mix(in srgb, var(--fig-color, #5eb3f2) 55%, transparent));
+        }
+
+        .oa-cabin-head {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            margin-bottom: 10px;
+        }
+
+        .oa-name {
+            font-size: 12.5px;
+            font-weight: 700;
+            color: var(--text);
+        }
+
+        a.oa-name {
+            text-decoration: underline;
+            text-underline-offset: 2px;
+            cursor: pointer;
+        }
+
+        a.oa-name:hover {
+            color: var(--c);
+        }
+
+        .oa-role {
+            display: block;
+            font-size: 10px;
+            color: var(--text-dimmer);
+            font-weight: 500;
+            margin-top: 1px;
+        }
+
+        .oa-badge {
+            font-size: 9.5px;
+            font-weight: 700;
+            letter-spacing: .3px;
+            text-transform: uppercase;
+            padding: 3px 7px;
+            border-radius: 20px;
+            background: rgba(255, 255, 255, .06);
+            color: var(--text-dim);
+            border: 1px solid var(--line-2);
+            white-space: nowrap;
+            transition: background .3s var(--ease-soft), color .3s var(--ease-soft), border-color .3s var(--ease-soft);
+        }
+
+        .oa-cabin.is-working .oa-badge {
+            background: color-mix(in srgb, var(--c) 22%, transparent);
+            color: var(--c);
+            border-color: color-mix(in srgb, var(--c) 45%, transparent);
+        }
+
+        .oa-desk-area {
+            display: flex;
+            align-items: flex-end;
+            justify-content: center;
+            gap: 8px;
+            height: 96px;
+            position: relative;
+        }
+
+        .oa-cabin-anchor {
+            width: 1px;
+            height: 1px;
+            align-self: flex-end;
+            margin-bottom: 2px;
+        }
+
+        .oa-desk-surface {
+            position: absolute;
+            left: 50%;
+            bottom: 10px;
+            transform: translateX(-50%);
+            width: 84px;
+            height: 8px;
+            border-radius: 2px;
+            background: linear-gradient(180deg, #262019, #14100b);
+            border: 1px solid rgba(255, 255, 255, .07);
+            box-shadow: 0 6px 10px -2px rgba(0, 0, 0, .45);
+            z-index: 0;
+        }
+
+        .oa-desk-surface::before,
+        .oa-desk-surface::after {
+            content: "";
+            position: absolute;
+            bottom: -9px;
+            width: 3px;
+            height: 9px;
+            background: #100c07;
+            border-radius: 0 0 2px 2px;
+        }
+
+        .oa-desk-surface::before {
+            left: 8px;
+        }
+
+        .oa-desk-surface::after {
+            right: 8px;
+        }
+
+        .oa-monitor {
+            width: 58px;
+            height: 44px;
+            border-radius: 6px 6px 3px 3px;
+            background: #0c0e13;
+            border: 1px solid rgba(255, 255, 255, .08);
+            padding: 4px;
+            position: relative;
+            margin-bottom: 16px;
+            z-index: 1;
+            transition: box-shadow .4s var(--ease), border-color .4s var(--ease);
+        }
+
+        .oa-monitor::after {
+            /* stand */
+            content: "";
+            position: absolute;
+            left: 50%;
+            bottom: -8px;
+            transform: translateX(-50%);
+            width: 14px;
+            height: 8px;
+            background: #0c0e13;
+            border-radius: 0 0 3px 3px;
+        }
+
+        .oa-cabin.is-working .oa-monitor {
+            box-shadow: 0 0 14px -2px color-mix(in srgb, var(--c) 60%, transparent);
+            border-color: color-mix(in srgb, var(--c) 55%, rgba(255, 255, 255, .08));
+        }
+
+        .oa-keyboard {
+            position: absolute;
+            left: 50%;
+            bottom: 6px;
+            transform: translateX(-50%);
+            width: 40px;
+            height: 7px;
+            border-radius: 2px;
+            background: linear-gradient(180deg, #262c36, #14171d);
+            border: 1px solid rgba(255, 255, 255, .1);
+            box-shadow: inset 0 0 0 1px rgba(0, 0, 0, .3), 0 3px 5px rgba(0, 0, 0, .35);
+            z-index: 1;
+        }
+
+        .oa-keyboard::before {
+            content: "";
+            position: absolute;
+            inset: 1.2px 2px;
+            background-image: repeating-linear-gradient(90deg, rgba(255, 255, 255, .14) 0 2.4px, transparent 2.4px 3.8px);
+            opacity: .55;
+        }
+
+        .oa-mouse {
+            position: absolute;
+            bottom: 6px;
+            right: 8px;
+            width: 5px;
+            height: 8px;
+            border-radius: 2.5px 2.5px 3px 3px;
+            background: linear-gradient(180deg, #323a48, #191d24);
+            border: 1px solid rgba(255, 255, 255, .12);
+            z-index: 1;
+        }
+
+        .oa-mousepad {
+            position: absolute;
+            bottom: 5px;
+            right: 4px;
+            width: 15px;
+            height: 11px;
+            border-radius: 2px;
+            background: rgba(255, 255, 255, .03);
+            border: 1px solid rgba(255, 255, 255, .06);
+            z-index: 0;
+        }
+
+        .oa-screen {
+            width: 100%;
+            height: 100%;
+            border-radius: 3px;
+            overflow: hidden;
+            position: relative;
+            background: #0a0c11;
+        }
+
+        .oa-screen-idle {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            height: 100%;
+            font-size: 12px;
+            opacity: .4;
+        }
+
+        .oa-screen-code {
+            position: absolute;
+            inset: 3px;
+            display: flex;
+            flex-direction: column;
+            gap: 3px;
+            animation: oa-scroll 2.6s linear infinite;
+        }
+
+        .oa-screen-code span {
+            height: 3px;
+            border-radius: 2px;
+            background: var(--c);
+            opacity: .75;
+        }
+
+        @keyframes oa-scroll {
+            0% {
+                transform: translateY(0);
+            }
+
+            100% {
+                transform: translateY(-16px);
+            }
+        }
+
+        .oa-cabin:not(.is-working) .oa-screen-code {
+            display: none;
+        }
+
+        .oa-cabin.is-working .oa-screen-idle {
+            display: none;
+        }
+
+        .oa-chair {
+            width: 22px;
+            height: 26px;
+            border-radius: 8px 8px 3px 3px;
+            background: rgba(255, 255, 255, .06);
+            margin-bottom: 2px;
+            transition: background .4s var(--ease), transform .3s ease-in-out;
+            transform-origin: bottom center;
+        }
+
+        .oa-cabin.is-working .oa-chair {
+            background: color-mix(in srgb, var(--c) 22%, rgba(255, 255, 255, .06));
+            animation: oa-chair-rock 1.35s ease-in-out infinite;
+        }
+
+        @keyframes oa-chair-rock {
+
+            0%,
+            100% {
+                transform: rotate(0deg);
+            }
+
+            50% {
+                transform: rotate(-2.5deg);
+            }
+        }
+
+        .oa-task-label {
+            margin-top: 9px;
+            font-size: 10.5px;
+            color: var(--text-dim);
+            min-height: 14px;
+            line-height: 1.35;
+            display: -webkit-box;
+            -webkit-line-clamp: 2;
+            -webkit-box-orient: vertical;
+            overflow: hidden;
+        }
+
+        .oa-task-label b {
+            color: var(--text);
+            font-weight: 600;
+        }
+
+        .oa-check {
+            position: absolute;
+            top: 8px;
+            right: 8px;
+            width: 16px;
+            height: 16px;
+            border-radius: 50%;
+            background: var(--green);
+            color: #0c0e13;
+            font-size: 10px;
+            font-weight: 900;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            opacity: 0;
+            transform: scale(.4);
+            transition: opacity .3s var(--ease-spring), transform .3s var(--ease-spring);
+        }
+
+        .oa-check.show {
+            opacity: 1;
+            transform: scale(1);
+        }
+
+        /* ---------- Demo panel (safe to delete when embedding) ---------- */
+        .oa-demo {
+            margin-top: 18px;
+            padding: 14px 16px;
+            border-radius: var(--radius-md);
+            background: var(--bg-panel);
+            border: 1px solid var(--line);
+            display: flex;
+            flex-wrap: wrap;
+            gap: 10px;
+            align-items: center;
+        }
+
+        .oa-demo label {
+            font-size: 11px;
+            color: var(--text-dimmer);
+            margin-right: -4px;
+        }
+
+        .oa-demo select,
+        .oa-demo input[type=text] {
+            background: #0f131a;
+            border: 1px solid var(--line-2);
+            color: var(--text);
+            font-size: 12.5px;
+            padding: 8px 10px;
+            border-radius: 8px;
+            outline: none;
+            font-family: inherit;
+        }
+
+        .oa-demo input[type=text] {
+            flex: 1 1 220px;
+            min-width: 160px;
+        }
+
+        .oa-demo button {
+            background: var(--amber);
+            color: #20160a;
+            border: none;
+            font-weight: 700;
+            font-size: 12.5px;
+            padding: 8px 14px;
+            border-radius: 8px;
+            cursor: pointer;
+            transition: filter .15s var(--ease-soft), transform .15s var(--ease-soft);
+        }
+
+        .oa-demo button.secondary {
+            background: transparent;
+            color: var(--text-dim);
+            border: 1px solid var(--line-2);
+            font-weight: 600;
+        }
+
+        .oa-demo button:hover {
+            filter: brightness(1.08);
+            transform: translateY(-1px);
+        }
+
+        .oa-demo-note {
+            width: 100%;
+            font-size: 10.5px;
+            color: var(--text-dimmer);
+            margin-top: 2px;
+        }
+
+        @media (max-width: 640px) {
+            .oa-speech {
+                max-width: 260px;
+            }
+        }
+
+        @media (prefers-reduced-motion: reduce) {
+            * {
+                animation: none !important;
+                transition: none !important;
+            }
+        }
+
+        /* IDE embed: fill the editor tab — no visible scrollbars (zoom-safe) */
+        html.oa-embed,
+        body.oa-embed {
+            height: 100%;
+            min-height: 100%;
+            max-height: 100%;
+            padding: 10px 12px;
+            align-items: stretch;
+            justify-content: flex-start;
+            overflow: hidden;
+            scrollbar-width: none;
+            -ms-overflow-style: none;
+        }
+
+        html.oa-embed::-webkit-scrollbar,
+        body.oa-embed::-webkit-scrollbar,
+        html.oa-embed *::-webkit-scrollbar,
+        body.oa-embed *::-webkit-scrollbar {
+            width: 0 !important;
+            height: 0 !important;
+            display: none !important;
+            background: transparent !important;
+        }
+
+        body.oa-embed .officeai {
+            max-width: none;
+            width: 100%;
+            height: 100%;
+            margin: 0 auto;
+            overflow: auto;
+            scrollbar-width: none;
+            -ms-overflow-style: none;
+            overscroll-behavior: contain;
+        }
+
+        body.oa-embed .officeai::-webkit-scrollbar {
+            width: 0 !important;
+            height: 0 !important;
+            display: none !important;
+        }
+    </style>
+</head>
+
+<body>
+
+    <div class="officeai" id="officeai-root">
+
+        <div class="oa-header">
+            <div class="oa-title">AI Office <span>· manager auto-assigns work to the team</span></div>
+            <div class="oa-live"><i></i>live</div>
+        </div>
+
+        <div class="oa-scene" id="oa-scene">
+            <div class="oa-lounge" id="oa-lounge">
+                <div class="oa-couch"></div>
+                <!-- seat anchors injected here -->
+                <div class="oa-lounge-caption">team break room</div>
+            </div>
+
+            <div class="oa-manager-row">
+                <div class="oa-manager-office">
+                    <div class="oa-office-glass"></div>
+                    <div class="oa-office-plate">MANAGER<span>AI Operations</span></div>
+                    <div class="oa-office-plant">🌿</div>
+                    <div class="oa-office-chair"></div>
+                    <div class="oa-office-desk">
+                        <div class="oa-office-monitor"></div>
+                        <div class="oa-office-keyboard"></div>
+                        <div class="oa-office-mouse"></div>
+                        <div class="oa-office-mug"></div>
+                    </div>
+                </div>
+
+                <div class="oa-manager-track" id="oa-manager-track">
+                    <div class="oa-manager idle" id="oa-manager">
+                        <div class="oa-speech" id="oa-manager-speech"></div>
+                        <div class="oa-figure is-idle" id="oa-manager-figure" style="--fig-color:var(--amber)">
+                            <div class="oa-hair oa-hair--exec" style="--hair-color:#20242c"></div>
+                            <div class="oa-head"><span class="oa-blush l"></span><span class="oa-blush r"></span><span
+                                    class="oa-eye l"></span><span class="oa-eye r"></span><span class="oa-mouth"></span>
+                            </div>
+                            <div class="oa-body"><span class="oa-collar"></span><span class="oa-placket"></span><span
+                                    class="oa-lanyard"></span><span class="oa-id"></span></div>
+                            <div class="oa-arm l"></div>
+                            <div class="oa-arm r"></div>
+                        </div>
+                        <div class="oa-manager-tag">Manager</div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="oa-cabins" id="oa-cabins"><!-- injected --></div>
+
+            <!-- traveling worker figures injected here, absolutely positioned within the scene -->
+        </div>
+
+        <div class="oa-demo" id="oa-demo">
+            <label for="oa-demo-worker">Assign to</label>
+            <select id="oa-demo-worker">
+                <option value="__auto">Manager decides</option>
+            </select>
+            <input type="text" id="oa-demo-task" placeholder="e.g. Build the login page" />
+            <button id="oa-demo-assign">Assign task</button>
+            <button class="secondary" id="oa-demo-reset">Reset</button>
+            <div class="oa-demo-note">Demo controls — remove <code>#oa-demo</code> when embedding in your app. Drive
+                everything through <code>window.OfficeAI</code> instead.</div>
+        </div>
+    </div>
+
+    <script>
+        (function () {
+            "use strict";
+
+            /* =========================================================
+               WORKER ROSTER
+            ========================================================= */
+            var WORKERS = [
+                { id: 'alex', name: 'Alex', role: 'Developer', color: 'var(--blue)', hair: 'short', hairColor: '#3b2a1e', bodyWidth: 39, keywords: ['ui', 'frontend', 'react', 'css', 'page', 'component', 'design system'] },
+                { id: 'elon', name: 'Elon', role: 'Developer', color: 'var(--violet)', hair: 'side', hairColor: '#20242c', bodyWidth: 39, keywords: ['data', 'model', 'ai', 'ml', 'analysis', 'pipeline', 'prompt'] },
+                { id: 'sophia', name: 'Sophia', role: 'Developer', color: 'var(--rose)', hair: 'none', hairColor: '#6b3b23', bodyWidth: 35, keywords: ['design', 'ux', 'logo', 'brand', 'wireframe', 'figma'] },
+                { id: 'robert', name: 'Robert', role: 'Developer', color: 'var(--green)', hair: 'short', hairColor: '#4a3628', bodyWidth: 40, keywords: ['api', 'backend', 'server', 'database', 'auth', 'endpoint'] },
+                { id: 'jasmine', name: 'Jasmine', role: 'QA', color: 'var(--coral)', hair: 'wavy', hairColor: '#2b2320', bodyWidth: 35, keywords: ['bug', 'fix', 'test', 'qa', 'error', 'issue'] }
+            ];
+
+            var root = document.getElementById('officeai-root');
+            var scene = document.getElementById('oa-scene');
+            var cabinsEl = document.getElementById('oa-cabins');
+            var loungeEl = document.getElementById('oa-lounge');
+            var managerEl = document.getElementById('oa-manager');
+            var managerSpeech = document.getElementById('oa-manager-speech');
+            var managerTrack = document.getElementById('oa-manager-track');
+
+            var state = {};       // workerId -> { status, task, els:{...} }
+            var speechTimer = null;
+            var roundRobinIndex = 0;
+
+            /* =========================================================
+               BUILD LOUNGE SEATS (idle "home" anchors)
+            ========================================================= */
+            var seatSpacing = 78;
+            var seatStart = -((WORKERS.length - 1) * seatSpacing) / 2;
+            WORKERS.forEach(function (w, i) {
+                var seat = document.createElement('div');
+                seat.className = 'oa-seat';
+                seat.dataset.worker = w.id;
+                seat.dataset.seatIndex = i;
+                seat.style.left = 'calc(50% + ' + (seatStart + i * seatSpacing) + 'px)';
+                loungeEl.appendChild(seat);
+            });
+
+            /* =========================================================
+               BUILD CABINS (desk + monitor only — figure lives outside)
+            ========================================================= */
+            WORKERS.forEach(function (w) {
+                var cabin = document.createElement('div');
+                cabin.className = 'oa-cabin';
+                cabin.dataset.worker = w.id;
+                cabin.style.setProperty('--c', w.color);
+
+                var nameHtml = '<span class="oa-name">' + w.name + '</span>';
+
+                cabin.innerHTML =
+                    '<div class="oa-check">✓</div>' +
+                    '<div class="oa-cabin-head">' +
+                    '<div>' + nameHtml + '<span class="oa-role">' + w.role + '</span></div>' +
+                    '<div class="oa-badge">Idle</div>' +
+                    '</div>' +
+                    '<div class="oa-desk-area">' +
+                    '<div class="oa-cabin-anchor"></div>' +
+                    '<div class="oa-desk-surface"></div>' +
+                    '<div class="oa-chair"></div>' +
+                    '<div class="oa-monitor">' +
+                    '<div class="oa-screen">' +
+                    '<div class="oa-screen-idle">off</div>' +
+                    '<div class="oa-screen-code">' +
+                    '<span style="width:70%"></span><span style="width:45%"></span><span style="width:85%"></span>' +
+                    '<span style="width:55%"></span><span style="width:65%"></span><span style="width:40%"></span>' +
+                    '<span style="width:70%"></span><span style="width:45%"></span><span style="width:85%"></span>' +
+                    '</div>' +
+                    '</div>' +
+                    '</div>' +
+                    '<div class="oa-mousepad"></div>' +
+                    '<div class="oa-keyboard"></div>' +
+                    '<div class="oa-mouse"></div>' +
+                    '</div>' +
+                    '<div class="oa-task-label" data-role="task">In the break room with the team.</div>';
+
+                cabinsEl.appendChild(cabin);
+
+                state[w.id] = {
+                    status: 'idle',
+                    task: null,
+                    cfg: w,
+                    els: {
+                        cabin: cabin,
+                        seat: loungeEl.querySelector('.oa-seat[data-worker="' + w.id + '"]'),
+                        anchor: cabin.querySelector('.oa-cabin-anchor'),
+                        badge: cabin.querySelector('.oa-badge'),
+                        taskLabel: cabin.querySelector('[data-role="task"]'),
+                        check: cabin.querySelector('.oa-check'),
+                        traveler: null,
+                        figure: null
+                    }
+                };
+            });
+
+            /* =========================================================
+               BUILD TRAVELING FIGURES (live directly in the scene)
+            ========================================================= */
+            WORKERS.forEach(function (w) {
+                var traveler = document.createElement('div');
+                traveler.className = 'oa-traveler';
+                traveler.dataset.worker = w.id;
+                var hairHtml = (w.hair && w.hair !== 'none')
+                    ? '<div class="oa-hair oa-hair--' + w.hair + '" style="--hair-color:' + w.hairColor + '"></div>'
+                    : '';
+                traveler.innerHTML =
+                    '<div class="oa-figure is-idle" style="--fig-color:' + w.color + '; --body-w:' + w.bodyWidth + 'px; --hair-color:' + w.hairColor + '">' +
+                    hairHtml +
+                    '<div class="oa-head"><span class="oa-blush l"></span><span class="oa-blush r"></span><span class="oa-eye l"></span><span class="oa-eye r"></span><span class="oa-mouth"></span></div>' +
+                    '<div class="oa-body"><span class="oa-collar"></span><span class="oa-placket"></span><span class="oa-lanyard"></span><span class="oa-id"></span></div>' +
+                    '<div class="oa-arm l"></div>' +
+                    '<div class="oa-arm r"></div>' +
+                    '<div class="oa-phone"></div>' +
+                    '</div>';
+                scene.appendChild(traveler);
+                state[w.id].els.traveler = traveler;
+                state[w.id].els.figure = traveler.querySelector('.oa-figure');
+            });
+
+            /* populate demo dropdown */
+            var demoSelect = document.getElementById('oa-demo-worker');
+            WORKERS.forEach(function (w) {
+                var opt = document.createElement('option');
+                opt.value = w.id; opt.textContent = w.name + ' — ' + w.role;
+                demoSelect.appendChild(opt);
+            });
+
+            /* Click cabin / traveler → IDE chat inspect brief */
+            function selectWorker(workerId) {
+                WORKERS.forEach(function (w) {
+                    state[w.id].els.cabin.classList.toggle('is-selected', w.id === workerId);
+                    state[w.id].els.traveler.classList.toggle('is-selected', w.id === workerId);
+                });
+                postToParent('worker-click', { workerId: workerId });
+            }
+
+            WORKERS.forEach(function (w) {
+                var cabin = state[w.id].els.cabin;
+                cabin.style.cursor = 'pointer';
+                cabin.title = 'Inspect ' + w.name + ' in chat';
+                cabin.addEventListener('click', function (ev) {
+                    ev.stopPropagation();
+                    selectWorker(w.id);
+                });
+                var traveler = state[w.id].els.traveler;
+                traveler.style.cursor = 'pointer';
+                traveler.addEventListener('click', function (ev) {
+                    ev.stopPropagation();
+                    selectWorker(w.id);
+                });
+            });
+
+            /* =========================================================
+               POSITION HELPERS
+            ========================================================= */
+            function anchorPoint(el) {
+                var s = scene.getBoundingClientRect();
+                var r = el.getBoundingClientRect();
+                return { x: r.left - s.left + r.width / 2, y: r.top - s.top + r.height / 2 };
+            }
+
+            function placeTraveler(workerId, point) {
+                var t = state[workerId].els.traveler;
+                t.style.left = point.x + 'px';
+                t.style.top = point.y + 'px';
+            }
+
+            function sendTravelerHome(workerId, instant) {
+                var p = anchorPoint(state[workerId].els.seat);
+                if (instant) {
+                    var t = state[workerId].els.traveler;
+                    var prevTransition = t.style.transition;
+                    t.style.transition = 'none';
+                    placeTraveler(workerId, p);
+                    void t.offsetWidth;
+                    t.style.transition = prevTransition;
+                } else {
+                    placeTraveler(workerId, p);
+                }
+            }
+
+            function sendTravelerToDesk(workerId) {
+                placeTraveler(workerId, anchorPoint(state[workerId].els.anchor));
+            }
+
+            /* =========================================================
+               MANAGER MOVEMENT + SPEECH
+            ========================================================= */
+            function managerHomeX() { return 0; }
+
+            function managerXForWorker(workerId) {
+                var cabin = state[workerId].els.cabin;
+                var trackRect = managerTrack.getBoundingClientRect();
+                var cabinRect = cabin.getBoundingClientRect();
+                var x = (cabinRect.left - trackRect.left) + cabinRect.width / 2 - managerEl.offsetWidth / 2;
+                return Math.max(0, x);
+            }
+
+            function moveManagerTo(x) {
+                managerEl.style.transform = 'translateX(' + x + 'px)';
+            }
+
+            function say(text, ms) {
+                managerSpeech.textContent = text;
+                managerSpeech.classList.add('show');
+                clearTimeout(speechTimer);
+                if (ms !== 0) {
+                    speechTimer = setTimeout(function () {
+                        managerSpeech.classList.remove('show');
+                    }, ms || 2600);
+                }
+                // whenever the manager speaks, a couple of idle folks might glance over and grin
+                triggerManagerGlances();
+            }
+
+            /* =========================================================
+               CORE STATE TRANSITIONS
+            ========================================================= */
+            function walkToDesk(workerId) {
+                var s = state[workerId];
+                s.els.figure.classList.remove('is-chatting', 'is-laughing', 'show-phone');
+                s.els.traveler.classList.add('is-moving');
+                sendTravelerToDesk(workerId);
+                setTimeout(function () {
+                    s.els.traveler.classList.remove('is-moving');
+                }, 950);
+            }
+
+            function walkToLounge(workerId) {
+                var s = state[workerId];
+                s.els.traveler.classList.add('is-moving');
+                sendTravelerHome(workerId, false);
+                setTimeout(function () {
+                    s.els.traveler.classList.remove('is-moving');
+                }, 950);
+            }
+
+            function setWorking(workerId, taskLabel) {
+                var s = state[workerId];
+                s.status = 'working';
+                s.task = taskLabel || 'Working on a task';
+                s.els.cabin.classList.add('is-working');
+                s.els.figure.classList.remove('is-idle', 'is-chatting', 'is-laughing', 'show-phone');
+                s.els.figure.classList.add('is-working');
+                s.els.badge.textContent = 'Working';
+                s.els.taskLabel.innerHTML = '<b>Task:</b> ' + escapeHtml(s.task);
+                s.els.check.classList.remove('show');
+            }
+
+            function setIdle(workerId, note) {
+                var s = state[workerId];
+                s.status = 'idle';
+                s.task = null;
+                s.els.cabin.classList.remove('is-working');
+                s.els.figure.classList.remove('is-working');
+                s.els.figure.classList.add('is-idle');
+                s.els.badge.textContent = 'Idle';
+                s.els.taskLabel.textContent = note || 'In the break room with the team.';
+            }
+
+            function escapeHtml(str) {
+                return String(str).replace(/[&<>"']/g, function (c) {
+                    return ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c];
+                });
+            }
+
+            function fireEvent(name, detail) {
+                var evt = new CustomEvent(name, { detail: detail, bubbles: true });
+                root.dispatchEvent(evt);
+                document.dispatchEvent(evt);
+            }
+
+            /* =========================================================
+               BREAK-ROOM ANTICS — idle workers turn to look at each other,
+               giggle, and occasionally sneak a phone out to show a neighbour.
+               Also: a random idle worker glances at the manager and laughs
+               whenever the manager says something.
+            ========================================================= */
+            function idleWorkersSortedBySeat() {
+                return WORKERS
+                    .filter(function (w) { return state[w.id].status === 'idle'; })
+                    .map(function (w) { return w; })
+                    .sort(function (a, b) {
+                        return Number(state[a.id].els.seat.dataset.seatIndex) - Number(state[b.id].els.seat.dataset.seatIndex);
+                    });
+            }
+
+            function setLook(fig, dir) { // dir: 1 = look right, -1 = look left
+                fig.style.setProperty('--look-deg', (dir * 22) + 'deg');
+                fig.style.setProperty('--look-x', (dir * 5) + 'px');
+            }
+            function clearLook(fig) {
+                fig.style.removeProperty('--look-deg');
+                fig.style.removeProperty('--look-x');
+            }
+
+            function lookAtEachOther(idA, idB) {
+                var sA = state[idA], sB = state[idB];
+                if (sA.status !== 'idle' || sB.status !== 'idle') return;
+                var figA = sA.els.figure, figB = sB.els.figure;
+                var seatA = Number(sA.els.seat.dataset.seatIndex);
+                var seatB = Number(sB.els.seat.dataset.seatIndex);
+                var dirA = seatB > seatA ? 1 : -1; // A turns toward B
+                var dirB = -dirA;                  // B turns toward A
+
+                setLook(figA, dirA);
+                setLook(figB, dirB);
+                figA.classList.add('is-chatting');
+                figB.classList.add('is-chatting');
+
+                setTimeout(function () {
+                    if (sA.status === 'idle') figA.classList.add('is-laughing');
+                    if (sB.status === 'idle') figB.classList.add('is-laughing');
+                }, 480);
+
+                setTimeout(function () {
+                    figA.classList.remove('is-chatting', 'is-laughing');
+                    figB.classList.remove('is-chatting', 'is-laughing');
+                    clearLook(figA);
+                    clearLook(figB);
+                }, 2300);
+            }
+
+            function showPhoneToNeighbor(id) {
+                var s = state[id];
+                if (s.status !== 'idle') return;
+                var fig = s.els.figure;
+                var seatIdx = Number(s.els.seat.dataset.seatIndex);
+                // lean slightly toward whichever neighbour exists, phone "held out" to show them
+                var neighbors = idleWorkersSortedBySeat().filter(function (w) { return w.id !== id; });
+                var dir = 1;
+                if (neighbors.length) {
+                    var nearest = neighbors[0];
+                    var nSeat = Number(state[nearest.id].els.seat.dataset.seatIndex);
+                    dir = nSeat > seatIdx ? 1 : -1;
+                }
+                setLook(fig, dir);
+                fig.classList.add('is-chatting', 'show-phone');
+                setTimeout(function () {
+                    if (s.status === 'idle') fig.classList.add('is-laughing');
+                }, 700);
+                setTimeout(function () {
+                    fig.classList.remove('is-chatting', 'is-laughing', 'show-phone');
+                    clearLook(fig);
+                }, 2700);
+            }
+
+            function triggerManagerGlances() {
+                var idleWorkers = idleWorkersSortedBySeat();
+                if (!idleWorkers.length) return;
+                var howMany = Math.random() < 0.5 ? 1 : 2;
+                var shuffled = idleWorkers.slice().sort(function () { return Math.random() - 0.5; });
+                shuffled.slice(0, howMany).forEach(function (w, i) {
+                    setTimeout(function () {
+                        glanceAtManager(w.id);
+                    }, 250 + i * 260);
+                });
+            }
+
+            function glanceAtManager(id) {
+                var s = state[id];
+                if (s.status !== 'idle') return;
+                var fig = s.els.figure;
+                // manager's office sits to the left of the lounge, so glance left
+                setLook(fig, -1);
+                fig.classList.add('is-chatting');
+                setTimeout(function () {
+                    if (s.status === 'idle') fig.classList.add('is-laughing');
+                }, 200);
+                setTimeout(function () {
+                    fig.classList.remove('is-chatting', 'is-laughing');
+                    clearLook(fig);
+                }, 1500);
+            }
+
+            /* Every ~10s the whole break room has a "moment": everyone idle pairs up with
+               their neighbour and looks over at them, like a real group hanging out.
+               A leftover odd-one-out (or a lone idle worker) shows off their phone instead. */
+            var LOUNGE_CYCLE_MS = 10000;
+            var loungeCycleTimer = null;
+            var phoneMomentTimer = null;
+
+            function loungeCycleTick() {
+                var idleWorkers = idleWorkersSortedBySeat();
+                if (idleWorkers.length >= 2) {
+                    for (var i = 0; i < idleWorkers.length - 1; i += 2) {
+                        lookAtEachOther(idleWorkers[i].id, idleWorkers[i + 1].id);
+                    }
+                    if (idleWorkers.length % 2 === 1) {
+                        var last = idleWorkers[idleWorkers.length - 1];
+                        setTimeout(function () { showPhoneToNeighbor(last.id); }, 900);
+                    }
+                } else if (idleWorkers.length === 1) {
+                    showPhoneToNeighbor(idleWorkers[0].id);
+                }
+            }
+
+            function phoneMomentTick() {
+                var idleWorkers = idleWorkersSortedBySeat();
+                if (!idleWorkers.length) return;
+                if (Math.random() < 0.6) {
+                    var w = idleWorkers[Math.floor(Math.random() * idleWorkers.length)];
+                    showPhoneToNeighbor(w.id);
+                }
+            }
+
+            function startLoungeAntics() {
+                stopLoungeAntics();
+                // first "everyone looks at each other" moment shortly after load, then every ~10s
+                loungeCycleTimer = setTimeout(function repeat() {
+                    loungeCycleTick();
+                    loungeCycleTimer = setTimeout(repeat, LOUNGE_CYCLE_MS);
+                }, 2600);
+                // a lighter, offset phone moment between the big cycles
+                phoneMomentTimer = setTimeout(function repeat() {
+                    phoneMomentTick();
+                    phoneMomentTimer = setTimeout(repeat, LOUNGE_CYCLE_MS);
+                }, 2600 + LOUNGE_CYCLE_MS / 2);
+            }
+            function stopLoungeAntics() {
+                if (loungeCycleTimer) { clearTimeout(loungeCycleTimer); loungeCycleTimer = null; }
+                if (phoneMomentTimer) { clearTimeout(phoneMomentTimer); phoneMomentTimer = null; }
+            }
+
+            /* =========================================================
+               MANAGER OFFICE CHECK-INS — every so often, when there's no
+               active task, the manager steps back into their office, checks
+               their screen for new work, and walks back out with a status line.
+            ========================================================= */
+            var managerBusy = false;
+            var officeCheckTimer = null;
+            var NO_TASK_LINES = [
+                "No new tasks right now — back to check-ins.",
+                "Inbox is clear. I'll keep an eye out.",
+                "Nothing queued yet — team's doing great though.",
+                "All quiet on my screen. Back out to the floor."
+            ];
+
+            function anyoneWorking() {
+                return WORKERS.some(function (w) { return state[w.id].status === 'working'; });
+            }
+
+            function managerVisitOffice() {
+                if (managerBusy || anyoneWorking()) return;
+                managerBusy = true;
+
+                managerEl.classList.add('is-moving');
+                moveManagerTo(-46); // step in toward the office doorway
+                setTimeout(function () { managerEl.style.opacity = '0'; }, 480); // slip inside
+
+                setTimeout(function () {
+                    managerEl.classList.remove('is-moving');
+                }, 950);
+
+                setTimeout(function () {
+                    // back out, having checked the screen for new work
+                    managerEl.classList.add('is-moving');
+                    managerEl.style.opacity = '1';
+                    moveManagerTo(managerHomeX());
+                    say(NO_TASK_LINES[Math.floor(Math.random() * NO_TASK_LINES.length)], 2400);
+                }, 1750);
+
+                setTimeout(function () {
+                    managerEl.classList.remove('is-moving');
+                    managerBusy = false;
+                }, 2700);
+            }
+
+            function startManagerCheckIns() {
+                stopManagerCheckIns();
+                function schedule() {
+                    officeCheckTimer = setTimeout(function () {
+                        managerVisitOffice();
+                        schedule();
+                    }, 13000 + Math.random() * 7000);
+                }
+                schedule();
+            }
+            function stopManagerCheckIns() {
+                if (officeCheckTimer) { clearTimeout(officeCheckTimer); officeCheckTimer = null; }
+            }
+
+            /* =========================================================
+               PUBLIC API
+            ========================================================= */
+            var pendingTimers = {};
+
+            function assignTask(workerId, taskLabel, opts) {
+                opts = opts || {};
+                if (!state[workerId]) {
+                    console.warn('[OfficeAI] Unknown worker: ' + workerId);
+                    return null;
+                }
+                var w = state[workerId].cfg;
+
+                managerBusy = true;
+                say('Hey ' + w.name + ', I need you on this: "' + taskLabel + '"', 3200);
+                moveManagerTo(managerXForWorker(workerId));
+
+                clearTimeout(pendingTimers[workerId]);
+                pendingTimers[workerId] = setTimeout(function () {
+                    walkToDesk(workerId);
+                    setTimeout(function () {
+                        setWorking(workerId, taskLabel);
+                        fireEvent('officeai:assigned', { workerId: workerId, worker: w.name, task: taskLabel });
+                        if (opts.duration) {
+                            setTimeout(function () { completeTask(workerId); }, opts.duration);
+                        }
+                    }, 850);
+                }, 700);
+
+                return {
+                    workerId: workerId,
+                    complete: function () { completeTask(workerId); }
+                };
+            }
+
+            function completeTask(workerId) {
+                if (!state[workerId] || state[workerId].status !== 'working') return;
+                var w = state[workerId].cfg;
+                var doneTask = state[workerId].task;
+
+                state[workerId].els.check.classList.add('show');
+                state[workerId].els.badge.textContent = 'Done';
+                state[workerId].els.figure.classList.remove('is-working');
+
+                say(w.name + ' just wrapped that up ✓ — back to the break room.', 2600);
+
+                setTimeout(function () {
+                    state[workerId].els.cabin.classList.remove('is-working');
+                    walkToLounge(workerId);
+                    setTimeout(function () {
+                        setIdle(workerId);
+                        moveManagerTo(managerHomeX());
+                        managerBusy = false;
+                        fireEvent('officeai:completed', { workerId: workerId, worker: w.name, task: doneTask });
+                        var anyWorking = WORKERS.some(function (x) { return state[x.id].status === 'working'; });
+                        if (!anyWorking) fireEvent('officeai:allidle', {});
+                    }, 950);
+                }, 900);
+            }
+
+            function pickWorker(taskLabel) {
+                /* Only free (idle) developers — never double-book someone who is working. */
+                var idle = WORKERS.filter(function (w) { return state[w.id].status === 'idle'; });
+                if (!idle.length) return null;
+                var lower = (taskLabel || '').toLowerCase();
+                var best = null, bestScore = 0;
+                idle.forEach(function (w) {
+                    var score = 0;
+                    w.keywords.forEach(function (k) { if (lower.indexOf(k) !== -1) score++; });
+                    if (score > bestScore) { bestScore = score; best = w.id; }
+                });
+                if (!best) {
+                    best = idle[roundRobinIndex % idle.length].id;
+                    roundRobinIndex++;
+                }
+                return best;
+            }
+
+            function autoAssign(taskLabel, opts) {
+                say('Thinking about who should take this…', 1400);
+                return new Promise(function (resolve) {
+                    setTimeout(function () {
+                        var workerId = pickWorker(taskLabel);
+                        if (!workerId) {
+                            say('Everyone is busy — wait for someone to free up.', 2600);
+                            resolve(null);
+                            return;
+                        }
+                        var ctrl = assignTask(workerId, taskLabel, opts);
+                        resolve(ctrl);
+                    }, 900);
+                });
+            }
+
+            function getStatuses() {
+                return WORKERS.map(function (w) {
+                    return { id: w.id, name: w.name, role: w.role, status: state[w.id].status, task: state[w.id].task };
+                });
+            }
+
+            function setManagerMessage(text, ms) { say(text, ms); }
+
+            function reset() {
+                WORKERS.forEach(function (w) {
+                    clearTimeout(pendingTimers[w.id]);
+                    state[w.id].els.traveler.classList.remove('is-moving');
+                    state[w.id].els.figure.classList.remove('is-chatting', 'is-laughing', 'show-phone');
+                    clearLook(state[w.id].els.figure);
+                    setIdle(w.id);
+                    sendTravelerHome(w.id, true);
+                });
+                managerBusy = false;
+                managerEl.classList.remove('is-moving');
+                managerEl.style.opacity = '1';
+                moveManagerTo(managerHomeX());
+                managerSpeech.classList.remove('show');
+            }
+
+            window.OfficeAI = {
+                workers: WORKERS.map(function (w) { return w.id; }),
+                roster: WORKERS.map(function (w) { return { id: w.id, name: w.name, role: w.role }; }),
+                assignTask: assignTask,
+                completeTask: completeTask,
+                autoAssign: autoAssign,
+                pickWorker: pickWorker,
+                getStatuses: getStatuses,
+                setManagerMessage: setManagerMessage,
+                reset: reset
+            };
+
+            /* IDE bridge: parent React tab drives animations via postMessage */
+            function postToParent(type, detail) {
+                try {
+                    if (window.parent && window.parent !== window) {
+                        window.parent.postMessage({ source: 'officeai', type: type, detail: detail || {} }, '*');
+                    }
+                } catch (e) { /* ignore */ }
+            }
+
+            document.addEventListener('officeai:assigned', function (e) {
+                postToParent('assigned', e.detail);
+            });
+            document.addEventListener('officeai:completed', function (e) {
+                postToParent('completed', e.detail);
+            });
+            document.addEventListener('officeai:allidle', function (e) {
+                postToParent('allidle', e.detail);
+            });
+
+            window.addEventListener('message', function (e) {
+                var d = e.data;
+                if (!d || d.source !== 'olkil-virtual-office') return;
+                if (d.type === 'assign') {
+                    var task = (d.task || '').trim() || 'Untitled task';
+                    /* Never pass duration — IDE calls complete when the real agent finishes */
+                    if (d.workerId === 'manager' || d.workerId === '__auto' || !d.workerId) {
+                        autoAssign(task, {});
+                    } else {
+                        assignTask(d.workerId, task, {});
+                    }
+                } else if (d.type === 'complete') {
+                    if (d.workerId) completeTask(d.workerId);
+                } else if (d.type === 'reset') {
+                    reset();
+                } else if (d.type === 'ping') {
+                    postToParent('ready', { workers: window.OfficeAI.workers });
+                }
+            });
+
+            /* Embed mode: fill the IDE tab, hide demo controls */
+            if (/[?&]embed=1(?:&|$)/.test(location.search || '')) {
+                document.documentElement.classList.add('oa-embed');
+                document.body.classList.add('oa-embed');
+                var demo = document.getElementById('oa-demo');
+                if (demo) demo.style.display = 'none';
+                postToParent('ready', { workers: window.OfficeAI.workers });
+            }
+
+            /* =========================================================
+               Integration example (for your IDE / chatbot):
+          
+               // manager auto-decides who works on it, and auto-finishes in 8s
+               OfficeAI.autoAssign("Fix the login button bug", { duration: 8000 });
+          
+               // or assign directly to someone by id, and call complete() yourself
+               var job = OfficeAI.assignTask("robert", "Build the auth API");
+               // ...later, when your real task finishes:
+               job.complete();
+          
+               // listen for lifecycle events anywhere in your app:
+               document.addEventListener('officeai:assigned', e => console.log(e.detail));
+               document.addEventListener('officeai:completed', e => console.log(e.detail));
+            ========================================================= */
+
+            /* =========================================================
+               INITIAL PLACEMENT — everyone starts in the lounge
+            ========================================================= */
+            function placeAllHome() {
+                WORKERS.forEach(function (w) { sendTravelerHome(w.id, true); });
+                startLoungeAntics();
+                startManagerCheckIns();
+            }
+            // wait a frame so layout (flex, %) has settled before measuring
+            requestAnimationFrame(function () { requestAnimationFrame(placeAllHome); });
+
+            /* =========================================================
+               DEMO PANEL WIRING (safe to delete)
+            ========================================================= */
+            document.getElementById('oa-demo-assign').addEventListener('click', function () {
+                var taskInput = document.getElementById('oa-demo-task');
+                var task = taskInput.value.trim() || 'Untitled task';
+                var chosen = demoSelect.value;
+                if (chosen === '__auto') {
+                    autoAssign(task, { duration: 6000 });
+                } else {
+                    assignTask(chosen, task, { duration: 6000 });
+                }
+                taskInput.value = '';
+            });
+            document.getElementById('oa-demo-reset').addEventListener('click', reset);
+
+            window.addEventListener('resize', function () {
+                WORKERS.forEach(function (w) {
+                    var s = state[w.id];
+                    var wasMoving = s.els.traveler.classList.contains('is-moving');
+                    s.els.traveler.classList.remove('is-moving');
+                    if (s.status === 'working') {
+                        sendTravelerToDesk(w.id);
+                    } else {
+                        sendTravelerHome(w.id, true);
+                    }
+                    if (wasMoving) s.els.traveler.classList.add('is-moving');
+                });
+                var workingWorker = WORKERS.find(function (w) { return state[w.id].status === 'working'; });
+                moveManagerTo(workingWorker ? managerXForWorker(workingWorker.id) : managerHomeX());
+            });
+
+        })();
+    </script>
+</body>
+
+</html>

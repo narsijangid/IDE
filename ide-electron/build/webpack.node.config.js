@@ -12,7 +12,10 @@ const distDir = path.join(__dirname, '../app/node');
 const rgBinDir = path.join(__dirname, '../node_modules/@opensumi/vscode-ripgrep/bin');
 
 module.exports = createConfig({
-  entry: path.join(srcDir, './index.ts'),
+  entry: [
+    path.join(__dirname, '../src/node/node-compat.ts'),
+    path.join(srcDir, './index.ts'),
+  ],
   target: 'node',
   output: {
     filename: 'index.js',

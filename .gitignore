@@ -5,6 +5,8 @@
 **/.env
 **/.env.*
 !**/.env.example
+**/olkil-payu-checkout/secrets.php
+wp-plugins/olkil-payu-checkout/secrets.php
 
 # Dependencies & build outputs
 **/node_modules/

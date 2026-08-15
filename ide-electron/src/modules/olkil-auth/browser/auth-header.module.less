@@ -6,6 +6,49 @@
   -webkit-app-region: no-drag;
 }
 
+.officeBtn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  padding: 0 10px;
+  margin: 0;
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  -webkit-app-region: no-drag;
+  color: var(--titlebar-activeForeground, #ccc);
+
+  &:hover {
+    background-color: hsla(0, 0%, 100%, 0.08);
+  }
+
+  &:focus-visible {
+    outline: 1px solid #fe019a;
+    outline-offset: -2px;
+  }
+}
+
+.officeLabel {
+  font-size: 12px;
+  white-space: nowrap;
+  font-weight: 560;
+  opacity: 0.92;
+}
+
+.officeBtnActive {
+  color: #fff;
+
+  .officeLabel {
+    opacity: 1;
+    font-weight: 650;
+  }
+
+  &:hover {
+    background-color: rgba(254, 1, 154, 0.14);
+  }
+}
+
 .avatarBtn {
   display: flex;
   align-items: center;

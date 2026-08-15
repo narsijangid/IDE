@@ -1,3 +1,4 @@
+import './node-compat';
 import { startServer } from './server';
 
 import { NodeModule, ConstructorOf } from '@opensumi/ide-core-node';
@@ -18,6 +19,7 @@ import { MiniCodeDesktopNodeModule } from './module';
 import { ExtensionManagerModule } from '../extensionManager/node';
 import { OlkilAiNodeModule } from '../modules/olkil-ai/node';
 import { OlkilAuthNodeModule } from '../modules/olkil-auth/node';
+import { scheduleClineSdkPrewarm } from '../modules/olkil-ai/node/cline-runtime.service';
 
 export const CommonNodeModules: ConstructorOf<NodeModule>[] = [
   ServerCommonModule,
@@ -40,4 +42,6 @@ startServer({
   if (process.send) {
     process.send('ready');
   }
+  // After the extension host has had time to bind its IPC pipe.
+  scheduleClineSdkPrewarm();
 });

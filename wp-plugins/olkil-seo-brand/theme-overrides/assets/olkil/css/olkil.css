@@ -1267,11 +1267,23 @@ body.olkil-theme .ast-separate-container .ast-comment-section {
 	display: flex;
 	flex-wrap: wrap;
 	justify-content: space-between;
+	align-items: center;
 	gap: 1rem;
 	padding-top: 1.5rem;
 	border-top: 1px solid var(--olkil-border);
 	font-size: 0.8rem;
 	color: var(--olkil-text-dim);
+}
+
+.olkil-footer__legal-links {
+	display: inline-flex;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: 0.45rem;
+}
+
+.olkil-footer__legal-links a {
+	font-size: 0.8rem;
 }
 
 /* Page hero (inner) */
@@ -1305,7 +1317,7 @@ body.olkil-theme .ast-separate-container .ast-comment-section {
 	position: relative;
 }
 
-/* Reveal on scroll */
+/* Reveal on scroll — never hide full articles/posts (long content stays readable). */
 .olkil-reveal {
 	opacity: 0;
 	transform: translateY(24px);
@@ -1314,7 +1326,15 @@ body.olkil-theme .ast-separate-container .ast-comment-section {
 
 .olkil-reveal.is-visible {
 	opacity: 1;
-	transform: translateY(0);
+	transform: none;
+}
+
+.olkil-article.olkil-reveal,
+article.olkil-article.olkil-reveal,
+body.single .olkil-reveal.olkil-article,
+body.page .olkil-reveal.olkil-article {
+	opacity: 1 !important;
+	transform: none !important;
 }
 
 /* ——— Blog article shell ——— */
