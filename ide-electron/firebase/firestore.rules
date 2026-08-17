@@ -1,10 +1,50 @@
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
+    function signedIn() {
+      return request.auth != null;
+    }
+
+    function userEmail() {
+      return signedIn() && request.auth.token.email is string
+        ? request.auth.token.email.lower()
+        : '';
+    }
+
     // Per-user agent chat history (max 3 chats / 48h — enforced client-side too)
     match /users/{userId}/data/{docId} {
-      allow read, write: if request.auth != null && request.auth.uid == userId
+      allow read, write: if signedIn() && request.auth.uid == userId
         && docId == 'chatHistory';
+    }
+
+    // PayU key/salt and counters — Cloud Functions (Admin SDK) only.
+    match /internal/{document=**} {
+      allow read, write: if false;
+    }
+
+    match /orders/{txnid} {
+      allow read: if signedIn() && (
+        resource.data.uid == request.auth.uid ||
+        (resource.data.email is string && resource.data.email == userEmail())
+      );
+      allow write: if false;
+    }
+
+    match /subscriptions/{emailKey} {
+      allow read: if signedIn() && userEmail() == emailKey;
+      allow write: if false;
+    }
+
+    match /invoices/{invoiceId} {
+      allow read: if signedIn() && (
+        resource.data.uid == request.auth.uid ||
+        (resource.data.email is string && resource.data.email == userEmail())
+      );
+      allow write: if false;
+    }
+
+    match /mailLog/{id} {
+      allow read, write: if false;
     }
   }
 }

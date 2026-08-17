@@ -71,7 +71,9 @@ function olkil_payu_default_subscription( $email = '' ) {
 		'percent_used'  => 0,
 		'percent_left'  => 100,
 		'started_at'    => '',
+		'started_on'    => '',
 		'expires_at'    => '',
+		'expires_on'    => '',
 		'expires_label' => 'Never (free local)',
 		'days_left'     => null,
 		'txnid'         => '',
@@ -99,11 +101,16 @@ function olkil_payu_enrich_subscription( array $sub ) {
 	$expired = $exp_ts > 0 && $exp_ts < $now;
 
 	if ( $expired || ( ! empty( $sub['status'] ) && 'expired' === $sub['status'] ) ) {
-		$out               = olkil_payu_default_subscription( (string) ( $sub['email'] ?? '' ) );
+		$email             = (string) ( $sub['email'] ?? '' );
+		$out               = olkil_payu_default_subscription( $email );
 		$out['is_expired'] = true;
 		$out['expired_plan'] = $plan;
 		$out['expires_at'] = $expires;
+		$out['expires_on'] = $exp_ts ? gmdate( 'M j, Y', $exp_ts ) : '';
 		$out['expires_label'] = $expires ? gmdate( 'M j, Y', $exp_ts ) . ' (expired)' : 'Expired';
+		if ( $email && 'dazzlone' !== $plan ) {
+			olkil_payu_downgrade_to_free( $email, $sub );
+		}
 		return $out;
 	}
 
@@ -135,7 +142,9 @@ function olkil_payu_enrich_subscription( array $sub ) {
 		'percent_used'       => $pct_used,
 		'percent_left'       => $pct_left,
 		'started_at'         => (string) ( $sub['started_at'] ?? '' ),
+		'started_on'         => ! empty( $sub['started_at'] ) ? gmdate( 'M j, Y', strtotime( (string) $sub['started_at'] ) ) : '',
 		'expires_at'         => $expires,
+		'expires_on'         => $exp_ts ? gmdate( 'M j, Y', $exp_ts ) : '',
 		'expires_label'      => $label,
 		'days_left'          => $days,
 		'txnid'              => (string) ( $sub['txnid'] ?? '' ),
@@ -200,6 +209,65 @@ function olkil_payu_activate_subscription( $email, $plan, $txnid = '' ) {
 
 	update_option( 'olkil_payu_subscriptions', $all, false );
 	return true;
+}
+
+/**
+ * Paid plan ended → persist Dazzlone (free) like Cursor downgrade.
+ *
+ * @param string               $email Email.
+ * @param array<string,mixed>  $previous Previous row.
+ */
+function olkil_payu_downgrade_to_free( $email, array $previous = array() ) {
+	$key = olkil_payu_email_key( $email );
+	if ( '' === $key || ! is_email( $key ) ) {
+		return;
+	}
+	$all = get_option( 'olkil_payu_subscriptions', array() );
+	if ( ! is_array( $all ) ) {
+		$all = array();
+	}
+	$prev_plan = sanitize_key( (string) ( $previous['plan'] ?? ( $all[ $key ]['plan'] ?? '' ) ) );
+	if ( 'dazzlone' === $prev_plan && ( ( $all[ $key ]['status'] ?? '' ) === 'expired' ) ) {
+		return;
+	}
+	$all[ $key ] = array(
+		'email'        => $key,
+		'plan'         => 'dazzlone',
+		'status'       => 'expired',
+		'tokens_total' => 0,
+		'tokens_used'  => 0,
+		'started_at'   => '',
+		'expires_at'   => (string) ( $previous['expires_at'] ?? ( $all[ $key ]['expires_at'] ?? '' ) ),
+		'expired_plan' => $prev_plan && 'dazzlone' !== $prev_plan ? $prev_plan : (string) ( $all[ $key ]['expired_plan'] ?? '' ),
+		'txnid'        => (string) ( $previous['txnid'] ?? ( $all[ $key ]['txnid'] ?? '' ) ),
+		'updated_at'   => gmdate( 'c' ),
+	);
+	update_option( 'olkil_payu_subscriptions', $all, false );
+}
+
+function olkil_payu_cron_expire_plans() {
+	$all = get_option( 'olkil_payu_subscriptions', array() );
+	if ( ! is_array( $all ) ) {
+		return;
+	}
+	$now = time();
+	foreach ( $all as $key => $sub ) {
+		if ( ! is_array( $sub ) ) {
+			continue;
+		}
+		$plan   = sanitize_key( (string) ( $sub['plan'] ?? 'dazzlone' ) );
+		$exp_ts = ! empty( $sub['expires_at'] ) ? strtotime( (string) $sub['expires_at'] ) : 0;
+		if ( 'dazzlone' === $plan || $exp_ts <= 0 || $exp_ts >= $now ) {
+			continue;
+		}
+		olkil_payu_downgrade_to_free( $key, $sub );
+	}
+}
+
+function olkil_payu_schedule_expiry_cron() {
+	if ( ! wp_next_scheduled( 'olkil_payu_expire_plans' ) ) {
+		wp_schedule_event( time() + 60, 'hourly', 'olkil_payu_expire_plans' );
+	}
 }
 
 /**

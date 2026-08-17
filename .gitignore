@@ -5,6 +5,7 @@
 **/.env
 **/.env.*
 !**/.env.example
+**/.secret.local
 **/olkil-payu-checkout/secrets.php
 wp-plugins/olkil-payu-checkout/secrets.php
 
