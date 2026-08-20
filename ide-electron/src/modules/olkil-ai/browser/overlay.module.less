@@ -280,6 +280,23 @@
   color: #fe019a;
 }
 
+.liveTagSwap {
+  animation: liveTagSwap 0.46s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+@keyframes liveTagSwap {
+  0% {
+    opacity: 0;
+    transform: translateY(3px);
+    filter: blur(1.5px);
+  }
+  100% {
+    opacity: 1;
+    transform: translateY(0);
+    filter: blur(0);
+  }
+}
+
 .titleActions {
   display: flex;
   align-items: center;

@@ -8,6 +8,7 @@ import {
   IOlkilChatUiService,
 } from '../common';
 import { OlkilAiChatView } from './chat.view';
+import { useLiveStatusLabel, useWorkspaceRoot } from './live-status-rotator';
 import {
   AiSparkIcon,
   CloseIcon,
@@ -92,6 +93,8 @@ export const OlkilAiOverlay = () => {
   const [history, setHistory] = useState(chat.chatHistory || []);
   const [historyOpen, setHistoryOpen] = useState(false);
   const historyRef = useRef<HTMLDivElement>(null);
+  const liveLabelPrevRef = useRef('');
+  const [liveLabelAnimating, setLiveLabelAnimating] = useState(false);
 
   const hostRef = useRef<HTMLDivElement>(null);
   const panelRef = useRef<HTMLElement>(null);
@@ -220,11 +223,35 @@ export const OlkilAiOverlay = () => {
     [ui],
   );
 
+  const workspaceRoot = useWorkspaceRoot();
+  const busyStatusLabel = useLiveStatusLabel({
+    active: busy,
+    status: liveStatus,
+    workspaceRoot,
+  });
+
+  useEffect(() => {
+    if (!busy || !busyStatusLabel || busyStatusLabel === liveLabelPrevRef.current) {
+      liveLabelPrevRef.current = busyStatusLabel;
+      return;
+    }
+    liveLabelPrevRef.current = busyStatusLabel;
+    setLiveLabelAnimating(true);
+    const t = window.setTimeout(() => setLiveLabelAnimating(false), 480);
+    return () => window.clearTimeout(t);
+  }, [busy, busyStatusLabel]);
+
   const statusLabel = busy
-    ? liveStatus || 'Thinking'
+    ? busyStatusLabel || 'Thinking'
     : pendingCount > 0
       ? `${pendingCount} to review`
       : 'Ready';
+
+  const liveTagClass = cx(
+    styles.liveTag,
+    busy && styles.liveTagBusy,
+    busy && liveLabelAnimating && styles.liveTagSwap,
+  );
 
   return (
     <div className={styles.host} ref={hostRef}>
@@ -281,7 +308,9 @@ export const OlkilAiOverlay = () => {
               <span className={styles.brandSub}>Agent</span>
             </span>
 
-            <span className={cx(styles.liveTag, busy && styles.liveTagBusy)}>{statusLabel}</span>
+            <span key={busy ? statusLabel : 'idle'} className={liveTagClass}>
+              {statusLabel}
+            </span>
 
             <div className={styles.titleActions}>
               <div className={styles.historyWrap} ref={historyRef}>

@@ -20,6 +20,7 @@ import {
   basenamePath,
 } from '../common/virtual-office';
 import { MarkdownMessage } from './markdown';
+import { LiveStatusBar, useLiveStatusLabel, useWorkspaceRoot } from './live-status-rotator';
 import { CheckIcon, CopyIcon, RefreshIcon, SendIcon, ShieldStarIcon, StopIcon } from './icons';
 import styles from './chat.view.module.less';
 import logoUrl from './olkil-logo.png';
@@ -61,16 +62,6 @@ function activityGlyph(kind: string, done?: boolean): string {
     default:
       return '·';
   }
-}
-
-function LiveStatusBar({ label }: { label: string }) {
-  if (!label) return null;
-  return (
-    <div className={styles.liveStatus} aria-live="polite">
-      <span className={styles.liveStatusSpin} aria-hidden />
-      <span className={styles.liveStatusText}>{label}</span>
-    </div>
-  );
 }
 
 async function copyText(text: string) {
@@ -884,6 +875,20 @@ export const OlkilAiChatView = ({ dormant = false }: OlkilAiChatViewProps) => {
     return null;
   }, [messages]);
 
+  const workspaceRoot = useWorkspaceRoot();
+  const liveActivityLabel = useMemo(() => {
+    const live = [...messages]
+      .reverse()
+      .find((m) => m.role === 'activity' && m.activity && !m.activity.done);
+    return live?.activity?.label;
+  }, [messages]);
+  const liveStatusLabel = useLiveStatusLabel({
+    active: busy,
+    status,
+    activityLabel: liveActivityLabel,
+    workspaceRoot,
+  });
+
   const formatGb = (bytes?: number, fallbackGb?: number) => {
     if (typeof bytes === 'number' && bytes > 0) {
       return `${(bytes / (1024 * 1024 * 1024)).toFixed(2)} GB`;
@@ -1387,16 +1392,7 @@ export const OlkilAiChatView = ({ dormant = false }: OlkilAiChatViewProps) => {
             </div>
           );
         })}
-        {busy ? (
-          <LiveStatusBar
-            label={
-              ([...messages].reverse().find((m) => m.role === 'activity' && m.activity && !m.activity.done)
-                ?.activity?.label ||
-                status ||
-                'Thinking') as string
-            }
-          />
-        ) : status ? (
+        {busy ? <LiveStatusBar label={liveStatusLabel} /> : status ? (
           <div className={styles.status}>{status}</div>
         ) : null}
       </div>
