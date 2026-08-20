@@ -15,6 +15,7 @@ import {
   EMBEDDED_POOLSIDE_API_KEY,
 } from './embedded-secrets';
 import { startOrchestrator } from './orchestrator';
+import { tryFastPath } from './orchestrator/fast-path';
 import type { ActivitySinkEvent } from './orchestrator/types';
 
 export type ClineRuntimeMode = ChatMode;
@@ -86,7 +87,7 @@ function maxIterationsForMode(mode: ClineRuntimeMode, hasWorkspace: boolean): nu
   if (mode === 'plan') {
     return 64;
   }
-  return 200;
+  return 160;
 }
 
 function isMaxIterationsError(error: unknown): boolean {
@@ -213,8 +214,12 @@ function truncateToolOutput(output: unknown, maxChars: number): unknown {
 function prepareTurnForSpeed(context: {
   iteration: number;
   messages: readonly any[];
+  aggressive?: boolean;
 }): { messages: any[] } | undefined {
-  if (context.iteration < 4 || !Array.isArray(context.messages) || context.messages.length < 8) {
+  const aggressive = Boolean(context.aggressive);
+  const minIter = aggressive ? 1 : 4;
+  const minMsgs = aggressive ? 4 : 8;
+  if (context.iteration < minIter || !Array.isArray(context.messages) || context.messages.length < minMsgs) {
     return undefined;
   }
   const toolMsgIndexes: number[] = [];
@@ -644,6 +649,36 @@ export class OlkilClineRuntimeHost {
       const mode = request.mode;
       const userMode = chatModeToUserMode(mode);
 
+      // Deterministic fast-path: title/config edits in <1s without LLM agent loop.
+      if (hasWorkspace && mode === 'agent') {
+        const fast = await tryFastPath({
+          prompt: request.prompt,
+          workspaceRoot: cwd,
+          mode,
+          runId,
+        });
+        if (fast) {
+          state.text = fast.text;
+          state.fileChanges = fast.fileChanges.map((c) => ({
+            id: c.id,
+            kind: c.kind,
+            path: c.path,
+            beforeContent: c.beforeContent,
+            afterContent: c.afterContent,
+          }));
+          state.status = 'Done';
+          state.done = true;
+          state.activities.push({
+            id: 'fast_path_edit',
+            kind: 'editing',
+            label: 'Applied edit',
+            done: true,
+            resultPreview: fast.text,
+          });
+          return state;
+        }
+      }
+
       const prefetchAbort = new AbortController();
       let agentRef: { abort: (reason?: unknown) => void } | null = null;
       this.aborts.set(runId, {
@@ -683,6 +718,7 @@ export class OlkilClineRuntimeHost {
         activeFile: request.activeFile,
         platform: `${os.platform()} ${os.release()}`,
         ideName: 'OLKIL',
+        taskSize: orch.route.size,
         rules: [request.rules, orch.orchestrationRules].filter(Boolean).join('\n\n'),
         identity: `# Identity
 - Product / IDE: OLKIL. You are the coding agent inside OLKIL.
@@ -756,13 +792,15 @@ ${
       const tools = hasWorkspace ? [...defaultTools, ...extraTools] : [];
 
       const autoApprove = request.autoApprove !== false && mode === 'agent';
+      // Route budgets are primary; mode ceiling is a safety cap only.
+      const modeCeiling = maxIterationsForMode(mode, hasWorkspace);
       const maxIterations = hasWorkspace
-        ? Math.min(orch.route.maxIterations, maxIterationsForMode(mode, hasWorkspace))
-        : maxIterationsForMode(mode, hasWorkspace);
+        ? Math.min(modeCeiling, orch.route.maxIterations)
+        : modeCeiling;
       const maxContinues = hasWorkspace
         ? mode === 'ask'
-          ? 1
-          : orch.route.maxContinues
+          ? 2
+          : Math.max(orch.route.maxContinues, mode === 'agent' ? 4 : 2)
         : 0;
 
       // Match legacy llm.service: disable extended thinking for agent speed/cost.
@@ -773,9 +811,10 @@ ${
       };
       if (option.provider === 'poolside') {
         modelOptions.chat_template_kwargs = { enable_thinking: false };
-        modelOptions.maxTokens = orch.route.size === 'simple' ? 1400 : 2048;
+        // Simple tasks need enough headroom for tool-call JSON without hitting output limit.
+        modelOptions.maxTokens = orch.route.size === 'simple' ? 3072 : 2048;
       } else if (option.provider === 'deepseek') {
-        modelOptions.maxTokens = orch.route.size === 'simple' ? 2200 : 4096;
+        modelOptions.maxTokens = orch.route.size === 'simple' ? 4096 : 4096;
       }
 
       const AgentCtor = sdk.Agent;
@@ -789,7 +828,9 @@ ${
         maxIterations,
         modelOptions,
         toolExecution: 'parallel',
-        prepareTurn: (ctx: any) => orch.prepareTurn(ctx) || prepareTurnForSpeed(ctx),
+        prepareTurn: (ctx: any) =>
+          orch.prepareTurn(ctx) ||
+          prepareTurnForSpeed({ ...ctx, aggressive: orch.route.size === 'simple' }),
         requestToolApproval: async () => ({ approved: autoApprove || mode === 'agent' }),
         onEvent: (event: any) => {
           this.handleEvent(state, event, grouping);
@@ -826,13 +867,15 @@ ${
         return state;
       }
       if (result?.error) {
-        if (isMaxIterationsError(result.error) && state.text) {
-          // Soft-stop: keep progress instead of failing the whole turn.
+        if (isMaxIterationsError(result.error)) {
+          // Never fail the turn on step limits — keep partial progress; UI auto-continues if needed.
           state.error = undefined;
-          if (!/say\s+[“"]?continue/i.test(state.text)) {
-            state.text =
-              `${state.text}\n\n---\nStopped after a long run to avoid an endless loop. ` +
-              `Reply **continue** if you want me to keep going.`;
+          if (!state.text?.trim()) {
+            if (state.fileChanges.length) {
+              state.text = `Applied changes to ${state.fileChanges.map((c) => path.basename(c.path)).join(', ')}.`;
+            } else {
+              state.text = 'Working…';
+            }
           }
         } else if (!/abort|cancel/i.test(String(result.error?.message || result.error))) {
           state.error = result.error.message || String(result.error);
@@ -1035,10 +1078,17 @@ ${
       case 'status-notice':
         state.status = olkilStatus(event.message) || state.status;
         break;
-      case 'run-failed':
-        state.error = event.error?.message || String(event.error || 'Run failed');
+      case 'run-failed': {
+        const failMsg = event.error?.message || String(event.error || 'Run failed');
+        if (isMaxIterationsError(failMsg)) {
+          // Continue loop handles this — do not surface as a hard failure mid-run.
+          state.status = state.fileChanges.length ? 'Editing' : 'Thinking';
+          break;
+        }
+        state.error = failMsg;
         state.status = 'Failed';
         break;
+      }
       case 'run-finished':
         if (event.result?.outputText) {
           state.text = event.result.outputText;

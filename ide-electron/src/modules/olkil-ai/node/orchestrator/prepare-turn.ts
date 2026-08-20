@@ -41,25 +41,31 @@ function toolFingerprint(message: any): string {
 export function compactMessagesForTurn(context: {
   iteration: number;
   messages: readonly any[];
+  aggressive?: boolean;
 }): { messages: any[] } | undefined {
-  if (!Array.isArray(context.messages) || context.messages.length < 6) {
+  const aggressive = Boolean(context.aggressive);
+  const minMessages = aggressive ? 3 : 6;
+  if (!Array.isArray(context.messages) || context.messages.length < minMessages) {
     return undefined;
   }
   const toolMsgIndexes: number[] = [];
   for (let i = 0; i < context.messages.length; i++) {
     if (isToolMessage(context.messages[i])) toolMsgIndexes.push(i);
   }
-  if (toolMsgIndexes.length <= TOOL_RESULT_KEEP_FULL && context.iteration < 2) {
+  const keepFullCount = aggressive ? 2 : TOOL_RESULT_KEEP_FULL;
+  const staleMax = aggressive ? 800 : TOOL_RESULT_STALE_CHARS;
+  const fullMax = aggressive ? 2_000 : TOOL_RESULT_MAX_CHARS;
+  if (toolMsgIndexes.length <= keepFullCount && context.iteration < (aggressive ? 1 : 2)) {
     return undefined;
   }
-  const keepFull = new Set(toolMsgIndexes.slice(-TOOL_RESULT_KEEP_FULL));
+  const keepFull = new Set(toolMsgIndexes.slice(-keepFullCount));
   const seen = new Set<string>();
   const messages = context.messages.map((msg, idx) => {
     if (!isToolMessage(msg)) return msg;
     const fp = toolFingerprint(msg);
     const duplicate = fp && seen.has(fp);
     if (fp) seen.add(fp);
-    const maxChars = keepFull.has(idx) && !duplicate ? TOOL_RESULT_MAX_CHARS : TOOL_RESULT_STALE_CHARS;
+    const maxChars = keepFull.has(idx) && !duplicate ? fullMax : staleMax;
     if (!Array.isArray(msg.content)) return msg;
     return {
       ...msg,

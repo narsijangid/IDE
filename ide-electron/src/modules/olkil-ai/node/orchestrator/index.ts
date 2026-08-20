@@ -110,22 +110,21 @@ export async function startOrchestrator(input: OrchestratorStart): Promise<Orche
     : [];
 
   const orchestrationRules = [
-    '# OLKIL orchestration',
+    '# OLKIL agent',
     route.promptHint,
-    `Task class: ${route.size} (${route.reason}).`,
-    'A deterministic repository engine already gathered evidence when a pack is present. Do not repeat those exact searches.',
-    'Emit independent searches/reads/commands/edits in ONE turn (search_codebase.queries[], read_files.files[], plus Olkil tools together).',
-    'STOP exploring when target files, required symbols, the reference pattern, and dependencies are known — then edit.',
-    'Prefer editor old_text/new_text patches. Never rewrite a whole large file.',
-    'Never repeat a command that already failed; use the suggested alternative.',
-    'Temporary helper scripts must be written under .olkil/temp/ — never into the user project root as _revert_*.py.',
+    `Task: ${route.size} (${route.reason}).`,
+    route.size === 'simple'
+      ? 'Evidence pack is complete. Edit now — zero additional searches unless a file is missing.'
+      : 'Repository evidence is pre-loaded. Do not repeat those exact searches. Stop exploring when targets are known.',
+    'Batch independent reads/searches/edits in ONE turn.',
+    'Prefer surgical old_text/new_text patches. Never rewrite whole large files.',
+    'Never repeat a failed command; use the suggested alternative.',
     env.shellKind === 'powershell' && env.powershellVersion && /^[12345]\./.test(env.powershellVersion)
-      ? 'Windows PowerShell 5.x: do not use Join-String; use [string]::Join. Prefer `;` over `&&`.'
+      ? 'PowerShell 5.x: use [string]::Join not Join-String; prefer `;` over `&&`.'
       : '',
     env.gitRoot
-      ? `Git repository root is ${env.gitRoot}. Use git -C that path (git_info tool). Never assume the IDE install folder is the git root.`
-      : 'No git root detected from the workspace; do not run git until git_info says otherwise.',
-    `Environment:\n${envText}`,
+      ? `Git root: ${env.gitRoot}. Use git -C that path.`
+      : 'No git root detected.',
   ]
     .filter(Boolean)
     .join('\n');
@@ -137,7 +136,7 @@ export async function startOrchestrator(input: OrchestratorStart): Promise<Orche
 
   const prepareTurn = (ctx: { iteration: number; messages: readonly any[]; systemPrompt?: string }) => {
     telemetry.llmCalls += 1;
-    const compacted = compactMessagesForTurn(ctx);
+    const compacted = compactMessagesForTurn({ ...ctx, aggressive: route.size === 'simple' });
     const state = session.renderForTurn(ctx.iteration);
     if (!compacted && !state) return undefined;
     return {
@@ -196,8 +195,8 @@ export async function startOrchestrator(input: OrchestratorStart): Promise<Orche
   };
 }
 
-export { classifyTask } from './task-router';
-export { extractTaskTerms } from './task-router';
+export { tryFastPath } from './fast-path';
+export { classifyTask, detectTaskIntent, extractTaskTerms, seedTermsForIntent } from './task-router';
 export { detectEnvironment, findGitRoot, formatEnvironment } from './environment';
 export { rewriteKnownBadCommand } from './failed-commands';
 export { buildCompactContext, rankEvidence } from './context-builder';

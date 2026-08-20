@@ -6,7 +6,7 @@ import * as assert from 'assert';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
-import { classifyTask, extractTaskTerms } from './task-router';
+import { classifyTask, extractTaskTerms, detectTaskIntent, seedTermsForIntent } from './task-router';
 import { rewriteKnownBadCommand, FailedCommandMemory } from './failed-commands';
 import { buildCompactContext, rankEvidence } from './context-builder';
 import { compactMessagesForTurn } from './prepare-turn';
@@ -37,7 +37,19 @@ async function main() {
   await test('router: rename is simple', () => {
     const r = classifyTask('Rename the submit button label to Save');
     assert.strictEqual(r.size, 'simple');
-    assert.ok(r.maxIterations <= 16);
+    assert.ok(r.maxIterations <= 12);
+  });
+
+  await test('router: title change is simple with tight budget', () => {
+    const r = classifyTask('in this project change the title of this project to OBJECT HCIN');
+    assert.strictEqual(r.size, 'simple');
+    assert.strictEqual(detectTaskIntent(r.reason ? 'change title' : 'change title to X'), 'title-change');
+    assert.strictEqual(detectTaskIntent('change the title of this project to OBJECT HCIN'), 'title-change');
+    assert.ok(r.maxIterations <= 8);
+    assert.ok(r.maxContextChars <= 4000);
+    assert.strictEqual(r.allowDeepInvestigate, false);
+    const terms = seedTermsForIntent('title-change', 'change title to OBJECT HCIN');
+    assert.ok(terms.some((t) => /productName|<title>/i.test(t)));
   });
 
   await test('router: outlet code reports is large/medium', () => {
@@ -54,6 +66,32 @@ async function main() {
 
   await test('router: architecture is large', () => {
     assert.strictEqual(classifyTask('Redesign the backend and frontend auth architecture').size, 'large');
+    assert.ok(classifyTask('Redesign the backend and frontend auth architecture').maxIterations <= 120);
+  });
+
+  await test('fast-path: title change extracts value', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'olkil-fp-'));
+    const productJson = path.join(root, 'product.json');
+    fs.writeFileSync(
+      productJson,
+      JSON.stringify({ productName: 'OLKIL', applicationName: 'olkil' }, null, 2) + '\n',
+    );
+    try {
+      const { tryFastPath } = await import('./fast-path');
+      const result = await tryFastPath({
+        prompt: 'change the title of this project to OBJECT HCIN',
+        workspaceRoot: root,
+        mode: 'agent',
+        runId: 'test_run',
+      });
+      assert.ok(result, 'expected fast-path to handle title change');
+      assert.ok(/OBJECT HCIN/.test(result!.text));
+      const after = fs.readFileSync(productJson, 'utf8');
+      assert.ok(after.includes('OBJECT HCIN'));
+      assert.ok(result!.fileChanges.length >= 1);
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
   });
 
   await test('failed commands: do not repeat, rewrite Join-String', () => {

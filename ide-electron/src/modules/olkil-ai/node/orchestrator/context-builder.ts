@@ -72,7 +72,9 @@ export function buildCompactContext(input: {
   if (input.environment) blocks.push(`ENVIRONMENT:\n${input.environment}`);
 
   blocks.push(
-    'Use this pack as the starting evidence. Call extra tools only for remaining gaps, in parallel. Then plan briefly and edit.',
+    input.size === 'simple'
+      ? 'Evidence is sufficient. Edit the shown file(s) now — do NOT run additional searches unless a target file is missing from this pack.'
+      : 'Use this pack as the starting evidence. Call extra tools only for remaining gaps, in parallel. Then plan briefly and edit.',
   );
 
   let text = blocks.filter(Boolean).join('\n\n');

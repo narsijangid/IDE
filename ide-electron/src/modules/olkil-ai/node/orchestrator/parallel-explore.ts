@@ -6,7 +6,7 @@ import { ripgrepSearch } from '../ripgrep';
 import { buildCompactContext } from './context-builder';
 import { findGitRoot } from './environment';
 import { findReferencePattern } from './pattern-finder';
-import { extractTaskTerms } from './task-router';
+import { extractTaskTerms, detectTaskIntent, seedTermsForIntent } from './task-router';
 import type {
   ActivitySink,
   CompactEvidence,
@@ -44,7 +44,9 @@ export async function parallelExplore(input: ExploreInput): Promise<CompactTaskC
   const { prompt, workspaceRoot, route, signal } = input;
   const index = getSharedRepositoryIndex();
   const groupId = 'explore_root';
-  const terms = extractTaskTerms(prompt);
+  const intent = detectTaskIntent(prompt);
+  const isSimple = route.size === 'simple';
+  const terms = seedTermsForIntent(intent, prompt);
   const searches = new Set<string>();
   const files = new Map<string, CompactEvidence>();
   let searchCount = 0;
@@ -72,51 +74,66 @@ export async function parallelExplore(input: ExploreInput): Promise<CompactTaskC
     }
   };
 
-  await index.ensure(workspaceRoot).catch(() => undefined);
+  // Simple localized tasks: ripgrep-only retrieval — skip heavy BM25 index warmup.
+  const useIndex = !isSimple || route.allowDeepInvestigate;
+  if (useIndex) {
+    await index.ensure(workspaceRoot).catch(() => undefined);
+  }
   if (aborted(signal)) {
     return emptyContext(input, 0, 0);
   }
 
-  const searchTerms = terms.slice(0, route.maxPrefetchSearches);
+  const searchTerms = terms.slice(0, isSimple ? 2 : route.maxPrefetchSearches);
   if (!searchTerms.length) {
     searchTerms.push(prompt.slice(0, 80));
   }
 
   const jobs: Array<Promise<void>> = [];
 
-  jobs.push(
-    (async () => {
-      const id = 'explore_modules';
-      emit(input.onActivity, {
-        id,
-        kind: 'searching',
-        label: 'Finding likely modules',
-        parentId: groupId,
-        groupId,
-      });
-      searches.add(prompt);
+  // Title/name changes: targeted ripgrep into known config files first (<200ms).
+  if (intent === 'title-change') {
+    jobs.push(seedTitleConfigFiles(workspaceRoot, noteFile, input.onActivity, groupId, () => {
       searchCount += 1;
-      const result = await index.findModules(workspaceRoot, prompt, 10);
-      for (const hit of result.hits) {
-        noteFile({
-          path: hit.path,
-          score: hit.score,
-          reason: hit.reason,
-          symbols: hit.symbols,
-          excerpt: hit.excerpt,
+    }));
+  }
+
+  // Skip module discovery for simple/localized tasks — saves 1 index round-trip.
+  if (!isSimple) {
+    jobs.push(
+      (async () => {
+        const id = 'explore_modules';
+        emit(input.onActivity, {
+          id,
+          kind: 'searching',
+          label: 'Finding likely modules',
+          parentId: groupId,
+          groupId,
         });
-      }
-      finish(input.onActivity, id, 'Found likely modules', {
-        kind: 'searching',
-        parentId: groupId,
-        groupId,
-        resultPreview: result.hits.slice(0, 6).map((h) => h.path).join('\n'),
-      });
-    })(),
-  );
+        searches.add(prompt);
+        searchCount += 1;
+        const result = await index.findModules(workspaceRoot, prompt, 10);
+        for (const hit of result.hits) {
+          noteFile({
+            path: hit.path,
+            score: hit.score,
+            reason: hit.reason,
+            symbols: hit.symbols,
+            excerpt: hit.excerpt,
+          });
+        }
+        finish(input.onActivity, id, 'Found likely modules', {
+          kind: 'searching',
+          parentId: groupId,
+          groupId,
+          resultPreview: result.hits.slice(0, 6).map((h) => h.path).join('\n'),
+        });
+      })(),
+    );
+  }
 
   jobs.push(
     (async () => {
+      if (!useIndex) return;
       const id = 'explore_semantic';
       emit(input.onActivity, {
         id,
@@ -127,7 +144,7 @@ export async function parallelExplore(input: ExploreInput): Promise<CompactTaskC
       });
       searches.add(prompt);
       searchCount += 1;
-      const result = await index.search(workspaceRoot, prompt, route.maxPrefetchFiles);
+      const result = await index.search(workspaceRoot, prompt, isSimple ? 3 : route.maxPrefetchFiles);
       for (const hit of result.hits) {
         noteFile({
           path: hit.path,
@@ -146,7 +163,8 @@ export async function parallelExplore(input: ExploreInput): Promise<CompactTaskC
     })(),
   );
 
-  for (const term of searchTerms.slice(0, 6)) {
+  const maxGrepTerms = isSimple ? 2 : 6;
+  for (const term of searchTerms.slice(0, maxGrepTerms)) {
     jobs.push(
       (async () => {
         const id = `explore_grep_${hash(term)}`;
@@ -160,8 +178,8 @@ export async function parallelExplore(input: ExploreInput): Promise<CompactTaskC
         searches.add(term);
         searchCount += 1;
         const rg = await ripgrepSearch(workspaceRoot, term, {
-          maxResults: 24,
-          timeoutMs: Math.min(1800, route.prefetchBudgetMs),
+          maxResults: isSimple ? 12 : 24,
+          timeoutMs: Math.min(isSimple ? 900 : 1800, route.prefetchBudgetMs),
         });
         const byFile = new Map<string, { count: number; line: number; text: string }>();
         for (const match of rg.matches) {
@@ -171,9 +189,10 @@ export async function parallelExplore(input: ExploreInput): Promise<CompactTaskC
           else cur.count += 1;
         }
         for (const [filePath, info] of byFile) {
+          const configBoost = /product\.json|package\.json|index\.html|manifest\.json/i.test(filePath) ? 40 : 0;
           noteFile({
             path: filePath,
-            score: 80 + Math.min(20, info.count * 3),
+            score: 80 + configBoost + Math.min(20, info.count * 3),
             reason: [`exact “${term}” ×${info.count}`],
             symbols: [],
             excerpt: `${info.line}|${info.text.slice(0, 180)}`,
@@ -189,41 +208,44 @@ export async function parallelExplore(input: ExploreInput): Promise<CompactTaskC
       })(),
     );
 
-    jobs.push(
-      (async () => {
-        const id = `explore_sym_${hash(term)}`;
-        emit(input.onActivity, {
-          id,
-          kind: 'searching',
-          label: `Searching references “${term.slice(0, 36)}”`,
-          parentId: groupId,
-          groupId,
-        });
-        searchCount += 1;
-        const [defs, refs] = await Promise.all([
-          index.symbolDefinitions(workspaceRoot, term, 8),
-          index.symbolReferences(workspaceRoot, term, 12),
-        ]);
-        for (const hit of [...defs.hits, ...refs.hits]) {
-          noteFile({
-            path: hit.path,
-            score: hit.score,
-            reason: [`${hit.role} ${hit.name}`],
-            symbols: [hit.name],
-            line: hit.line,
+    // Symbol def/ref scans are expensive — skip for simple/localized tasks.
+    if (!isSimple) {
+      jobs.push(
+        (async () => {
+          const id = `explore_sym_${hash(term)}`;
+          emit(input.onActivity, {
+            id,
+            kind: 'searching',
+            label: `Searching references “${term.slice(0, 36)}”`,
+            parentId: groupId,
+            groupId,
           });
-        }
-        finish(input.onActivity, id, `Searched references “${term.slice(0, 36)}”`, {
-          kind: 'searching',
-          parentId: groupId,
-          groupId,
-          resultPreview: defs.hits
-            .slice(0, 6)
-            .map((h) => `${h.name} ${h.path}:L${h.line}`)
-            .join('\n'),
-        });
-      })(),
-    );
+          searchCount += 1;
+          const [defs, refs] = await Promise.all([
+            index.symbolDefinitions(workspaceRoot, term, 8),
+            index.symbolReferences(workspaceRoot, term, 12),
+          ]);
+          for (const hit of [...defs.hits, ...refs.hits]) {
+            noteFile({
+              path: hit.path,
+              score: hit.score,
+              reason: [`${hit.role} ${hit.name}`],
+              symbols: [hit.name],
+              line: hit.line,
+            });
+          }
+          finish(input.onActivity, id, `Searched references “${term.slice(0, 36)}”`, {
+            kind: 'searching',
+            parentId: groupId,
+            groupId,
+            resultPreview: defs.hits
+              .slice(0, 6)
+              .map((h) => `${h.name} ${h.path}:L${h.line}`)
+              .join('\n'),
+          });
+        })(),
+      );
+    }
   }
 
   if (route.allowDeepInvestigate) {
@@ -291,30 +313,32 @@ export async function parallelExplore(input: ExploreInput): Promise<CompactTaskC
     );
   }
 
-  jobs.push(
-    (async () => {
-      const gitRoot = findGitRoot(workspaceRoot);
-      if (!gitRoot) return;
-      const id = 'explore_git';
-      emit(input.onActivity, {
-        id,
-        kind: 'running',
-        label: 'Checking git status',
-        parentId: groupId,
-        groupId,
-        command: 'git status --short',
-      });
-      searchCount += 1;
-      const status = gitShort(gitRoot);
-      finish(input.onActivity, id, 'Checked git status', {
-        kind: 'running',
-        parentId: groupId,
-        groupId,
-        command: 'git status --short',
-        resultPreview: status.slice(0, 400),
-      });
-    })(),
-  );
+  if (!isSimple) {
+    jobs.push(
+      (async () => {
+        const gitRoot = findGitRoot(workspaceRoot);
+        if (!gitRoot) return;
+        const id = 'explore_git';
+        emit(input.onActivity, {
+          id,
+          kind: 'running',
+          label: 'Checking git status',
+          parentId: groupId,
+          groupId,
+          command: 'git status --short',
+        });
+        searchCount += 1;
+        const status = gitShort(gitRoot);
+        finish(input.onActivity, id, 'Checked git status', {
+          kind: 'running',
+          parentId: groupId,
+          groupId,
+          command: 'git status --short',
+          resultPreview: status.slice(0, 400),
+        });
+      })(),
+    );
+  }
 
   const budget = new Promise<void>((resolve) => {
     setTimeout(resolve, route.prefetchBudgetMs);
@@ -324,7 +348,8 @@ export async function parallelExplore(input: ExploreInput): Promise<CompactTaskC
   const ranked = [...files.values()].sort((a, b) => b.score - a.score);
   const top = ranked.slice(0, route.maxPrefetchFiles);
 
-  const readJobs = top.slice(0, Math.min(6, route.maxPrefetchFiles)).map(async (file, idx) => {
+  const maxReads = isSimple ? 2 : Math.min(6, route.maxPrefetchFiles);
+  const readJobs = top.slice(0, maxReads).map(async (file, idx) => {
     if (aborted(signal)) return;
     const abs = path.isAbsolute(file.path) ? file.path : path.join(workspaceRoot, file.path);
     const range = inferRange(file);
@@ -340,7 +365,7 @@ export async function parallelExplore(input: ExploreInput): Promise<CompactTaskC
       filePath: abs,
       lineRange: range ? `L${range.start}-L${range.end}` : undefined,
     });
-    const excerpt = readRange(abs, range);
+    const excerpt = readRange(abs, range, isSimple);
     if (excerpt) file.excerpt = excerpt;
     finish(input.onActivity, id, `Read ${base}${rangeLabel}`, {
       kind: 'reading',
@@ -415,19 +440,69 @@ function inferRange(file: CompactEvidence): { start: number; end: number } | und
   return undefined;
 }
 
-function readRange(absPath: string, range?: { start: number; end: number }): string {
+function readRange(absPath: string, range?: { start: number; end: number }, isSimple = false): string {
   try {
     const text = fs.readFileSync(absPath, 'utf8');
     const lines = text.split(/\r?\n/);
     const start = range ? Math.max(1, range.start) : 1;
-    const end = range ? Math.min(lines.length, range.end) : Math.min(lines.length, 80);
+    const defaultEnd = isSimple ? 40 : 80;
+    const end = range ? Math.min(lines.length, range.end) : Math.min(lines.length, defaultEnd);
+    const maxLineLen = isSimple ? 160 : 220;
     return lines
       .slice(start - 1, end)
-      .map((line, i) => `${start + i}|${line.slice(0, 220)}`)
+      .map((line, i) => `${start + i}|${line.slice(0, maxLineLen)}`)
       .join('\n');
   } catch {
     return '';
   }
+}
+
+async function seedTitleConfigFiles(
+  workspaceRoot: string,
+  noteFile: (ev: CompactEvidence) => void,
+  onActivity: ActivitySink | undefined,
+  groupId: string,
+  bumpSearch: () => void,
+): Promise<void> {
+  const id = 'explore_title_config';
+  emit(onActivity, {
+    id,
+    kind: 'searching',
+    label: 'Finding title config files',
+    parentId: groupId,
+    groupId,
+  });
+  const seeds: Array<{ query: string; glob: string; label: string }> = [
+    { query: 'productName', glob: '**/product.json', label: 'product.json' },
+    { query: 'applicationName', glob: '**/product.json', label: 'product.json' },
+    { query: '<title>', glob: '**/index.html', label: 'index.html' },
+    { query: '"name"', glob: '**/package.json', label: 'package.json' },
+  ];
+  bumpSearch();
+  await Promise.all(
+    seeds.map(async ({ query, glob, label }) => {
+      const rg = await ripgrepSearch(workspaceRoot, query, {
+        maxResults: 6,
+        globs: [glob],
+        timeoutMs: 500,
+      });
+      for (const match of rg.matches) {
+        noteFile({
+          path: match.path,
+          score: 130,
+          reason: [`title config (${label})`],
+          symbols: [],
+          excerpt: `${match.line}|${match.text.slice(0, 160)}`,
+          line: match.line,
+        });
+      }
+    }),
+  );
+  finish(onActivity, id, 'Found title config files', {
+    kind: 'searching',
+    parentId: groupId,
+    groupId,
+  });
 }
 
 function collectSymbols(files: CompactEvidence[]): CompactTaskContext['relevantSymbols'] {

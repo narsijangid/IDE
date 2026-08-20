@@ -209,10 +209,8 @@ function extractModulePhrases(query: string): string[] {
   }
   const filler = new Set([
     'module', 'feature', 'component', 'service', 'change', 'changes', 'update', 'fix',
-    'add', 'remove', 'please', 'project', 'karo', 'karna', 'mein', 'me', 'hai', 'hain',
-    'the', 'a', 'an', 'this', 'that', 'with', 'from', 'into', 'make', 'create', 'edit',
-    'ye', 'yeh', 'esa', 'aisa', 'wo', 'us', 'isme', 'usme', 'par', 'pe', 'ko', 'ki',
-    'ka', 'ke', 'se', 'and', 'or', 'to', 'do', 'need', 'needed', 'some', 'any',
+    'add', 'remove', 'please', 'project', 'the', 'a', 'an', 'this', 'that', 'with', 'from', 'into',
+    'make', 'create', 'edit', 'and', 'or', 'to', 'do', 'need', 'needed', 'some', 'any',
   ]);
   const content = splitIdentifier(lower).filter(
     (t) => t.length > 2 && !STOP_WORDS.has(t) && !filler.has(t),
@@ -492,9 +490,9 @@ const CONCEPT_GROUPS: string[][] = [
 function analyzeIntent(query: string): InvestigationIntent {
   const lower = query.toLowerCase();
   const kind: InvestigationIntent['kind'] =
-    /\b(not working|broken|bug|error|fail|issue|problem|fix|crash|nahi|nahin)\b/i.test(lower)
+    /\b(not working|broken|bug|error|fail|issue|problem|fix|crash)\b/i.test(lower)
       ? 'bug'
-      : /\b(add|create|implement|feature|banao|banana)\b/i.test(lower)
+      : /\b(add|create|implement|feature)\b/i.test(lower)
         ? 'feature'
         : /\b(refactor|cleanup|optimi[sz]e|performance)\b/i.test(lower)
           ? 'refactor'
@@ -1013,7 +1011,7 @@ export class RepositoryIndexService {
         intent.concepts.filter(
           (concept) =>
             concept.length >= 4 &&
-            !/^(working|problem|issue|error|change|update|please|karo|karna|nahi|nahin)$/.test(concept),
+            !/^(working|problem|issue|error|change|update|please)$/.test(concept),
         ),
       ),
     ].slice(0, 4);

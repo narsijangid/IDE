@@ -223,6 +223,7 @@ export class OlkilChatService extends Disposable implements IOlkilChatService {
   private activeClineRunId: string | null = null;
   /** Silent auto-resume after provider stall (max 1 per user turn). */
   private stallAutoRetries = 0;
+  private stepLimitAutoRetries = 0;
   /** Files the agent has actually read — edits to unread files are blocked. */
   private filesReadThisSession = new Set<string>();
   /** Snapshots needed to revert agent edits */
@@ -1136,6 +1137,7 @@ Required loop:
 
     this.cancelRequested = false;
     this.stallAutoRetries = 0;
+    this.stepLimitAutoRetries = 0;
     this.busy = true;
     if (isLiveTestRun) {
       this.liveTesting = true;
@@ -1310,8 +1312,34 @@ Required loop:
         this.history.push({ role: 'assistant', content: msg });
         this.setStatus('');
       } else if (/exceeded maxIterations/i.test(e?.message || String(e))) {
-        const msg =
-          'I hit the per-run step limit on this large task. Reply **continue** and I’ll keep going from where I left off.';
+        if (this.stepLimitAutoRetries < 5 && !this.cancelRequested) {
+          this.stepLimitAutoRetries += 1;
+          this.setStatus(`Continuing (${this.stepLimitAutoRetries}/5)…`);
+          try {
+            await sleep(450);
+            const resumed = await this.runClineEngine(
+              pendingId,
+              'Continue the task from where you left off. Finish remaining edits and checks — do not restart exploration.',
+            );
+            let finalText = this.sanitizeUserFacingReply((resumed || '').trim());
+            if (!finalText || this.looksLikeStallFallback(finalText)) {
+              finalText = this.pendingChanges.length
+                ? this.fallbackSummary()
+                : this.friendlyCompletionMessage();
+            } else {
+              this.stepLimitAutoRetries = 0;
+            }
+            await this.typeOut(pendingId, finalText);
+            this.history.push({ role: 'assistant', content: finalText });
+            this.setStatus('');
+            return;
+          } catch {
+            // fall through to summary
+          }
+        }
+        const msg = this.pendingChanges.length
+          ? this.fallbackSummary()
+          : this.friendlyCompletionMessage();
         await this.typeOut(pendingId, msg);
         this.history.push({ role: 'assistant', content: msg });
         this.setStatus('');
@@ -1891,7 +1919,7 @@ Required loop:
     // Capability/behavior questions are handled separately (more precise).
     if (this.isCapabilityQuestionIntent(text)) return false;
     return (
-      /\b(flow|architecture|pipeline|end[-\s]?to[-\s]?end|how (does|do|is)|explain|overview|walkthrough|data flow|request flow|call chain|sequence|lifecycle|samjhao|samajhao|kaise (chalta|kaam)|project (flow|structure|overview))\b/i.test(
+      /\b(flow|architecture|pipeline|end[-\s]?to[-\s]?end|how (does|do|is)|explain|overview|walkthrough|data flow|request flow|call chain|sequence|lifecycle|project (flow|structure|overview))\b/i.test(
         t,
       ) ||
       /\b(what (is|are) the (flow|steps|pipeline)|describe (the )?(flow|architecture|system))\b/i.test(t)
@@ -1910,7 +1938,7 @@ Required loop:
         t,
       ) ||
       /\b(can('?t|not)?|cannot|unable|allowed|forbidden|restrict|permission|access)\b/i.test(t) ||
-      /\b(what (happens|will happen)|if i (deactivate|disable|close|block)|kya (nahi|ni) (kar|ho) sakta)\b/i.test(
+      /\b(what (happens|will happen)|if i (deactivate|disable|close|block))\b/i.test(
         t,
       ) ||
       /\b(specific thing|kind of thing|operations? (blocked|allowed)|still (can|allowed)|remain(s)? (allowed|open))\b/i.test(
@@ -2248,7 +2276,7 @@ ${(item.excerpt || '').slice(0, 600)}`;
     }
     try {
       const stop = new Set(
-        'the and for with from this that which what where when how please project open hai hota hogi etc konsa kaunsa about into onto only there their they then than also just like will would could should into under over after before'.split(
+        'the and for with from this that which what where when how please project open about into onto only there their they then than also just like will would could should into under over after before'.split(
           ' ',
         ),
       );
@@ -2732,6 +2760,12 @@ Read the highest-scoring evidence in trail order. For a bug, trace UI → handle
         await applyState(st);
         if (st.done) {
           if (st.error && !st.text) {
+            if (
+              /exceeded maxIterations/i.test(st.error) &&
+              ((st.fileChanges?.length || 0) > 0 || this.pendingChanges.length > 0)
+            ) {
+              return this.fallbackSummary([], prompt).trim();
+            }
             throw new Error(st.error);
           }
           return (st.text || lastText || '').trim();
@@ -2744,6 +2778,12 @@ Read the highest-scoring evidence in trail order. For a bug, trace UI → handle
         if (raced.kind === 'done') {
           await applyState(raced.r!);
           if (raced.r!.error && !raced.r!.text) {
+            if (
+              /exceeded maxIterations/i.test(raced.r!.error) &&
+              ((raced.r!.fileChanges?.length || 0) > 0 || this.pendingChanges.length > 0)
+            ) {
+              return this.fallbackSummary([], prompt).trim();
+            }
             throw new Error(raced.r!.error);
           }
           return (raced.r!.text || lastText || '').trim();
@@ -4572,7 +4612,7 @@ Read the highest-scoring evidence in trail order. For a bug, trace UI → handle
     if (this.isQuestionIntent(t)) {
       return true; // research/answer still counts as work for research nudges
     }
-    return /\b(fix|edit|change|update|rename|create|add|remove|delete|seo|keyword|meta|title|refactor|bug|error|implement|build|make|write|patch|file|code|css|html|js|ts|react|project|folder|readme|feature|module|timeline|analyze|analyse|understand|inspect|investigate|architecture|performance|optimize|banao|bana|karo|karna|likho|badlo|samjho|samajh|dekho|hatana|hatao)\b/i.test(
+    return /\b(fix|edit|change|update|rename|create|add|remove|delete|seo|keyword|meta|title|refactor|bug|error|implement|build|make|write|patch|file|code|css|html|js|ts|react|project|folder|readme|feature|module|timeline|analyze|analyse|understand|inspect|investigate|architecture|performance|optimize)\b/i.test(
       t,
     );
   }
@@ -4584,13 +4624,12 @@ Read the highest-scoring evidence in trail order. For a bug, trace UI → handle
     if (!t.trim()) return false;
     // Imperative coding wins — even with a trailing "?"
     if (
-      /\b(fix|add|create|implement|build|update|edit|change|remove|delete|refactor|patch|banao|badlo|hatao|likh|karo|karna)\b/i.test(
+      /\b(fix|add|create|implement|build|update|edit|change|remove|delete|refactor|patch)\b/i.test(
         t,
       ) &&
-      !/\b(which|what|konsa|kaunsa|document format|required docs?|allowed formats?)\b/i.test(t)
+      !/\b(which|what|document format|required docs?|allowed formats?)\b/i.test(t)
     ) {
-      // "what should I fix" is still a question; "fix the title" is work
-      if (!/\b(what|which|konsa|kaunsa|kya|batao|samjhao|explain|describe)\b/i.test(t)) {
+      if (!/\b(what|which|explain|describe)\b/i.test(t)) {
         return false;
       }
       if (
@@ -4601,7 +4640,7 @@ Read the highest-scoring evidence in trail order. For a bug, trace UI → handle
       }
     }
     if (
-      /\b(please (fix|add|create|implement|build)|banao|badlo|hatao|likh do|add karo|fix karo|implement karo|update karo)\b/i.test(
+      /\b(please (fix|add|create|implement|build))\b/i.test(
         t,
       )
     ) {
@@ -4609,20 +4648,20 @@ Read the highest-scoring evidence in trail order. For a bug, trace UI → handle
     }
     if (/\?/.test(raw)) {
       // "?" alone with implement verbs → still work
-      if (/\b(fix|add|update|create|implement|change|edit|banao|karo)\b/i.test(t)) {
+      if (/\b(fix|add|update|create|implement|change|edit)\b/i.test(t)) {
         return false;
       }
       return true;
     }
     if (
-      /\b(what|which|where|how|why|when|who|explain|describe|list|tell me|show me|does|is there|are there|konsa|kaunsa|kya|kahan|kahaan|kaise|kyu|kyun|batao|batana|samjhao|kitne|kitna|lagta|chahiye|required|needed|format)\b/i.test(
+      /\b(what|which|where|how|why|when|who|explain|describe|list|tell me|show me|does|is there|are there|required|needed|format)\b/i.test(
         t,
       )
     ) {
       if (
-        /\b(how (do i|to|can i)|kaise)\b/i.test(t) &&
-        /\b(fix|add|create|implement|build|banao)\b/i.test(t) &&
-        !/\b(which|what|konsa|document|docs?|format|required|needed|lagta|field|upload)\b/i.test(t)
+        /\b(how (do i|to|can i))\b/i.test(t) &&
+        /\b(fix|add|create|implement|build)\b/i.test(t) &&
+        !/\b(which|what|document|docs?|format|required|needed|field|upload)\b/i.test(t)
       ) {
         return false;
       }
@@ -4635,14 +4674,13 @@ Read the highest-scoring evidence in trail order. For a bug, trace UI → handle
     const t = (text || '').toLowerCase();
     // Coding verbs always mean implement — even if also phrased as a question
     if (
-      /\b(fix|change|update|edit|add|remove|delete|create|implement|build|make|patch|refactor|optimi[sz]e|not working|broken|bug|error|issue|problem|karo|karna|banao|badlo|hatao|likh)\b/i.test(
+      /\b(fix|change|update|edit|add|remove|delete|create|implement|build|make|patch|refactor|optimi[sz]e|not working|broken|bug|error|issue|problem)\b/i.test(
         t,
       )
     ) {
-      // Pure "what is the bug" / "which error" without asking to fix
       if (
         this.isQuestionIntent(text) &&
-        !/\b(fix|add|update|create|implement|change|edit|banao|karo|please fix|can you fix)\b/i.test(t)
+        !/\b(fix|add|update|create|implement|change|edit|please fix|can you fix)\b/i.test(t)
       ) {
         return false;
       }
@@ -5368,7 +5406,7 @@ Read the highest-scoring evidence in trail order. For a bug, trace UI → handle
   private wantsProjectFolder(text: string): boolean {
     if (this.requiresImplementation(text)) return true;
     const t = (text || '').toLowerCase();
-    return /\b(landing\s*page|website|webpage|html|css|react|next\.?js|folder|project|file|code|banao|bana|karo|likh|create|build|make|write|add|edit|fix|update)\b/i.test(
+    return /\b(landing\s*page|website|webpage|html|css|react|next\.?js|folder|project|file|code|create|build|make|write|add|edit|fix|update)\b/i.test(
       t,
     );
   }
