@@ -19,8 +19,8 @@ $year = gmdate( 'Y' );
 				</a>
 				<p><?php esc_html_e( 'Free AI-powered IDE for ambitious builders. Windows, macOS & Linux.', 'astra' ); ?></p>
 				<p style="margin-top:.75rem;font-size:.85rem;color:var(--olkil-text-dim);">
-					<strong>NARSI RAM JANGID</strong><br />
-					Lochhbo ki Basthi, Merasi, Beenthwaliya, Nagaur, Rajasthan, India - 341503<br />
+					<strong>OLKIL</strong><br />
+					Rajasthan, India - 341503<br />
 					<a href="mailto:narsi@olkil.com">narsi@olkil.com</a>
 				</p>
 			</div>
@@ -42,7 +42,6 @@ $year = gmdate( 'Y' );
 					<li><a href="<?php echo esc_url( olkil_page_url( 'terms-and-conditions' ) ); ?>"><?php esc_html_e( 'Terms & Conditions', 'astra' ); ?></a></li>
 					<li><a href="<?php echo esc_url( olkil_page_url( 'refund-policy' ) ); ?>"><?php esc_html_e( 'Return & Refund', 'astra' ); ?></a></li>
 					<li><a href="<?php echo esc_url( home_url( '/cancellation-policy/' ) ); ?>"><?php esc_html_e( 'Cancellation', 'astra' ); ?></a></li>
-					<li><a href="<?php echo esc_url( home_url( '/shipping-policy/' ) ); ?>"><?php esc_html_e( 'Shipping / Delivery', 'astra' ); ?></a></li>
 					<li><a href="<?php echo esc_url( olkil_page_url( 'contact' ) ); ?>"><?php esc_html_e( 'Contact Us', 'astra' ); ?></a></li>
 				</ul>
 			</div>
@@ -58,7 +57,7 @@ $year = gmdate( 'Y' );
 		</div>
 
 		<div class="olkil-footer__bottom">
-			<span>&copy; <?php echo esc_html( $year ); ?> OLKIL · Operated by NARSI RAM JANGID</span>
+			<span>&copy; <?php echo esc_html( $year ); ?> OLKIL</span>
 			<span class="olkil-footer__legal-links">
 				<a href="<?php echo esc_url( olkil_page_url( 'privacy-policy' ) ); ?>">Privacy</a>
 				<span aria-hidden="true">·</span>
@@ -67,8 +66,6 @@ $year = gmdate( 'Y' );
 				<a href="<?php echo esc_url( olkil_page_url( 'refund-policy' ) ); ?>">Refund</a>
 				<span aria-hidden="true">·</span>
 				<a href="<?php echo esc_url( home_url( '/cancellation-policy/' ) ); ?>">Cancel</a>
-				<span aria-hidden="true">·</span>
-				<a href="<?php echo esc_url( home_url( '/shipping-policy/' ) ); ?>">Shipping</a>
 				<span aria-hidden="true">·</span>
 				<a href="<?php echo esc_url( olkil_page_url( 'contact' ) ); ?>">Contact</a>
 			</span>

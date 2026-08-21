@@ -12,7 +12,7 @@ if ( ! defined( 'ABSPATH' ) ) {
 	<div class="olkil-cta__glow" aria-hidden="true"></div>
 	<div class="olkil-wrap olkil-reveal">
 		<h2 id="olkil-cta-title"><?php esc_html_e( 'Start building with OLKIL.', 'olkil' ); ?></h2>
-		<p><?php esc_html_e( 'Begin on Dazzlone free — or go Lite, Pro, Max, or Ultra for more tokens, agents, and priority compute.', 'olkil' ); ?></p>
+		<p><?php esc_html_e( 'Begin on Dazzlone free — or go Lite, Pro, or Ultra for more tokens, agents, and priority compute.', 'olkil' ); ?></p>
 		<div class="olkil-hero__ctas">
 			<a class="olkil-btn olkil-btn--primary olkil-btn--lg" data-olkil-download="auto" href="<?php echo esc_url( home_url( '/download/' ) ); ?>">
 				<span class="olkil-btn-label"><?php esc_html_e( 'Download free', 'olkil' ); ?></span>

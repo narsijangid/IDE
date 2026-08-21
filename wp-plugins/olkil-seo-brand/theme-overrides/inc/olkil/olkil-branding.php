@@ -10,7 +10,7 @@ if ( ! defined( 'ABSPATH' ) ) {
 	exit;
 }
 
-define( 'OLKIL_VERSION', '1.4.2' );
+define( 'OLKIL_VERSION', '1.4.5' );
 /** Desktop installer version (matches ide-electron/product.json). */
 define( 'OLKIL_APP_VERSION', '1.3.13' );
 define( 'OLKIL_DIR', trailingslashit( get_template_directory() ) );
@@ -227,6 +227,18 @@ function olkil_enqueue_assets() {
 	}
 }
 add_action( 'wp_enqueue_scripts', 'olkil_enqueue_assets', 20 );
+
+/**
+ * Preload homepage demo video for instant playback.
+ */
+function olkil_preload_demo_video() {
+	if ( ! is_front_page() ) {
+		return;
+	}
+	$video = OLKIL_URI . 'assets/olkil/video/IDEdemo.mp4';
+	echo '<link rel="preload" as="video" href="' . esc_url( $video ) . '" type="video/mp4" />' . "\n";
+}
+add_action( 'wp_head', 'olkil_preload_demo_video', 2 );
 
 /**
  * Site icon / favicon fallback when none is set in Customizer.

@@ -605,6 +605,44 @@ body.olkil-theme .ast-separate-container .ast-comment-section {
 	font-weight: 600;
 }
 
+/* ——— Product demo (natural-width video) ——— */
+.olkil-demo {
+	position: relative;
+	padding: 2rem 0 0.5rem;
+}
+
+.olkil-demo .olkil-wrap {
+	display: flex;
+	justify-content: center;
+}
+
+.olkil-demo__frame {
+	display: inline-block;
+	width: auto;
+	max-width: 100%;
+	border-radius: 5px;
+	overflow: hidden;
+	background: #0a0a0c;
+	box-shadow:
+		rgba(255, 45, 140, 0.22) 0 0 5px 0,
+		rgba(0, 0, 0, 0.1) 0 0 5px 0,
+		rgba(0, 0, 0, 0.1) 0 0 1px 0;
+	border: 1px solid rgba(255, 45, 140, 0.18);
+	line-height: 0;
+}
+
+.olkil-demo__video {
+	display: block;
+	width: auto;
+	max-width: min(100%, 960px);
+	height: auto;
+	max-height: min(72vh, 720px);
+	vertical-align: middle;
+	object-fit: contain;
+	object-position: center center;
+	background: #0a0a0c;
+}
+
 /* ——— Sections ——— */
 .olkil-section {
 	padding: 5rem 0;
@@ -794,8 +832,8 @@ body.olkil-theme .ast-separate-container .ast-comment-section {
 
 @media (min-width: 1100px) {
 	.olkil-price-grid {
-		grid-template-columns: repeat(5, minmax(0, 1fr));
-		gap: 0.85rem;
+		grid-template-columns: repeat(4, minmax(0, 1fr));
+		gap: 1rem;
 	}
 }
 
@@ -1087,27 +1125,99 @@ body.olkil-theme .ast-separate-container .ast-comment-section {
 	gap: 1.25rem;
 }
 
-@media (min-width: 720px) {
+@media (min-width: 640px) {
+	.olkil-posts {
+		grid-template-columns: repeat(2, 1fr);
+	}
+}
+
+@media (min-width: 960px) {
 	.olkil-posts {
 		grid-template-columns: repeat(3, 1fr);
 	}
 }
 
+.olkil-posts--archive {
+	margin-bottom: 2rem;
+}
+
+@media (min-width: 1100px) {
+	.olkil-posts--archive {
+		grid-template-columns: repeat(3, 1fr);
+	}
+}
+
+.olkil-pagination {
+	display: flex;
+	justify-content: center;
+	flex-wrap: wrap;
+	gap: 0.5rem;
+	margin-top: 2.5rem;
+	padding-bottom: 2rem;
+}
+
+.olkil-pagination .page-numbers {
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	min-width: 2.25rem;
+	height: 2.25rem;
+	padding: 0 0.65rem;
+	border-radius: 10px;
+	border: 1px solid var(--olkil-border);
+	color: var(--olkil-text-muted) !important;
+	font-size: 0.88rem;
+	font-weight: 500;
+	text-decoration: none !important;
+	transition: border-color 0.2s var(--olkil-ease), background 0.2s var(--olkil-ease), color 0.2s var(--olkil-ease);
+}
+
+.olkil-pagination .page-numbers.current,
+.olkil-pagination .page-numbers:hover {
+	color: var(--olkil-white) !important;
+	border-color: var(--olkil-pink);
+	background: var(--olkil-pink-soft);
+}
+
+.olkil-page-hero {
+	padding: 3rem 0 2rem;
+	text-align: center;
+}
+
+.olkil-page-hero h1 {
+	font-size: clamp(2rem, 4vw, 2.75rem);
+	margin: 0.75rem 0 0.5rem;
+}
+
+.olkil-page-hero p {
+	max-width: 36rem;
+	margin: 0 auto;
+	color: var(--olkil-text-muted);
+	font-size: 1rem;
+	line-height: 1.6;
+}
+
+.olkil-blog-more {
+	text-align: center;
+	margin-top: 2.5rem;
+}
+
 .olkil-post {
 	display: flex;
 	flex-direction: column;
-	border-radius: var(--olkil-radius);
+	border-radius: var(--olkil-radius-lg);
 	border: 1px solid var(--olkil-border);
 	background: var(--olkil-bg-card);
 	overflow: hidden;
 	text-decoration: none !important;
 	color: inherit !important;
-	transition: border-color 0.3s, transform 0.3s var(--olkil-ease);
+	transition: border-color 0.3s, transform 0.3s var(--olkil-ease), box-shadow 0.3s var(--olkil-ease);
 }
 
 .olkil-post:hover {
 	border-color: var(--olkil-border-strong);
-	transform: translateY(-3px);
+	transform: translateY(-4px);
+	box-shadow: 0 12px 40px rgba(0, 0, 0, 0.35), 0 0 0 1px rgba(255, 45, 140, 0.12);
 	color: inherit !important;
 }
 
@@ -1887,6 +1997,7 @@ body:not(.olkil-signed-in) #olkil-account-authed {
 }
 
 .olkil-account__toggle:hover,
+.olkil-account--authed.is-open .olkil-account__toggle,
 .olkil-account--authed:hover .olkil-account__toggle {
 	border-color: rgba(255, 45, 140, 0.45);
 	background: var(--olkil-pink-soft);
@@ -1943,12 +2054,18 @@ body:not(.olkil-signed-in) #olkil-account-authed {
 	max-width: 120px;
 }
 
+/* Plan badge only on dashboard/profile — never in header */
+.olkil-header .olkil-plan-badge--chip {
+	display: none !important;
+}
+
 .olkil-account__menu {
 	position: absolute;
-	top: calc(100% + 6px);
+	top: 100%;
 	right: 0;
 	min-width: 188px;
 	padding: 0.4rem;
+	padding-top: 0.55rem;
 	border-radius: 12px;
 	border: 1px solid var(--olkil-border);
 	background: #111114;
@@ -1963,6 +2080,16 @@ body:not(.olkil-signed-in) #olkil-account-authed {
 	transition: opacity 0.15s var(--olkil-ease), transform 0.15s var(--olkil-ease), visibility 0.15s;
 }
 
+.olkil-account__menu::before {
+	content: "";
+	position: absolute;
+	top: -10px;
+	left: 0;
+	right: 0;
+	height: 10px;
+}
+
+.olkil-account--authed.is-open .olkil-account__menu,
 .olkil-account--authed:hover .olkil-account__menu,
 .olkil-account--authed:focus-within .olkil-account__menu {
 	opacity: 1;

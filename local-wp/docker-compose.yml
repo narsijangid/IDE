@@ -1,0 +1,68 @@
+services:
+  db:
+    image: mysql:8.0
+    container_name: olkil-wp-db
+    restart: unless-stopped
+    environment:
+      MYSQL_DATABASE: wordpress
+      MYSQL_USER: wordpress
+      MYSQL_PASSWORD: wordpress
+      MYSQL_ROOT_PASSWORD: rootpass
+    volumes:
+      - db_data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-uwordpress", "-pwordpress"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  wordpress:
+    image: wordpress:6.7-php8.2-apache
+    container_name: olkil-wp
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    ports:
+      - "8081:80"
+    environment:
+      WORDPRESS_DB_HOST: db:3306
+      WORDPRESS_DB_USER: wordpress
+      WORDPRESS_DB_PASSWORD: wordpress
+      WORDPRESS_DB_NAME: wordpress
+      WORDPRESS_DEBUG: "1"
+    volumes:
+      - wp_data:/var/www/html
+      - ../olkil-theme-extract/olkil:/var/www/html/wp-content/themes/olkil
+      - ../wp-plugins/olkil-payu-checkout:/var/www/html/wp-content/plugins/olkil-payu-checkout
+      - ../wp-plugins/olkil-seo-brand:/var/www/html/wp-content/plugins/olkil-seo-brand
+      - ../wp-plugins/olkil-legal-pages:/var/www/html/wp-content/plugins/olkil-legal-pages
+      - ../wp-plugins/olkil-payu-compliance:/var/www/html/wp-content/plugins/olkil-payu-compliance
+      - ../wordpress-plugins/olkil-download-links:/var/www/html/wp-content/plugins/olkil-download-links
+
+  wpcli:
+    image: wordpress:cli-php8.2
+    container_name: olkil-wp-cli
+    depends_on:
+      wordpress:
+        condition: service_started
+    user: "33:33"
+    environment:
+      WORDPRESS_DB_HOST: db:3306
+      WORDPRESS_DB_USER: wordpress
+      WORDPRESS_DB_PASSWORD: wordpress
+      WORDPRESS_DB_NAME: wordpress
+    volumes:
+      - wp_data:/var/www/html
+      - ../olkil-theme-extract/olkil:/var/www/html/wp-content/themes/olkil
+      - ../wp-plugins/olkil-payu-checkout:/var/www/html/wp-content/plugins/olkil-payu-checkout
+      - ../wp-plugins/olkil-seo-brand:/var/www/html/wp-content/plugins/olkil-seo-brand
+      - ../wp-plugins/olkil-legal-pages:/var/www/html/wp-content/plugins/olkil-legal-pages
+      - ../wp-plugins/olkil-payu-compliance:/var/www/html/wp-content/plugins/olkil-payu-compliance
+      - ../wordpress-plugins/olkil-download-links:/var/www/html/wp-content/plugins/olkil-download-links
+    entrypoint: ["sh", "-c"]
+    command: ["sleep infinity"]
+
+volumes:
+  db_data:
+  wp_data:
