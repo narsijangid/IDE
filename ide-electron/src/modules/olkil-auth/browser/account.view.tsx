@@ -11,11 +11,28 @@ type OlkilSubscription = {
   tokens_total_label?: string;
   tokens_used_label?: string;
   tokens_left_label?: string;
+  percent_left_label?: string;
+  spendable_left?: number;
+  drawing_plan?: string;
+  drawing_plan_name?: string;
   percent_used: number;
   percent_left: number;
   expires_label: string;
   is_paid: boolean;
   is_expired?: boolean;
+  next_plan?: string;
+  next_plan_name?: string;
+  upgrade_url?: string;
+  renew_url?: string;
+  renew_plan_name?: string;
+  quota_reason?: string;
+  held_plans?: Array<{
+    plan: string;
+    plan_name: string;
+    tokens_left_label?: string;
+    expires_on?: string;
+    status?: string;
+  }>;
 };
 
 function initialLetter(user: OlkilAuthUser | null): string {
@@ -28,9 +45,17 @@ async function loadSubscription(email: string | null | undefined): Promise<Olkil
     return null;
   }
   try {
-    const res = await fetch(
-      `https://olkil.com/wp-json/olkil-payu/v1/subscription?email=${encodeURIComponent(email)}`,
-    );
+    const res = await fetch('https://olkil.com/wp-json/olkil-payu/v1/subscription', {
+      method: 'POST',
+      cache: 'no-store',
+      headers: {
+        Accept: 'application/json',
+        'Content-Type': 'application/json',
+        'Cache-Control': 'no-cache',
+        Pragma: 'no-cache',
+      },
+      body: JSON.stringify({ email, _: Date.now() }),
+    });
     if (!res.ok) {
       return null;
     }
@@ -60,14 +85,50 @@ export const OlkilAccountView: ReactEditorComponent<null> = () => {
 
   useEffect(() => {
     let cancelled = false;
-    (async () => {
+    const load = async () => {
+      if (typeof document !== 'undefined' && document.hidden) {
+        return;
+      }
       const next = await loadSubscription(user?.email);
       if (!cancelled) {
         setSub(next);
       }
-    })();
+    };
+    void load();
+    if (!user?.email) {
+      return () => {
+        cancelled = true;
+      };
+    }
+    const timer = window.setInterval(() => {
+      void load();
+    }, 4000);
+    const onShow = () => {
+      void load();
+    };
+    const onWallet = () => {
+      void loadSubscription(user?.email).then((next) => {
+        if (!cancelled) {
+          setSub(next);
+        }
+      });
+      window.setTimeout(() => {
+        void loadSubscription(user?.email).then((next) => {
+          if (!cancelled) {
+            setSub(next);
+          }
+        });
+      }, 800);
+    };
+    window.addEventListener('focus', onShow);
+    document.addEventListener('visibilitychange', onShow);
+    window.addEventListener('olkil-wallet-updated', onWallet);
     return () => {
       cancelled = true;
+      window.clearInterval(timer);
+      window.removeEventListener('focus', onShow);
+      document.removeEventListener('visibilitychange', onShow);
+      window.removeEventListener('olkil-wallet-updated', onWallet);
     };
   }, [user?.email]);
 
@@ -132,7 +193,9 @@ export const OlkilAccountView: ReactEditorComponent<null> = () => {
             <div className={styles.planCard}>
               <div className={styles.planCardTop}>
                 <span>Credits remaining</span>
-                <strong>{sub?.is_paid ? `${pctLeft}% left` : 'Local · unlimited'}</strong>
+                <strong>
+                  {sub?.is_paid ? `${sub.percent_left_label || `${pctLeft}%`} left` : 'Local · unlimited'}
+                </strong>
               </div>
               <div className={styles.bar}>
                 <span style={{ width: `${Math.max(0, Math.min(100, pctLeft))}%` }} />
@@ -142,6 +205,46 @@ export const OlkilAccountView: ReactEditorComponent<null> = () => {
                   ? `${sub.tokens_left_label || '0'} remaining of ${sub.tokens_total_label || '0'} · ${sub.tokens_used_label || '0'} used`
                   : 'Free Dazzlone — local models, no cloud token cap'}
               </p>
+              {sub?.is_paid && sub.drawing_plan && sub.drawing_plan !== sub.plan ? (
+                <p className={styles.planHint}>
+                  {sub.plan_name} tokens are used up for this window. Cloud requests now use held{' '}
+                  {sub.drawing_plan_name || 'plan'}.
+                </p>
+              ) : null}
+              {sub?.held_plans && sub.held_plans.length > 0 ? (
+                <p className={styles.planHint}>
+                  On hold:{' '}
+                  {sub.held_plans
+                    .map(
+                      (held) =>
+                        `${held.plan_name} ${held.tokens_left_label || '0'} left until ${held.expires_on || 'expiry'}`,
+                    )
+                    .join(' · ')}
+                </p>
+              ) : null}
+              {sub?.is_paid &&
+              (sub.quota_reason === 'quota_exceeded' || ((sub.spendable_left ?? 0) <= 0 && pctLeft <= 0)) ? (
+                <p className={styles.planHint}>
+                  This period’s tokens are used up.{' '}
+                  <a
+                    href={sub.renew_url || `https://olkil.com/checkout/?plan=${encodeURIComponent(sub.plan || 'lite')}`}
+                    target="_blank"
+                    rel="noreferrer"
+                  >
+                    Buy {sub.plan_name || 'Lite'} again
+                  </a>
+                  {sub.next_plan_name ? (
+                    <>
+                      {' '}
+                      or{' '}
+                      <a href={sub.upgrade_url || 'https://olkil.com/pricing/'} target="_blank" rel="noreferrer">
+                        upgrade to {sub.next_plan_name}
+                      </a>
+                    </>
+                  ) : null}
+                  . Dazzlone stays free.
+                </p>
+              ) : null}
               <div className={styles.meta}>
                 <div className={styles.metaLabel}>Plan</div>
                 <div className={styles.metaValue}>{sub?.plan_name || 'Dazzlone'}</div>

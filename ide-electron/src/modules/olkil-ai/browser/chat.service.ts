@@ -61,6 +61,14 @@ import { MarkerSeverity } from '@opensumi/ide-core-common';
 import { IMarkerService } from '@opensumi/ide-markers';
 import { SCMService } from '@opensumi/ide-scm';
 import { IOlkilAuthService } from '../../olkil-auth/common';
+
+function notifyOlkilWalletUpdated() {
+  try {
+    window.dispatchEvent(new CustomEvent('olkil-wallet-updated'));
+  } catch {
+    // renderer-only
+  }
+}
 import { OlkilChatHistoryService } from './chat-history.service';
 import {
   CHAT_HISTORY_TTL_MS,
@@ -2759,6 +2767,7 @@ Read the highest-scoring evidence in trail order. For a bug, trace UI → handle
         const st = await this.aiNode.clineGetState(runId);
         await applyState(st);
         if (st.done) {
+          notifyOlkilWalletUpdated();
           if (st.error && !st.text) {
             if (
               /exceeded maxIterations/i.test(st.error) &&
@@ -4828,6 +4837,7 @@ Read the highest-scoring evidence in trail order. For a bug, trace UI → handle
       });
       stopPoll = true;
       await poll;
+      notifyOlkilWalletUpdated();
       return result;
     } catch (e) {
       stopPoll = true;

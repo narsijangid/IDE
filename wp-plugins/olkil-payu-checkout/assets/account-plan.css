@@ -1,5 +1,26 @@
 /* Plan badge + credits + dashboard (OLKIL) */
 
+.olkil-app__upgrade {
+  margin: 0.85rem 0 0;
+  padding: 0.75rem 0.9rem;
+  border-radius: 10px;
+  border: 1px solid rgba(254, 1, 154, 0.35);
+  background: rgba(254, 1, 154, 0.08);
+  color: #f4f4f5;
+  font-size: 0.9rem;
+  line-height: 1.45;
+}
+
+.olkil-app__upgrade a {
+  color: #fe019a;
+  font-weight: 650;
+  text-decoration: none;
+}
+
+.olkil-app__upgrade a:hover {
+  text-decoration: underline;
+}
+
 .olkil-plan-badge {
   display: inline-flex;
   align-items: center;
@@ -516,6 +537,11 @@ body.olkil-dash-page .olkil-wrap {
   border-color: rgba(255, 45, 140, 0.55);
   box-shadow: 0 0 0 1px rgba(255, 45, 140, 0.15), 0 10px 36px rgba(255, 45, 140, 0.1);
   background: linear-gradient(160deg, rgba(255, 45, 140, 0.12), rgba(255, 45, 140, 0.04));
+}
+
+.olkil-dash-plan.is-held {
+  border-color: rgba(255, 255, 255, 0.22);
+  background: rgba(255, 255, 255, 0.03);
 }
 
 .olkil-dash-plan__body {

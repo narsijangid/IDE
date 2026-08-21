@@ -40,6 +40,7 @@ import { CommandRunner } from './command-runner';
 import { BrowserTestService } from './browser-test.service';
 import { getOlkilClineRuntime } from './cline-runtime.service';
 import type { ClineEngineRunRequest, ClineEngineRunState } from '../common';
+import { assertOlkilWallet, chargeOlkilWallet, countOlkilTokensFromUnknown } from './olkil-wallet.service';
 
 const POOLSIDE_URL = 'https://inference.poolside.ai/v1/chat/completions';
 const DEFAULT_DEEPSEEK_BASE = 'https://api.deepseek.com';
@@ -519,9 +520,9 @@ export class OlkilAiNodeService implements IOlkilAiNodeService {
   }
 
   private get maxTokens(): number {
-    const raw = process.env.OLKIL_MAX_TOKENS || this.env.OLKIL_MAX_TOKENS || '2200';
+    const raw = process.env.OLKIL_MAX_TOKENS || this.env.OLKIL_MAX_TOKENS || '8192';
     const n = Number(raw);
-    return Number.isFinite(n) && n > 0 ? Math.min(Math.floor(n), 8192) : 2200;
+    return Number.isFinite(n) && n > 0 ? Math.min(Math.floor(n), 8192) : 8192;
   }
 
   /** Cap oversized tool/user payloads so cloud APIs don't burn tokens / 500. */
@@ -988,6 +989,7 @@ export class OlkilAiNodeService implements IOlkilAiNodeService {
 
   async chatCompletion(request: ChatCompletionRequest): Promise<ChatCompletionResult> {
     const option = findModel(request.modelId || DEFAULT_MODEL_ID);
+    await assertOlkilWallet(option.provider);
     const apiKey = this.getKey(option.provider);
 
     if (option.provider === 'ollama') {
@@ -1035,18 +1037,17 @@ export class OlkilAiNodeService implements IOlkilAiNodeService {
     if (option.provider === 'poolside') {
       body.chat_template_kwargs = { enable_thinking: false };
       if (!request.maxTokens) {
-        body.max_tokens = Math.min(tokenBudget, 2048);
+        body.max_tokens = Math.min(tokenBudget, 8192);
       }
     }
 
     // DeepSeek V4 defaults to thinking mode (bills at output rate) — disable for agent speed/cost.
-    // Keep enough max_tokens for tool-call JSON + real UI patches (Cursor-class edits).
     if (option.provider === 'deepseek') {
       body.thinking = { type: 'disabled' };
       if (!request.maxTokens) {
-        body.max_tokens = Math.min(Math.max(tokenBudget, 1800), 4096);
+        body.max_tokens = Math.min(Math.max(tokenBudget, 2048), 8192);
       } else {
-        body.max_tokens = Math.min(Math.max(tokenBudget, 1600), 4096);
+        body.max_tokens = Math.min(Math.max(tokenBudget, 2048), 8192);
       }
       // Steer away from DSML text dumps when tools are present.
       if (request.tools?.length && request.toolChoice !== 'none') {
@@ -1109,8 +1110,8 @@ export class OlkilAiNodeService implements IOlkilAiNodeService {
           text: result.content,
           done: true,
         });
-        // cleanup later
         setTimeout(() => this.streams.delete(request.streamId!), 60_000);
+        await this.chargeUserWallet(option, request, result);
         return result;
       }
 
@@ -1122,7 +1123,9 @@ export class OlkilAiNodeService implements IOlkilAiNodeService {
         throw new Error(`Invalid ${option.provider} response: ${raw.slice(0, 300)}`);
       }
 
-      return this.parseCompletionChoice(data);
+      const parsed = this.parseCompletionChoice(data);
+      await this.chargeUserWallet(option, request, parsed);
+      return parsed;
     } catch (e: any) {
       if (useStream && request.streamId) {
         this.streams.set(request.streamId, {
@@ -1143,6 +1146,22 @@ export class OlkilAiNodeService implements IOlkilAiNodeService {
       tool_calls: message.tool_calls,
       finish_reason: choice?.finish_reason,
     };
+  }
+
+  private async chargeUserWallet(
+    option: { provider: AiProviderId; model: string },
+    request: ChatCompletionRequest,
+    result: ChatCompletionResult,
+  ): Promise<void> {
+    const inputTokens = countOlkilTokensFromUnknown(request.messages);
+    const outputTokens = countOlkilTokensFromUnknown(result.content) + countOlkilTokensFromUnknown(result.tool_calls);
+    await chargeOlkilWallet({
+      provider: option.provider,
+      model: option.model,
+      inputTokens,
+      outputTokens,
+      requestId: `chat_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 10)}`,
+    });
   }
 
   private async consumeSse(res: any, streamId: string): Promise<ChatCompletionResult> {

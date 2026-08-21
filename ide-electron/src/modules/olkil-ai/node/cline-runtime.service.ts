@@ -17,6 +17,7 @@ import {
 import { startOrchestrator } from './orchestrator';
 import { tryFastPath } from './orchestrator/fast-path';
 import type { ActivitySinkEvent } from './orchestrator/types';
+import { assertOlkilWallet, chargeOlkilWallet, countOlkilTokens, isLocalProvider } from './olkil-wallet.service';
 
 export type ClineRuntimeMode = ChatMode;
 
@@ -100,6 +101,18 @@ function isMaxIterationsError(error: unknown): boolean {
           ? String((error as { message?: unknown }).message || '')
           : String(error || '');
   return /exceeded maxIterations/i.test(msg);
+}
+
+function isMaxOutputTokensError(error: unknown): boolean {
+  const msg =
+    error instanceof Error
+      ? error.message
+      : typeof error === 'string'
+        ? error
+        : error && typeof error === 'object' && 'message' in error
+          ? String((error as { message?: unknown }).message || '')
+          : String(error || '');
+  return /maximum output token limit/i.test(msg);
 }
 
 let sdkPromise: Promise<ClineSdk> | null = null;
@@ -560,6 +573,14 @@ interface RunGrouping {
   phase: 'explore' | 'apply' | 'validate';
   liveBatch: string[];
   orch?: { noteTools: (names: string[]) => void };
+    bill?: {
+      provider: AiProviderId;
+      model: string;
+      runId: string;
+      charged: number;
+      lastUsage: number;
+      posted?: boolean;
+    };
 }
 
 function phaseForTool(name: string, command?: string): RunGrouping['phase'] {
@@ -627,11 +648,13 @@ export class OlkilClineRuntimeHost {
     };
     this.states.set(runId, state);
     let orchFinish: ((ok: boolean) => void) | undefined;
+    let grouping: RunGrouping | undefined;
 
     try {
       const sdk = await loadSdk();
       const env = readEnvFile();
       const option = findModel(request.modelId);
+      await assertOlkilWallet(option.provider);
       const providerId = mapProvider(option.provider);
       const apiKey = getKey(option.provider, env);
       const baseUrl = getBaseUrl(option.provider, env);
@@ -675,6 +698,13 @@ export class OlkilClineRuntimeHost {
             done: true,
             resultPreview: fast.text,
           });
+          await chargeOlkilWallet({
+            provider: option.provider,
+            model: option.model,
+            inputTokens: countOlkilTokens(request.prompt || ''),
+            outputTokens: countOlkilTokens(fast.text || ''),
+            requestId: `${runId}:fast`,
+          });
           return state;
         }
       }
@@ -692,7 +722,18 @@ export class OlkilClineRuntimeHost {
         },
       });
 
-      const grouping: RunGrouping = { phase: 'explore', liveBatch: [] };
+      const groupingState: RunGrouping = {
+        phase: 'explore',
+        liveBatch: [],
+        bill: {
+          provider: option.provider,
+          model: option.model,
+          runId,
+          charged: 0,
+          lastUsage: 0,
+        },
+      };
+      grouping = groupingState;
       const orch = await startOrchestrator({
         runId,
         prompt: request.prompt,
@@ -702,7 +743,7 @@ export class OlkilClineRuntimeHost {
         signal: prefetchAbort.signal,
         onActivity: (event) => this.applyOrchestratorActivity(state, event),
       });
-      grouping.orch = orch;
+      groupingState.orch = orch;
       orchFinish = (ok) => orch.finish(ok);
       if (prefetchAbort.signal.aborted) {
         state.status = 'Stopped';
@@ -803,18 +844,17 @@ ${
           : Math.max(orch.route.maxContinues, mode === 'agent' ? 4 : 2)
         : 0;
 
-      // Match legacy llm.service: disable extended thinking for agent speed/cost.
-      // Simple tasks get a smaller completion budget so the model finishes faster.
+      // Disable extended thinking; give enough output headroom so a short
+      // answer or a tool-call JSON blob does not hit the provider cap.
       const modelOptions: Record<string, unknown> = {
         thinking: false,
         temperature: 0.2,
       };
       if (option.provider === 'poolside') {
         modelOptions.chat_template_kwargs = { enable_thinking: false };
-        // Simple tasks need enough headroom for tool-call JSON without hitting output limit.
-        modelOptions.maxTokens = orch.route.size === 'simple' ? 3072 : 2048;
+        modelOptions.maxTokens = 8192;
       } else if (option.provider === 'deepseek') {
-        modelOptions.maxTokens = orch.route.size === 'simple' ? 4096 : 4096;
+        modelOptions.maxTokens = 8192;
       }
 
       const AgentCtor = sdk.Agent;
@@ -859,8 +899,26 @@ ${
             `Prefer finishing remaining edits/checks over re-exploring the whole repo.`,
         );
       }
+      let tokenContinues = 0;
+      const maxTokenContinues = 2;
+      while (
+        result?.error &&
+        isMaxOutputTokensError(result.error) &&
+        tokenContinues < maxTokenContinues &&
+        this.aborts.has(runId) &&
+        !state.done
+      ) {
+        tokenContinues += 1;
+        state.status = `Continuing reply (${tokenContinues}/${maxTokenContinues})…`;
+        state.error = undefined;
+        result = await agent.continue(
+          '[SYSTEM] Your last reply hit the output token cap mid-turn. Continue from where you stopped. ' +
+            'Be concise. Prefer a tool call over a long explanation. Do not restart the task.',
+        );
+      }
 
       state.text = (result?.outputText || state.text || '').trim();
+      await this.chargeRunWallet(grouping, request.prompt, state.text);
       if (state.status === 'Stopped') {
         state.done = true;
         orchFinish?.(false);
@@ -877,6 +935,15 @@ ${
               state.text = 'Working…';
             }
           }
+        } else if (isMaxOutputTokensError(result.error)) {
+          state.error = undefined;
+          if (!state.text?.trim()) {
+            if (state.fileChanges.length) {
+              state.text = `Applied changes to ${state.fileChanges.map((c) => path.basename(c.path)).join(', ')}.`;
+            } else {
+              state.text = 'Finished the turn. Ask a follow-up if you want more detail.';
+            }
+          }
         } else if (!/abort|cancel/i.test(String(result.error?.message || result.error))) {
           state.error = result.error.message || String(result.error);
         }
@@ -886,6 +953,7 @@ ${
       orchFinish?.(!state.error);
       return state;
     } catch (e: any) {
+      await this.chargeRunWallet(grouping, request.prompt, state.text);
       state.error = e?.message || String(e);
       state.status = 'Failed';
       state.done = true;
@@ -899,6 +967,35 @@ ${
           this.states.delete(runId);
         }
       }, 120_000);
+    }
+  }
+
+  private async chargeRunWallet(grouping: RunGrouping | undefined, prompt: string, output: string) {
+    const bill = grouping?.bill;
+    if (!bill || isLocalProvider(bill.provider) || bill.posted) {
+      return;
+    }
+    let inputTokens = countOlkilTokens(prompt || '');
+    let outputTokens = countOlkilTokens(output || '');
+    const estimated = inputTokens + outputTokens;
+    if (bill.lastUsage > estimated) {
+      outputTokens += bill.lastUsage - estimated;
+    }
+    if (inputTokens + outputTokens < 1) {
+      return;
+    }
+    bill.posted = true;
+    const ok = await chargeOlkilWallet({
+      provider: bill.provider,
+      model: bill.model,
+      inputTokens,
+      outputTokens,
+      requestId: `${bill.runId}:final`,
+    });
+    if (ok) {
+      bill.charged = inputTokens + outputTokens;
+    } else {
+      bill.posted = false;
     }
   }
 
@@ -1101,6 +1198,16 @@ ${
           if (parent) parent.done = true;
         }
         break;
+      case 'usage-updated': {
+        const bill = grouping?.bill;
+        if (!bill || isLocalProvider(bill.provider) || !event.usage) {
+          break;
+        }
+        const input = Math.max(0, Math.floor(Number(event.usage.inputTokens || 0)));
+        const output = Math.max(0, Math.floor(Number(event.usage.outputTokens || 0)));
+        bill.lastUsage = Math.max(bill.lastUsage, input + output);
+        break;
+      }
       default:
         break;
     }

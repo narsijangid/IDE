@@ -2,7 +2,7 @@
 /**
  * Plugin Name: OLKIL PayU Checkout
  * Description: Professional PayU checkout — Firebase-held KEY/SALT, webhook, invoices, receipts, email.
- * Version: 2.3.5
+ * Version: 2.4.5
  * Author: OLKIL
  */
 
@@ -10,12 +10,13 @@ if ( ! defined( 'ABSPATH' ) ) {
 	exit;
 }
 
-define( 'OLKIL_PAYU_CHECKOUT_VERSION', '2.3.5' );
+define( 'OLKIL_PAYU_CHECKOUT_VERSION', '2.4.5' );
 define( 'OLKIL_PAYU_CHECKOUT_DIR', plugin_dir_path( __FILE__ ) );
 define( 'OLKIL_PAYU_CHECKOUT_URL', plugin_dir_url( __FILE__ ) );
 
 require_once OLKIL_PAYU_CHECKOUT_DIR . 'includes/subscriptions.php';
 require_once OLKIL_PAYU_CHECKOUT_DIR . 'includes/firebase-backend.php';
+require_once OLKIL_PAYU_CHECKOUT_DIR . 'includes/olkil-wallet.php';
 require_once OLKIL_PAYU_CHECKOUT_DIR . 'includes/invoice.php';
 require_once OLKIL_PAYU_CHECKOUT_DIR . 'includes/mail.php';
 require_once OLKIL_PAYU_CHECKOUT_DIR . 'includes/fulfill.php';
@@ -489,7 +490,7 @@ function olkil_payu_register_routes() {
 		'olkil-payu/v1',
 		'/subscription',
 		array(
-			'methods'             => 'GET',
+			'methods'             => array( 'GET', 'POST' ),
 			'callback'            => 'olkil_payu_rest_subscription',
 			'permission_callback' => '__return_true',
 			'args'                => array(
@@ -498,6 +499,24 @@ function olkil_payu_register_routes() {
 					'type'     => 'string',
 				),
 			),
+		)
+	);
+	register_rest_route(
+		'olkil-payu/v1',
+		'/quota',
+		array(
+			'methods'             => array( 'GET', 'POST' ),
+			'callback'            => 'olkil_payu_rest_quota',
+			'permission_callback' => '__return_true',
+		)
+	);
+	register_rest_route(
+		'olkil-payu/v1',
+		'/usage',
+		array(
+			'methods'             => 'POST',
+			'callback'            => 'olkil_payu_rest_usage',
+			'permission_callback' => '__return_true',
 		)
 	);
 }
@@ -514,6 +533,9 @@ function olkil_payu_rest_cors() {
 			header( 'Access-Control-Allow-Origin: *' );
 			header( 'Access-Control-Allow-Methods: GET, POST, OPTIONS' );
 			header( 'Access-Control-Allow-Headers: Content-Type, Authorization' );
+			header( 'Cache-Control: no-store, no-cache, must-revalidate, max-age=0' );
+			header( 'X-LiteSpeed-Cache-Control: no-cache' );
+			header( 'Pragma: no-cache' );
 			return $value;
 		}
 	);
@@ -521,11 +543,15 @@ function olkil_payu_rest_cors() {
 add_action( 'rest_api_init', 'olkil_payu_rest_cors', 15 );
 
 function olkil_payu_rest_subscription( WP_REST_Request $request ) {
-	$email = sanitize_email( (string) $request->get_param( 'email' ) );
+	$email = sanitize_email( (string) ( function_exists( 'olkil_payu_request_value' ) ? olkil_payu_request_value( $request, 'email' ) : $request->get_param( 'email' ) ) );
 	if ( ! $email ) {
 		return new WP_REST_Response( array( 'error' => 'email_required' ), 400 );
 	}
-	return new WP_REST_Response( olkil_payu_get_subscription( $email ), 200 );
+	$response = new WP_REST_Response( olkil_payu_get_subscription( $email ), 200 );
+	$response->header( 'Cache-Control', 'no-store, no-cache, must-revalidate, max-age=0' );
+	$response->header( 'X-LiteSpeed-Cache-Control', 'no-cache' );
+	$response->header( 'Pragma', 'no-cache' );
+	return $response;
 }
 
 function olkil_payu_rest_invoices( WP_REST_Request $request ) {
@@ -1097,6 +1123,7 @@ function olkil_payu_dashboard_html() {
 								<p class="olkil-app__stat" id="olkil-dash-credits-left">—</p>
 							</div>
 							<div class="olkil-dash__bar" aria-hidden="true"><span id="olkil-dash-bar-fill" style="width:0%"></span></div>
+							<p class="olkil-app__upgrade" id="olkil-dash-upgrade" hidden></p>
 							<div class="olkil-app__metrics">
 								<div class="olkil-app__metric">
 									<span class="olkil-app__metric-label"><?php esc_html_e( 'Current plan', 'olkil' ); ?></span>
@@ -1184,10 +1211,16 @@ function olkil_payu_dashboard_html() {
 								</thead>
 								<tbody>
 									<tr>
-										<td><?php esc_html_e( 'Cloud tokens (this period)', 'olkil' ); ?></td>
+										<td><?php esc_html_e( 'OLKIL tokens (this period)', 'olkil' ); ?></td>
 										<td id="olkil-usage-row-used">—</td>
 										<td id="olkil-usage-row-left">—</td>
 										<td id="olkil-usage-row-total">—</td>
+									</tr>
+									<tr>
+										<td><?php esc_html_e( 'Requests (this period)', 'olkil' ); ?></td>
+										<td id="olkil-usage-req-used">—</td>
+										<td>—</td>
+										<td><?php esc_html_e( 'All cloud models', 'olkil' ); ?></td>
 									</tr>
 								</tbody>
 							</table>

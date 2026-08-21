@@ -25,8 +25,18 @@
 
   function fetchSub(email) {
     if (!email) return Promise.resolve(null);
-    var url = API + (API.indexOf('?') >= 0 ? '&' : '?') + 'email=' + encodeURIComponent(email);
-    return fetch(url, { credentials: 'omit' })
+    return fetch(API, {
+      method: 'POST',
+      credentials: 'omit',
+      cache: 'no-store',
+      headers: {
+        Accept: 'application/json',
+        'Content-Type': 'application/json',
+        'Cache-Control': 'no-cache',
+        Pragma: 'no-cache',
+      },
+      body: JSON.stringify({ email: email, _: Date.now() }),
+    })
       .then(function (r) {
         return r.ok ? r.json() : null;
       })
@@ -154,6 +164,7 @@
     set('#olkil-usage-row-used', used);
     set('#olkil-usage-row-left', left);
     set('#olkil-usage-row-total', total);
+    set('#olkil-usage-req-used', sub.is_paid ? String(sub.requests_used || 0) : '0');
     var fill = $('#olkil-usage-fill');
     if (fill) fill.style.width = (sub.is_paid ? sub.percent_left || 0 : 100) + '%';
     var note = $('#olkil-usage-note');
@@ -161,8 +172,10 @@
       note.textContent = sub.is_paid
         ? (sub.plan_name || 'Plan') +
           ' · ' +
-          (sub.percent_left || 0) +
-          '% remaining · resets ' +
+          (sub.tokens_used_label || '0') +
+          ' used · ' +
+          (sub.percent_left_label || Math.round(sub.percent_left || 0) + '%') +
+          ' remaining · resets ' +
           (sub.expires_on || '—')
         : 'Free Dazzlone — local models have no cloud token cap.';
     }
@@ -223,7 +236,7 @@
     var ex = $('#olkil-profile-plan-expiry');
     if (ex) ex.textContent = sub.expires_label || '—';
     var pct = $('#olkil-profile-credits-pct');
-    if (pct) pct.textContent = (sub.percent_left != null ? sub.percent_left : 100) + '% left';
+    if (pct) pct.textContent = sub.percent_left_label ? sub.percent_left_label + ' left' : (sub.percent_left != null ? sub.percent_left : 100) + '% left';
     var fill = $('#olkil-profile-bar-fill');
     if (fill) fill.style.width = Math.max(0, Math.min(100, sub.percent_left != null ? sub.percent_left : 100)) + '%';
     var tok = $('#olkil-profile-tokens');
@@ -254,14 +267,35 @@
   function paintPlanCards(sub) {
     var cards = document.querySelectorAll('#olkil-dash-plan-cards [data-plan]');
     var current = (sub && sub.plan) || 'dazzlone';
+    var heldSlugs = {};
+    (sub && sub.held_plans ? sub.held_plans : []).forEach(function (h) {
+      if (h && h.plan) heldSlugs[h.plan] = h;
+    });
+    var exhausted = Boolean(sub && sub.is_paid && (sub.percent_left === 0 || sub.quota_reason === 'quota_exceeded') && !(sub.spendable_left > 0));
     cards.forEach(function (card) {
       var slug = card.getAttribute('data-plan');
       var isCur = slug === current;
+      var held = heldSlugs[slug];
       card.classList.toggle('is-current', isCur);
+      card.classList.toggle('is-held', Boolean(held));
       var mark = card.querySelector('.olkil-dash-plan__current');
       var btn = card.querySelector('.olkil-dash-plan__btn');
-      if (mark) setHidden(mark, !isCur);
-      if (btn) setHidden(btn, isCur);
+      if (mark) {
+        mark.textContent = isCur ? 'Current plan' : held ? 'On hold' : 'Current plan';
+        setHidden(mark, !(isCur || held));
+      }
+      if (btn) {
+        if (isCur && exhausted) {
+          setHidden(btn, false);
+          btn.textContent = 'Buy ' + (sub.plan_name || 'plan') + ' again';
+        } else if (isCur || held) {
+          setHidden(btn, true);
+        } else {
+          setHidden(btn, false);
+          var name = card.querySelector('.olkil-dash-plan__name');
+          btn.textContent = 'Upgrade to ' + ((name && name.textContent) || slug);
+        }
+      }
     });
   }
 
@@ -292,11 +326,15 @@
     if (plan) plan.textContent = planName;
     var note = $('#olkil-dash-plan-note');
     if (note) {
-      note.textContent = sub.is_paid
-        ? 'Active · ' + (sub.tokens_total_label || '') + ' tokens / month'
-        : sub.is_expired
-          ? 'Previous plan ended — you are on free Dazzlone'
-          : 'Free local models · upgrade anytime';
+      if (sub.is_paid && sub.drawing_plan && sub.drawing_plan !== sub.plan) {
+        note.textContent = (sub.plan_name || 'Plan') + ' tokens used up · using held ' + (sub.drawing_plan_name || 'plan');
+      } else if (sub.is_paid) {
+        note.textContent = 'Active · ' + (sub.tokens_total_compact || sub.tokens_total_label || '') + ' tokens / month';
+      } else if (sub.is_expired) {
+        note.textContent = 'Previous plan ended — you are on free Dazzlone';
+      } else {
+        note.textContent = 'Free local models · upgrade anytime';
+      }
     }
     var expDate = $('#olkil-dash-expiry-date');
     if (expDate) expDate.textContent = sub.is_paid ? sub.expires_on || '—' : sub.is_expired ? sub.expires_on || 'Expired' : 'Never';
@@ -310,22 +348,76 @@
     }
     var left = $('#olkil-dash-credits-left');
     if (left) {
-      left.textContent = sub.is_paid ? (sub.percent_left || 0) + '% remaining' : 'Local · unlimited';
+      left.textContent = sub.is_paid ? (sub.percent_left_label || Math.round(sub.percent_left || 0) + '%') + ' remaining' : 'Local · unlimited';
     }
     var fill = $('#olkil-dash-bar-fill');
     if (fill) fill.style.width = (sub.is_paid ? sub.percent_left || 0 : 100) + '%';
     var meta = $('#olkil-dash-credits-meta');
     if (meta) {
-      meta.textContent = sub.is_paid
-        ? (sub.tokens_used_label || '0') +
+      if (sub.is_paid) {
+        var text =
+          (sub.tokens_used_label || '0') +
           ' used · ' +
           (sub.tokens_left_label || '0') +
           ' left of ' +
           (sub.tokens_total_label || '0') +
-          (sub.expires_on ? ' · resets ' + sub.expires_on : '')
-        : 'Free Dazzlone plan — upgrade anytime for cloud tokens.';
+          (sub.expires_on ? ' · resets ' + sub.expires_on : '');
+        if (sub.held_plans && sub.held_plans.length) {
+          text +=
+            ' · held ' +
+            sub.held_plans
+              .map(function (h) {
+                return (h.plan_name || h.plan) + ' ' + (h.tokens_left_label || '0') + ' left until ' + (h.expires_on || '—');
+              })
+              .join('; ');
+        }
+        meta.textContent = text;
+      } else {
+        meta.textContent = 'Free Dazzlone plan — upgrade anytime for cloud tokens.';
+      }
     }
     paintPlanCards(sub);
+    paintUsage(sub);
+    paintUpgrade(sub);
+  }
+
+  function paintUpgrade(sub) {
+    var el = $('#olkil-dash-upgrade');
+    if (!el) return;
+    var reason = sub && sub.quota_reason;
+    if (sub && sub.is_paid && reason === 'quota_exceeded' && !(sub.spendable_left > 0)) {
+      var name = sub.plan_name || 'Lite';
+      var renew = sub.renew_url || (cfg.checkout || '/checkout/') + '?plan=' + encodeURIComponent(sub.plan || 'lite');
+      el.innerHTML = '';
+      el.appendChild(
+        document.createTextNode(
+          'You have used your ' + name + ' tokens this period. Buy ' + name + ' again for a fresh allowance and a new 30-day window from today. '
+        )
+      );
+      var a = document.createElement('a');
+      a.href = renew;
+      a.textContent = 'Buy ' + name + ' again';
+      el.appendChild(a);
+      if (sub.next_plan && sub.upgrade_url) {
+        el.appendChild(document.createTextNode(' Or '));
+        var b = document.createElement('a');
+        b.href = sub.upgrade_url;
+        b.textContent = 'upgrade to ' + (sub.next_plan_name || 'Pro');
+        el.appendChild(b);
+        el.appendChild(document.createTextNode('.'));
+      }
+      setHidden(el, false);
+    } else {
+      el.innerHTML = '';
+      setHidden(el, true);
+    }
+  }
+
+  function paintLive(user, sub) {
+    if (!sub) return;
+    paintProfile(sub);
+    paintHeader(sub);
+    paintDashboard(user, sub);
     paintUsage(sub);
   }
 
@@ -335,9 +427,7 @@
       return;
     }
     fetchSub(user.email).then(function (sub) {
-      paintProfile(sub);
-      paintHeader(sub);
-      paintDashboard(user, sub);
+      paintLive(user, sub);
     });
     fetchInvoices(user.email).then(paintInvoices);
   }
@@ -360,7 +450,33 @@
 
     firebase.auth().onAuthStateChanged(function (user) {
       applyUser(user);
+      startUsagePoll(user);
     });
+  }
+
+  var pollTimer = null;
+  var pollOnShow = null;
+  function startUsagePoll(user) {
+    if (pollTimer) {
+      clearInterval(pollTimer);
+      pollTimer = null;
+    }
+    if (pollOnShow) {
+      document.removeEventListener('visibilitychange', pollOnShow);
+      window.removeEventListener('focus', pollOnShow);
+      pollOnShow = null;
+    }
+    if (!user || !user.email) return;
+    var tick = function () {
+      if (document.hidden) return;
+      fetchSub(user.email).then(function (sub) {
+        paintLive(user, sub);
+      });
+    };
+    pollOnShow = tick;
+    pollTimer = setInterval(tick, 4000);
+    document.addEventListener('visibilitychange', tick);
+    window.addEventListener('focus', tick);
   }
 
   if (document.readyState === 'loading') {
