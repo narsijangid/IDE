@@ -5,9 +5,6 @@ export const IOlkilAiNodeService = 'IOlkilAiNodeService';
 export const IOlkilChatService = 'IOlkilChatService';
 export const IOlkilChatUiService = 'IOlkilChatUiService';
 
-export { parseOlkilAgentEngine, DEFAULT_OLKIL_AGENT_ENGINE } from './agent-engine';
-export type { OlkilAgentEngine } from './agent-engine';
-
 export type ChatRole = 'system' | 'user' | 'assistant' | 'tool';
 
 export interface ChatToolCall {
@@ -420,8 +417,8 @@ export interface IOlkilAiNodeService {
   liveTest(request: LiveTestRequest): Promise<LiveTestResult>;
 
   /**
-   * Run the coding agent (OpenCode sidecar by default; Cline if OLKIL_AGENT_ENGINE=cline).
-   * Branding stays OLKIL.
+   * Run the coding agent (OpenCode sidecar). Branding stays OLKIL.
+   * IPC names are historical (`clineRun`) and must stay stable.
    */
   clineRun(request: ClineEngineRunRequest): Promise<ClineEngineRunState>;
   /** Poll live agent text / tool activities. */

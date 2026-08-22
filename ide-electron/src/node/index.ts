@@ -43,6 +43,5 @@ startServer({
     process.send('ready');
   }
   // After the extension host has had time to bind its IPC pipe.
-  // OpenCode sidecar only — never prewarm the isolated Cline SDK.
   scheduleAgentEnginePrewarm();
 });

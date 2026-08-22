@@ -1222,8 +1222,7 @@ Required loop:
         // Built-in loop owns live_test / browser_* tools. Cline does not.
         reply = await this.runAgentLoop(pendingId);
       } else {
-        // OpenCode sidecar by default. Falls back to built-in loop only if the
-        // isolated Cline SDK is selected and fails to load.
+        // OpenCode sidecar. Built-in loop is only for Live Test (browser tools).
         try {
           reply = await this.runClineEngine(pendingId, enriched);
         } catch (clineErr: any) {
@@ -2827,7 +2826,7 @@ Read the highest-scoring evidence in trail order. For a bug, trace UI → handle
       questionIntent && this.isCapabilityQuestionIntent(latestUser);
     const flowQuestion =
       questionIntent && !capabilityQuestion && this.isFlowQuestionIntent(latestUser);
-    // Keep in sync with cline-runtime maxIterations — large projects need many tool turns.
+    // Large projects need many tool turns.
     const maxSteps = capabilityQuestion
       ? 12
       : flowQuestion
@@ -5451,7 +5450,6 @@ Read the highest-scoring evidence in trail order. For a bug, trace UI → handle
   private isIdeInstallPath(candidate: string): boolean {
     const n = path.resolve(candidate).replace(/\\/g, '/').toLowerCase();
     if (n.includes('/ide-electron/') || n.endsWith('/ide-electron')) return true;
-    if (n.includes('/packages/olkil-engine')) return true;
     return false;
   }
 

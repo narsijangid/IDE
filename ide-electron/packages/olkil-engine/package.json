@@ -1,6 +1,0 @@
-﻿{
-  "name": "@olkil/engine-meta",
-  "private": true,
-  "description": "OLKIL coding agent engine (vendored from Cline SDK, Apache-2.0)",
-  "license": "Apache-2.0"
-}

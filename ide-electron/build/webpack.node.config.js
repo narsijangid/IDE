@@ -75,22 +75,7 @@ module.exports = createConfig({
       ) {
         return callback(null, 'commonjs ' + request);
       }
-      // OLKIL engine is ESM — leave unbundled; loaded via runtime dynamic import().
-      if (
-        request === '@olkil/engine' ||
-        request === '@olkil/core' ||
-        request === '@olkil/agents' ||
-        request === '@olkil/llms' ||
-        request === '@olkil/shared' ||
-        request === '@cline/sdk' ||
-        request === '@cline/core' ||
-        request === '@cline/agents' ||
-        request === '@cline/llms' ||
-        request === '@cline/shared' ||
-        request === 'undici' ||
-        (typeof request === 'string' &&
-          (request.startsWith('@olkil/') || request.startsWith('@cline/')))
-      ) {
+      if (request === 'undici') {
         return callback(null, 'commonjs ' + request);
       }
       callback();

@@ -1953,7 +1953,7 @@ export class RepositoryIndexService {
 
 let sharedRepositoryIndex: RepositoryIndexService | null = null;
 
-/** Process-wide index so chat warmup and the Cline orchestrator share one cache. */
+/** Process-wide index so chat warmup shares one cache. */
 export function getSharedRepositoryIndex(): RepositoryIndexService {
   if (!sharedRepositoryIndex) {
     sharedRepositoryIndex = new RepositoryIndexService();

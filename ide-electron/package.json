@@ -40,7 +40,6 @@
     "stage-ollama": "node ./scripts/stage-ollama.js",
     "stage-opencode": "node ./scripts/stage-opencode.js",
     "stage-olkil-env": "node ./scripts/stage-olkil-env.js",
-    "link-olkil-engine": "node ./scripts/link-olkil-engine.js",
     "playwright:install": "playwright install chromium",
     "rebuild-native": "node ./scripts/rebuild-native.js --target=electron",
     "download-extension": "cross-env DEBUG=InstallExtension node scripts/download-extensions.js",
@@ -152,11 +151,6 @@
     "node-gyp": "*"
   },
   "dependencies": {
-    "@olkil/agents": "file:packages/olkil-engine/agents",
-    "@olkil/core": "file:packages/olkil-engine/core",
-    "@olkil/engine": "file:packages/olkil-engine/sdk",
-    "@olkil/llms": "file:packages/olkil-engine/llms",
-    "@olkil/shared": "file:packages/olkil-engine/shared",
     "@opensumi/ide-ai-native": "3.2.1",
     "@opensumi/ide-design": "3.2.1",
     "electron-updater": "^6.3.9",
