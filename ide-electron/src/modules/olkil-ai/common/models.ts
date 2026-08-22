@@ -33,6 +33,15 @@ export const AI_MODELS: AiModelOption[] = [
     publicName: 'DeepSeek V4 Flash',
   },
   {
+    id: 'deepseek:deepseek-v4-pro',
+    provider: 'deepseek',
+    model: 'deepseek-v4-pro',
+    label: 'DeepSeek V4 Pro',
+    displayName: 'DeepSeek V4 Pro',
+    badge: 'CLOUD',
+    publicName: 'DeepSeek V4 Pro',
+  },
+  {
     id: 'poolside:poolside/laguna-s-2.1',
     provider: 'poolside',
     model: 'poolside/laguna-s-2.1',

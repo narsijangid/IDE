@@ -312,6 +312,66 @@ function extBadge(name: string): string {
   return ext.slice(0, 3).toUpperCase();
 }
 
+function isPlaceholderPreview(lines?: FileDiffLine[]): boolean {
+  if (!lines?.length) {
+    return true;
+  }
+  return lines.every(
+    (line) =>
+      line.type === 'gap' ||
+      (line.type === 'context' && /no line changes/i.test(line.text || '')),
+  );
+}
+
+function cardDiffLines(change: FileChangeInfo): FileDiffLine[] {
+  if (!isPlaceholderPreview(change.preview)) {
+    return change.preview;
+  }
+  const fromHunks = (change.hunks || []).flatMap((h) => h.preview || []);
+  if (fromHunks.some((line) => line.type === 'add' || line.type === 'del')) {
+    return fromHunks;
+  }
+  const bits: FileDiffLine[] = [];
+  if (change.additions > 0) {
+    bits.push({
+      type: 'add',
+      lineNumber: 1,
+      text: `${change.additions} line${change.additions === 1 ? '' : 's'} added`,
+    });
+  }
+  if (change.deletions > 0) {
+    bits.push({
+      type: 'del',
+      lineNumber: 1,
+      text: `${change.deletions} line${change.deletions === 1 ? '' : 's'} removed`,
+    });
+  }
+  return bits;
+}
+
+function cardDiffSummary(change: FileChangeInfo): string {
+  const summary = (change.summary || '').trim();
+  if (summary && !/^no line-level changes$/i.test(summary)) {
+    return summary;
+  }
+  const hunkTitle = (change.hunks || [])
+    .map((h) => h.title)
+    .filter(Boolean)
+    .slice(0, 3)
+    .join(' · ');
+  if (hunkTitle) {
+    return hunkTitle;
+  }
+  const bits: string[] = [];
+  if (change.additions > 0) {
+    bits.push(`+${change.additions} line${change.additions === 1 ? '' : 's'}`);
+  }
+  if (change.deletions > 0) {
+    bits.push(`−${change.deletions} line${change.deletions === 1 ? '' : 's'}`);
+  }
+  return bits.join(', ');
+}
+
 function DiffPreview({ lines }: { lines: FileDiffLine[] }) {
   return (
     <div className={styles.diffBody}>
@@ -365,7 +425,9 @@ function FileChangeCard({
         ? `Deleted ${change.displayName}`
         : change.displayName;
   const pending = change.status === 'pending';
-  const previewLines = expanded ? change.preview : change.preview?.slice(0, 16);
+  const preview = cardDiffLines(change);
+  const previewLines = expanded ? preview : preview.slice(0, 16);
+  const summary = cardDiffSummary(change);
 
   return (
     <div className={`${styles.fileCard} ${pending ? styles.fileCardShine : ''} ${styles[`status_${change.status}`] || ''}`}>
@@ -388,8 +450,8 @@ function FileChangeCard({
         </span>
       </div>
 
-      {previewLines?.length ? <DiffPreview lines={previewLines} /> : null}
-      {change.preview && change.preview.length > 16 ? (
+      {previewLines.length ? <DiffPreview lines={previewLines} /> : null}
+      {preview.length > 16 ? (
         <button type="button" className={styles.expandDiffBtn} onClick={() => setExpanded((v) => !v)}>
           {expanded ? 'Collapse diff' : 'Show full diff'}
         </button>
@@ -423,7 +485,7 @@ function FileChangeCard({
         </div>
       ) : null}
 
-      {change.summary ? <div className={styles.fileSummary}>{change.summary}</div> : null}
+      {summary ? <div className={styles.fileSummary}>{summary}</div> : null}
 
       <div className={styles.fileCardActions}>
         {pending ? (

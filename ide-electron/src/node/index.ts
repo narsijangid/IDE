@@ -19,7 +19,7 @@ import { MiniCodeDesktopNodeModule } from './module';
 import { ExtensionManagerModule } from '../extensionManager/node';
 import { OlkilAiNodeModule } from '../modules/olkil-ai/node';
 import { OlkilAuthNodeModule } from '../modules/olkil-auth/node';
-import { scheduleClineSdkPrewarm } from '../modules/olkil-ai/node/cline-runtime.service';
+import { scheduleAgentEnginePrewarm } from '../modules/olkil-ai/node/agent-runtime';
 
 export const CommonNodeModules: ConstructorOf<NodeModule>[] = [
   ServerCommonModule,
@@ -43,5 +43,6 @@ startServer({
     process.send('ready');
   }
   // After the extension host has had time to bind its IPC pipe.
-  scheduleClineSdkPrewarm();
+  // OpenCode sidecar only — never prewarm the isolated Cline SDK.
+  scheduleAgentEnginePrewarm();
 });

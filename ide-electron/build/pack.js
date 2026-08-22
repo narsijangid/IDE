@@ -89,6 +89,20 @@ if (fs.existsSync(ollamaDir)) {
   );
 }
 
+const opencodeDir = path.join(__dirname, 'opencode');
+if (fs.existsSync(opencodeDir)) {
+  extraResources.push({
+    from: opencodeDir,
+    to: 'opencode',
+    filter: ['**/*'],
+  });
+  console.log('[pack] Bundling OpenCode sidecar from', opencodeDir);
+} else {
+  console.warn(
+    '[pack] build/opencode not found — run `yarn stage-opencode` so the coding agent can start.',
+  );
+}
+
 // Auto-update publish targets:
 // - generic → Hostinger feed at updates.olkil.com (primary for installed apps)
 // - github  → Releases mirror / backup (set GH_TOKEN to enable upload)

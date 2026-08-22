@@ -1,7 +1,7 @@
 /**
  * OLKIL coding-agent runtime host (Node).
- * Engine: vendored @olkil/engine (forked Cline SDK source under packages/olkil-engine).
- * User-facing branding: OLKIL only.
+ * Isolated / legacy: only used when OLKIL_AGENT_ENGINE=cline.
+ * Default engine is OpenCode (`opencode-runtime.service.ts`).
  */
 import * as fs from 'fs';
 import * as os from 'os';

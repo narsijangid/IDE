@@ -250,6 +250,7 @@ export class OlkilVirtualOfficeService extends Disposable implements IOlkilVirtu
           mode,
           modelId: opts?.modelId,
           autoApprove: mode === 'agent',
+          conversationId: `vo:${task.id}`,
         });
       } catch (err: any) {
         this.finishTask(task.id, { status: 'failed', error: err?.message || String(err) });

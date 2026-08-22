@@ -38,7 +38,7 @@ import {
 } from './embedded-secrets';
 import { CommandRunner } from './command-runner';
 import { BrowserTestService } from './browser-test.service';
-import { getOlkilClineRuntime } from './cline-runtime.service';
+import { getOlkilAgentRuntime } from './agent-runtime';
 import type { ClineEngineRunRequest, ClineEngineRunState } from '../common';
 import { assertOlkilWallet, chargeOlkilWallet, countOlkilTokensFromUnknown } from './olkil-wallet.service';
 
@@ -462,15 +462,15 @@ export class OlkilAiNodeService implements IOlkilAiNodeService {
   }
 
   async clineRun(request: ClineEngineRunRequest): Promise<ClineEngineRunState> {
-    return getOlkilClineRuntime().run(request);
+    return getOlkilAgentRuntime().run(request);
   }
 
   async clineGetState(runId: string): Promise<ClineEngineRunState> {
-    return getOlkilClineRuntime().getState(runId);
+    return getOlkilAgentRuntime().getState(runId);
   }
 
   async clineCancel(runId: string): Promise<boolean> {
-    return getOlkilClineRuntime().cancel(runId);
+    return getOlkilAgentRuntime().cancel(runId);
   }
 
   private getKey(provider: AiProviderId): string {

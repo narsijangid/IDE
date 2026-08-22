@@ -5,6 +5,9 @@ export const IOlkilAiNodeService = 'IOlkilAiNodeService';
 export const IOlkilChatService = 'IOlkilChatService';
 export const IOlkilChatUiService = 'IOlkilChatUiService';
 
+export { parseOlkilAgentEngine, DEFAULT_OLKIL_AGENT_ENGINE } from './agent-engine';
+export type { OlkilAgentEngine } from './agent-engine';
+
 export type ChatRole = 'system' | 'user' | 'assistant' | 'tool';
 
 export interface ChatToolCall {
@@ -417,17 +420,17 @@ export interface IOlkilAiNodeService {
   liveTest(request: LiveTestRequest): Promise<LiveTestResult>;
 
   /**
-   * Run a full Cline Agent session (default tools + Cline loop) in the Node host.
-   * Branding stays OLKIL via system prompt; engine is @cline/sdk.
+   * Run the coding agent (OpenCode sidecar by default; Cline if OLKIL_AGENT_ENGINE=cline).
+   * Branding stays OLKIL.
    */
   clineRun(request: ClineEngineRunRequest): Promise<ClineEngineRunState>;
-  /** Poll live Cline run text / tool activities. */
+  /** Poll live agent text / tool activities. */
   clineGetState(runId: string): Promise<ClineEngineRunState>;
-  /** Abort an in-flight Cline run. */
+  /** Abort an in-flight agent run. */
   clineCancel(runId: string): Promise<boolean>;
 }
 
-/** Request payload for the embedded Cline engine. */
+/** Request payload for the embedded coding agent. */
 export interface ClineEngineRunRequest {
   runId: string;
   prompt: string;
@@ -437,6 +440,8 @@ export interface ClineEngineRunRequest {
   modelId?: string;
   rules?: string;
   autoApprove?: boolean;
+  /** Stable Olkil chat id — OpenCode reuses this session so large repos are not re-explored every turn. */
+  conversationId?: string;
 }
 
 export interface ClineEngineActivity {

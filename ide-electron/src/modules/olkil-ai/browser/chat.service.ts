@@ -255,10 +255,9 @@ export class OlkilChatService extends Disposable implements IOlkilChatService {
 
   async init() {
     try {
-      // Warm the persisted repository map in the node process while the user
-      // reads the welcome screen. The first real request can then retrieve
-      // context immediately even for a large workspace.
-      void this.aiNode.ensureRepositoryIndex(this.workspaceRoot()).catch(() => undefined);
+      // OpenCode explores on demand (grep/LSP). Do not warm a 120k-file index
+      // in the IDE node process — that is a prime cause of large-repo stalls.
+
       this.models = await this.aiNode.listModels();
       this.modelName = await this.aiNode.getModelName(this.modelId);
       const option = findModel(this.modelId);
@@ -1223,7 +1222,8 @@ Required loop:
         // Built-in loop owns live_test / browser_* tools. Cline does not.
         reply = await this.runAgentLoop(pendingId);
       } else {
-        // Full Cline engine (@cline/sdk Agent + default tools). Falls back to legacy loop only if SDK fails to load.
+        // OpenCode sidecar by default. Falls back to built-in loop only if the
+        // isolated Cline SDK is selected and fails to load.
         try {
           reply = await this.runClineEngine(pendingId, enriched);
         } catch (clineErr: any) {
@@ -1563,7 +1563,7 @@ Required loop:
   }
 
   private sanitizeUserFacingReply(text: string): string {
-    const t = (text || '').trim();
+    const t = this.stripHiddenEngineWrap(text || '').trim();
     if (!t) return '';
     if (this.looksLikeStallFallback(t)) return '';
     if (this.looksLikeGarbageToolDump(t)) {
@@ -2582,7 +2582,7 @@ Read the highest-scoring evidence in trail order. For a bug, trace UI → handle
   }
 
   /**
-   * OLKIL coding agent (Cline-engine under the hood).
+   * OLKIL coding agent (OpenCode sidecar under the hood; Cline isolated).
    * Live tools / thinking / file-change cards surface in the Olkil chat UI.
    */
   private async runClineEngine(pendingId: string, prompt: string): Promise<string> {
@@ -2610,6 +2610,7 @@ Read the highest-scoring evidence in trail order. For a bug, trace UI → handle
       modelId: this.modelId,
       rules: projectRules,
       autoApprove: this.chatMode === 'agent',
+      conversationId: this.sessionId,
     });
 
     const seenActivities = new Set<string>();
@@ -4320,8 +4321,34 @@ Read the highest-scoring evidence in trail order. For a bug, trace UI → handle
   }
 
   /** Safe text for the assistant bubble — never DSML / tool XML. */
+  /** Hide internal OLKIL/OpenCode prompt wrapping from the chat bubble. */
+  private stripHiddenEngineWrap(text: string): string {
+    let t = (text || '').replace(/\r\n/g, '\n');
+    if (!t.trim()) {
+      return '';
+    }
+    if (
+      !/You are the coding agent inside OLKIL/i.test(t) &&
+      !/<user_input\s+mode=/i.test(t) &&
+      !/<userinput\s+mode=/i.test(t) &&
+      !/<project_rules>/i.test(t)
+    ) {
+      return t;
+    }
+    t = t.replace(/You are the coding agent inside OLKIL IDE\.[^\n]*/gi, '');
+    t = t.replace(/Product name:\s*OLKIL[^\n]*/gi, '');
+    t = t.replace(/Workspace:\s*[^\n]*/gi, '');
+    t = t.replace(/Active file:\s*[^\n]*/gi, '');
+    t = t.replace(/<project_rules>[\s\S]*?<\/project_rules>/gi, '');
+    t = t.replace(/<user_input\s+mode="[^"]*">[\s\S]*?<\/user_input>/gi, '');
+    t = t.replace(/<userinput\s+mode="[^"]*">[\s\S]*?<\/userinput>/gi, '');
+    t = t.replace(/<\/?user_input[^>]*>/gi, '');
+    t = t.replace(/<\/?userinput[^>]*>/gi, '');
+    return t.replace(/\n{3,}/g, '\n\n').trim();
+  }
+
   private bubbleSafeContent(text: string): string {
-    const raw = text || '';
+    const raw = this.stripHiddenEngineWrap(text || '');
     if (this.looksLikeGarbageToolDump(raw)) {
       const cleaned = this.stripGarbageToolDump(raw);
       if (!cleaned || this.looksLikeGarbageToolDump(cleaned) || cleaned.length < 24) {
