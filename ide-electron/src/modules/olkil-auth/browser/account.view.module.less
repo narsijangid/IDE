@@ -619,7 +619,19 @@
 }
 
 .modelName {
+  display: flex;
+  align-items: center;
+  gap: 8px;
   font-weight: 600;
+}
+
+.modelProviderIcon {
+  flex-shrink: 0;
+  width: 22px;
+  height: 22px;
+  object-fit: contain;
+  display: block;
+  pointer-events: none;
 }
 
 .modelSub {

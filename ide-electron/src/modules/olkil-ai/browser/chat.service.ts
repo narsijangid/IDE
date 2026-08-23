@@ -817,6 +817,7 @@ Required loop:
     this.liveTestBootPromise = null;
     this.liveTestBootResult = null;
     this.finishVoLiveQa('cancelled');
+    this.completeOpenActivities();
     this.status = 'Stopped';
     this.busy = false;
     this.fire();
@@ -1328,11 +1329,13 @@ Required loop:
                 m.activity.kind !== 'thinking' &&
                 Boolean(m.activity.done),
         );
+      const recapDump = this.looksLikeWorkspaceRecap(reply);
       if (
         (!finalText || this.looksLikeStallFallback(finalText)) &&
         this.stallAutoRetries < 1 &&
         !this.cancelRequested &&
-        !hadProgress
+        !hadProgress &&
+        !recapDump
       ) {
         this.stallAutoRetries += 1;
         this.setStatus('Provider stall — auto-resuming…');
@@ -1438,6 +1441,7 @@ Required loop:
         this.setStatus('');
       }
     } finally {
+      this.completeOpenActivities();
       this.busy = false;
       if (this.liveTesting) {
         this.liveTesting = false;
@@ -1648,6 +1652,8 @@ Required loop:
     }
     if (!t) return '';
     if (this.looksLikeStallFallback(t)) return '';
+    t = this.stripWorkspaceRecap(t);
+    if (!t) return '';
     if (this.looksLikeGarbageToolDump(t)) {
       const cleaned = this.bubbleSafeContent(t);
       return cleaned || '';
@@ -1657,6 +1663,42 @@ Required loop:
       return '';
     }
     return this.formatAnswerForUi(t);
+  }
+
+  private looksLikeWorkspaceRecap(text: string): boolean {
+    const t = text || '';
+    let n = 0;
+    if (/\bObjective\b/i.test(t)) n++;
+    if (/\bWork State\b/i.test(t)) n++;
+    if (/\bNext Move\b/i.test(t)) n++;
+    if (/\bImportant Details\b/i.test(t)) n++;
+    if (/\bRelevant Files\b/i.test(t)) n++;
+    if (/\bAwait the user's actual task\b/i.test(t)) n++;
+    if (/\bCompacting context\b/i.test(t)) n++;
+    return n >= 2;
+  }
+
+  private stripWorkspaceRecap(text: string): string {
+    if (!this.looksLikeWorkspaceRecap(text)) return text || '';
+    let t = (text || '').replace(/\r\n/g, '\n');
+    const cut = t.search(
+      /^\s*(?:#{1,3}\s*)?(?:Agent|Objective|Important Details|Work State|Next Move|Relevant Files)\s*$/im,
+    );
+    if (cut >= 0) {
+      t = t.slice(0, cut).trim();
+    }
+    if (!t || this.looksLikeWorkspaceRecap(t) || t.length < 8) {
+      return '';
+    }
+    return t;
+  }
+
+  private isHousekeepingActivity(a: { id?: string; label?: string }): boolean {
+    const label = String(a.label || '');
+    const id = String(a.id || '');
+    if (/^compact/i.test(id) || /compact/i.test(label)) return true;
+    if (/^(question|task)$/i.test(label.trim())) return true;
+    return false;
   }
 
   /**
@@ -2782,7 +2824,7 @@ Read the highest-scoring evidence in trail order. For a bug, trace UI → handle
       }
       if (st.text && st.text !== lastText) {
         lastText = st.text;
-        if (!this.looksLikeGarbageToolDump(st.text)) {
+        if (!this.looksLikeGarbageToolDump(st.text) && !this.looksLikeWorkspaceRecap(st.text)) {
           const painted = this.bubbleSafeContent(st.text);
           if (painted.trim().length > 0) {
             this.patchUi(pendingId, { content: painted, pending: true });
@@ -2792,6 +2834,9 @@ Read the highest-scoring evidence in trail order. For a bug, trace UI → handle
       }
       for (const a of st.activities || []) {
         if (a.id === 'thinking_live') {
+          continue;
+        }
+        if (this.isHousekeepingActivity(a)) {
           continue;
         }
         if (!seenActivities.has(a.id)) {
@@ -4430,6 +4475,22 @@ Read the highest-scoring evidence in trail order. For a bug, trace UI → handle
     }
   }
 
+  /** Mark every in-progress activity done so the chat loader cannot keep spinning. */
+  private completeOpenActivities() {
+    let changed = false;
+    for (const m of this.messages) {
+      if (m.role === 'activity' && m.activity && !m.activity.done) {
+        const nextLabel = this.toPastActivityLabel(m.activity.label);
+        m.activity = { ...m.activity, done: true, label: nextLabel };
+        m.content = m.activity.label;
+        changed = true;
+      }
+    }
+    if (changed) {
+      this.fire();
+    }
+  }
+
   private insertBeforePending(pendingId: string, msg: UiChatMessage) {
     const idx = this.messages.findIndex((m) => m.id === pendingId);
     if (idx >= 0) {
@@ -4557,7 +4618,10 @@ Read the highest-scoring evidence in trail order. For a bug, trace UI → handle
   }
 
   private bubbleSafeContent(text: string): string {
-    const raw = this.stripHiddenEngineWrap(text || '');
+    const raw = this.stripWorkspaceRecap(this.stripHiddenEngineWrap(text || ''));
+    if (!raw) {
+      return '';
+    }
     if (this.looksLikeGarbageToolDump(raw)) {
       const cleaned = this.stripGarbageToolDump(raw);
       if (!cleaned || this.looksLikeGarbageToolDump(cleaned) || cleaned.length < 24) {

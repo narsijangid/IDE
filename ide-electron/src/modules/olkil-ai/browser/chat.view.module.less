@@ -276,6 +276,21 @@
   overflow: hidden;
 }
 
+.modelProviderIcon {
+  flex-shrink: 0;
+  width: 20px;
+  height: 20px;
+  object-fit: contain;
+  display: block;
+  pointer-events: none;
+  user-select: none;
+}
+
+.modelOption .modelProviderIcon {
+  width: 22px;
+  height: 22px;
+}
+
 .modelSelectChevron {
   flex-shrink: 0;
   color: rgba(255, 255, 255, 0.45);
@@ -825,17 +840,17 @@
   align-items: center;
   gap: 8px;
   padding: 6px 2px 10px;
-  min-height: 28px;
+  min-height: 36px;
 }
 
-.liveStatusSpin {
+.thinkingLoader {
   flex-shrink: 0;
-  width: 10px;
-  height: 10px;
-  border-radius: 50%;
-  border: 1.5px solid rgba(254, 1, 154, 0.28);
-  border-top-color: rgba(254, 1, 154, 0.95);
-  animation: activitySpin 0.7s linear infinite;
+  width: 28px;
+  height: 28px;
+  object-fit: contain;
+  display: block;
+  pointer-events: none;
+  user-select: none;
 }
 
 .liveStatusText {
@@ -945,26 +960,14 @@
   font-variant-numeric: tabular-nums;
 }
 
-.activityLive .activityGlyph {
-  width: 10px;
-  height: 10px;
-  border-radius: 50%;
-  border: 1.5px solid rgba(254, 1, 154, 0.35);
-  border-top-color: rgba(254, 1, 154, 0.95);
-  font-size: 0;
-  color: transparent;
-  animation: activitySpin 0.7s linear infinite;
+.activityLive .thinkingLoader {
+  width: 24px;
+  height: 24px;
 }
 
 .activityDone .activityGlyph {
   color: rgba(134, 239, 172, 0.85);
   opacity: 1;
-}
-
-@keyframes activitySpin {
-  to {
-    transform: rotate(360deg);
-  }
 }
 
 @keyframes activityIn {

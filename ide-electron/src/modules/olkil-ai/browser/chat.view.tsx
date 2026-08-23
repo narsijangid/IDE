@@ -20,7 +20,8 @@ import {
   basenamePath,
 } from '../common/virtual-office';
 import { MarkdownMessage } from './markdown';
-import { LiveStatusBar, useLiveStatusLabel, useWorkspaceRoot } from './live-status-rotator';
+import { LiveStatusBar, ThinkingLoader, useLiveStatusLabel, useWorkspaceRoot } from './live-status-rotator';
+import { DeepSeekIcon, isDeepSeekProvider } from './deepseek-icon';
 import { CheckIcon, CopyIcon, RefreshIcon, SendIcon, ShieldStarIcon, StopIcon } from './icons';
 import styles from './chat.view.module.less';
 import logoUrl from './olkil-logo.png';
@@ -108,28 +109,35 @@ function ExplorationGroup({
   parent,
   items,
   onOpenPath,
+  busy,
 }: {
   parent: UiChatMessage;
   items: UiChatMessage[];
   onOpenPath: (path: string) => void;
+  busy: boolean;
 }) {
   const a = parent.activity;
   const [open, setOpen] = useState(false);
   if (!a) return null;
+  const spinning = busy && !a.done;
   const files =
     a.filesExplored ?? new Set(items.map((c) => c.activity?.filePath).filter(Boolean)).size;
   const searches =
     a.searchCount ?? items.filter((c) => c.activity?.kind === 'searching').length;
   const label =
-    a.done && (files || searches)
+    !spinning && (files || searches)
       ? a.label || `Explored ${files} files, ${searches} searches`
       : a.label;
   return (
-    <div className={`${styles.activityGroup} ${a.done ? styles.activityDone : styles.activityLive}`}>
+    <div className={`${styles.activityGroup} ${spinning ? styles.activityLive : styles.activityDone}`}>
       <button type="button" className={styles.activityGroupHeader} onClick={() => setOpen((v) => !v)}>
-        <span className={styles.activityGlyph} aria-hidden>
-          {activityGlyph(a.kind, a.done)}
-        </span>
+        {spinning ? (
+          <ThinkingLoader />
+        ) : (
+          <span className={styles.activityGlyph} aria-hidden>
+            {activityGlyph(a.kind, true)}
+          </span>
+        )}
         <span className={styles.activityLabel}>{label}</span>
         <span className={styles.activityGroupMeta}>
           {files ? `${files} files` : ''}
@@ -141,7 +149,7 @@ function ExplorationGroup({
       {open ? (
         <div className={styles.activityGroupBody}>
           {items.map((child) => (
-            <ActivityRow key={child.id} message={child} onOpenPath={onOpenPath} />
+            <ActivityRow key={child.id} message={child} onOpenPath={onOpenPath} busy={busy} />
           ))}
         </div>
       ) : null}
@@ -152,15 +160,18 @@ function ExplorationGroup({
 function ActivityRow({
   message,
   onOpenPath,
+  busy,
 }: {
   message: UiChatMessage;
   onOpenPath: (path: string) => void;
+  busy: boolean;
 }) {
   const a = message.activity;
   const [open, setOpen] = useState(false);
   if (!a) {
     return null;
   }
+  const spinning = busy && !a.done;
   const previewRaw = a.resultPreview || '';
   const previewIsJunk = /DSML|tool_calls|｜DSML｜|<invoke\b|parameter\s+name=/i.test(previewRaw);
   const safePreview = previewIsJunk ? '' : previewRaw;
@@ -179,7 +190,7 @@ function ActivityRow({
       : undefined;
   return (
     <div
-      className={`${styles.activityCard} ${a.done ? styles.activityDone : styles.activityLive} ${
+      className={`${styles.activityCard} ${spinning ? styles.activityLive : styles.activityDone} ${
         styles[`activity_${a.kind}`] || ''
       }`}
     >
@@ -189,9 +200,13 @@ function ActivityRow({
         onClick={() => expandable && setOpen((v) => !v)}
         disabled={!expandable}
       >
-        <span className={styles.activityGlyph} aria-hidden>
-          {activityGlyph(a.kind, a.done)}
-        </span>
+        {spinning ? (
+          <ThinkingLoader />
+        ) : (
+          <span className={styles.activityGlyph} aria-hidden>
+            {activityGlyph(a.kind, true)}
+          </span>
+        )}
         <span className={styles.activityLabel}>{a.label}</span>
         {a.exitCode != null ? (
           <span className={a.exitCode === 0 ? styles.activityOk : styles.activityFail}>
@@ -877,7 +892,7 @@ export const OlkilAiChatView = ({ dormant = false }: OlkilAiChatViewProps) => {
     void chat.startLiveTest(goal);
   }, [liveTestPrompt, busy, chat]);
 
-  const renderModelLabel = (m?: { displayName?: string; badge?: string; label: string }) => {
+  const renderModelLabel = (m?: { displayName?: string; badge?: string; label: string; provider?: string }) => {
     if (!m) {
       return null;
     }
@@ -887,6 +902,7 @@ export const OlkilAiChatView = ({ dormant = false }: OlkilAiChatViewProps) => {
       badge === 'FREE' ? styles.modelBadgeFree : badge === 'LOCAL' ? styles.modelBadgeLocal : styles.modelBadge;
     return (
       <>
+        {isDeepSeekProvider(m.provider) ? <DeepSeekIcon className={styles.modelProviderIcon} /> : null}
         <span className={styles.modelName}>{name}</span>
         {badge ? <span className={badgeClass}>{badge}</span> : null}
       </>
@@ -1270,6 +1286,7 @@ export const OlkilAiChatView = ({ dormant = false }: OlkilAiChatViewProps) => {
                   parent={row.parent}
                   items={row.children}
                   onOpenPath={(p) => void chat.openPath(p)}
+                  busy={busy}
                 />
               </div>
             );
@@ -1278,7 +1295,7 @@ export const OlkilAiChatView = ({ dormant = false }: OlkilAiChatViewProps) => {
           if (m.role === 'activity' && m.activity) {
             return (
               <div key={m.id} className={styles.rowLeft}>
-                <ActivityRow message={m} onOpenPath={(p) => void chat.openPath(p)} />
+                <ActivityRow message={m} onOpenPath={(p) => void chat.openPath(p)} busy={busy} />
               </div>
             );
           }

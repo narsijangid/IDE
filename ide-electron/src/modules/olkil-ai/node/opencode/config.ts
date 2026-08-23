@@ -106,6 +106,10 @@ export function buildOpencodeConfigContent(
       doom_loop: 'allow',
       external_directory: 'deny',
     },
+    // Auto-compact dumps a session recap and often stops the turn before edits.
+    compaction: {
+      auto: false,
+    },
     provider: {
       deepseek: {
         npm: '@ai-sdk/openai-compatible',

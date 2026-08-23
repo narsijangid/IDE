@@ -20,7 +20,6 @@ import { assertOlkilWallet, chargeOlkilWallet, addApiUsage, parseProviderUsage, 
 import { opencodeAgentForMode, opencodeModelRef, toOpencodeMcp } from './opencode/config';
 import { OpencodeSidecar } from './opencode/sidecar';
 import type { OpencodeMcpServer, OpencodeProviderSecrets } from './opencode/config';
-import { loadRuntimeMcpServers } from './mcp-discover';
 
 type ActivityKind = ClineEngineActivity['kind'];
 
@@ -137,6 +136,23 @@ function toolKind(name: string): ActivityKind {
     return 'todo';
   }
   return 'info';
+}
+
+function isInternalToolName(name: string): boolean {
+  return /^(question|task)$/i.test(String(name || '').trim());
+}
+
+function looksLikeSessionRecap(text: string): boolean {
+  const t = text || '';
+  let n = 0;
+  if (/\bObjective\b/i.test(t)) n++;
+  if (/\bWork State\b/i.test(t)) n++;
+  if (/\bNext Move\b/i.test(t)) n++;
+  if (/\bImportant Details\b/i.test(t)) n++;
+  if (/\bRelevant Files\b/i.test(t)) n++;
+  if (/\bAwait the user's actual task\b/i.test(t)) n++;
+  if (/\bCompacting context\b/i.test(t)) n++;
+  return n >= 2;
 }
 
 function friendlyToolLabel(name: string, input: Record<string, unknown>): string {
@@ -382,6 +398,7 @@ export class OlkilOpencodeRuntimeHost {
       `You are the coding agent inside OLKIL IDE. Product name: OLKIL. Workspace: ${
         request.workspaceRoot?.trim() || '(no folder open)'
       }.`,
+      `Stay in the workspace. Do the requested work with tools. Reply with a short result — not a status report.`,
     ];
     if (request.activeFile) {
       bits.push(`Active file: ${request.activeFile}`);
@@ -477,6 +494,9 @@ export class OlkilOpencodeRuntimeHost {
           if (live.userMessageIds.has(String(part.messageID || '')) || isHiddenEngineWrap(part.text)) {
             break;
           }
+          if (looksLikeSessionRecap(part.text)) {
+            break;
+          }
           state.text = part.text;
           state.status = 'Writing';
         } else if (part.type === 'reasoning' && typeof part.text === 'string') {
@@ -497,13 +517,7 @@ export class OlkilOpencodeRuntimeHost {
           }
           this.queueDiffSync(live);
         } else if (part.type === 'compaction') {
-          state.status = 'Compacting context';
-          this.upsertActivity(state, {
-            id: `compact_${part.id}`,
-            kind: 'info',
-            label: 'Compacting context for this large project',
-            done: false,
-          });
+          break;
         } else if (part.type === 'step-finish') {
           const stepUsage = parseProviderUsage(part.tokens || part.usage);
           if (stepUsage) {
@@ -556,17 +570,11 @@ export class OlkilOpencodeRuntimeHost {
         break;
       }
       case 'session.compacted':
-        this.upsertActivity(state, {
-          id: `compacted_${Date.now()}`,
-          kind: 'done',
-          label: 'Context compacted',
-          done: true,
-        });
         break;
       case 'todo.updated': {
         const todos = event.properties?.todos || [];
         const active = todos.find((t: any) => t.status === 'in_progress') || todos[0];
-        if (active?.content) {
+        if (active?.content && !looksLikeSessionRecap(String(active.content))) {
           this.upsertActivity(state, {
             id: `todo_${active.id || 'live'}`,
             kind: 'todo',
@@ -594,6 +602,14 @@ export class OlkilOpencodeRuntimeHost {
   private applyToolPart(live: LiveRun, part: any): void {
     const state = live.state;
     const name = String(part.tool || 'tool');
+    if (isInternalToolName(name)) {
+      const think = state.activities.find((a) => a.id === 'thinking_live' && !a.done);
+      if (think) {
+        think.done = true;
+        think.label = 'Thought';
+      }
+      return;
+    }
     const id = String(part.callID || part.id);
     const input = inputFromPart(part);
     const meta = part.state?.metadata && typeof part.state.metadata === 'object' ? part.state.metadata : {};
@@ -784,11 +800,9 @@ export class OlkilOpencodeRuntimeHost {
   }
 
   private mergeMcp(request: ClineEngineRunRequest): OpencodeMcpServer[] {
-    const discovered = loadRuntimeMcpServers(request.workspaceRoot, request.mcpDiscoveredDisabled || []);
+    // Only MCP added in OLKIL Settings. Auto-wiring Cursor/Hostinger servers
+    // floods the agent with extra tools and triggers endless compaction.
     const byName = new Map<string, OpencodeMcpServer>();
-    for (const server of discovered) {
-      byName.set(server.name, server);
-    }
     for (const server of request.mcpServers || []) {
       if (!server?.name || server.enabled === false) {
         continue;

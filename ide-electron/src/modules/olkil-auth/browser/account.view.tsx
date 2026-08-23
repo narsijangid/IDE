@@ -11,6 +11,7 @@ import {
   OlkilAiNodeServicePath,
 } from 'modules/olkil-ai/common';
 import { AI_MODELS } from 'modules/olkil-ai/common/models';
+import { DeepSeekIcon, isDeepSeekProvider } from 'modules/olkil-ai/browser/deepseek-icon';
 import logoUrl from '../../../browser/assets/olkil-logo.png';
 import { IOlkilAuthService, OlkilAuthUser } from '../common';
 import {
@@ -610,6 +611,9 @@ function ModelsPane({
               <div key={model.id} className={`${styles.modelItem} ${on ? '' : styles.modelItemOff}`}>
                 <div>
                   <div className={styles.modelName}>
+                    {isDeepSeekProvider(model.provider) ? (
+                      <DeepSeekIcon className={styles.modelProviderIcon} />
+                    ) : null}
                     {model.displayName || model.label}
                     {model.badge ? ` · ${model.badge}` : ''}
                   </div>
@@ -742,7 +746,10 @@ function McpPane({
           <div className={styles.mcpHead}>
             <div>
               <p className={styles.rowTitle}>From extensions &amp; editors</p>
-              <p className={styles.rowDesc}>Detected from Cursor, VS Code, and this workspace. Toggle to use in OLKIL.</p>
+              <p className={styles.rowDesc}>
+                Shown for reference from Cursor, VS Code, and this workspace. Add a server below to use it in OLKIL
+                chat — wiring every extension MCP into the agent floods context.
+              </p>
             </div>
             <button type="button" className={`${styles.btn} ${styles.btnGhost}`} onClick={() => void refreshDiscovered()}>
               {loading ? 'Scanning…' : 'Refresh'}
