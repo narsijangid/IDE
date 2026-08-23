@@ -15,7 +15,7 @@ function olkil_dl_app_version() {
 }
 
 function olkil_dl_release_tag() {
-	return 'v' . olkil_dl_app_version() . '-desktop';
+	return 'v' . olkil_dl_app_version();
 }
 
 function olkil_dl_github_base() {
