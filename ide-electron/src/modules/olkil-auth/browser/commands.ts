@@ -10,5 +10,5 @@ export const OLKIL_AUTH_SIGN_OUT = {
 
 export const OLKIL_AUTH_OPEN_ACCOUNT = {
   id: 'olkil.auth.openAccount',
-  label: 'OLKIL Account…',
+  label: 'OLKIL Settings…',
 };

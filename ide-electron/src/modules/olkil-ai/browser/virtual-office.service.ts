@@ -16,6 +16,7 @@ import {
   VirtualOfficeWorkerBrief,
 } from '../common/virtual-office';
 import { IOlkilAiNodeService, OlkilAiNodeServicePath } from '../common';
+import { IOlkilSettingsService } from '../../olkil-auth/common/settings';
 
 const POLL_MS = 400;
 const MAX_ACTIVITIES = 20;
@@ -44,6 +45,9 @@ export class OlkilVirtualOfficeService extends Disposable implements IOlkilVirtu
 
   @Autowired(WorkbenchEditorService)
   private editorService!: WorkbenchEditorService;
+
+  @Autowired(IOlkilSettingsService)
+  private settings!: IOlkilSettingsService;
 
   private readonly _onDidChange = new Emitter<void>();
   readonly onDidChange: Event<void> = this._onDidChange.event;
@@ -239,6 +243,7 @@ export class OlkilVirtualOfficeService extends Disposable implements IOlkilVirtu
     const activeFile = this.editorService.currentResource?.uri.codeUri.fsPath;
     const mode = opts?.mode || 'agent';
     const runId = task.runId;
+    const saved = this.settings.get();
 
     const promise = (async () => {
       try {
@@ -249,7 +254,13 @@ export class OlkilVirtualOfficeService extends Disposable implements IOlkilVirtu
           activeFile,
           mode,
           modelId: opts?.modelId,
-          autoApprove: mode === 'agent',
+          autoApprove: mode === 'agent' && (saved.autoApproveEdits || saved.terminalAutoRun === 'always'),
+          autoApproveEdits: mode === 'agent' && saved.autoApproveEdits,
+          autoApproveWeb: mode === 'agent' && saved.autoApproveWeb,
+          terminalAutoRun: mode === 'agent' ? saved.terminalAutoRun : 'never',
+          terminalAllowlist: saved.terminalAllowlist,
+          mcpServers: saved.mcpServers.filter((server) => server.enabled),
+          mcpDiscoveredDisabled: saved.mcpDiscoveredDisabled,
           conversationId: `vo:${task.id}`,
         });
       } catch (err: any) {

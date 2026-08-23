@@ -146,7 +146,7 @@ electronBuilder
         output: outputPath,
       },
       asar: true,
-      asarUnpack: ['node_modules/@opensumi/ripgrep'],
+      asarUnpack: ['bin/**', 'node_modules/@opensumi/ripgrep/**', 'node_modules/@opensumi/vscode-ripgrep/**'],
       // Native modules are rebuilt via `yarn rebuild-native` (Spectre libs may be missing on some VS installs)
       npmRebuild: process.env.OLKIL_NPM_REBUILD === '1',
       publish: publishProviders,

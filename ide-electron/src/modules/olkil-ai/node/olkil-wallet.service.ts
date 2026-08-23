@@ -42,26 +42,92 @@ export function isMeteredProvider(provider: AiProviderId, _isPaid = false): bool
   return provider === 'deepseek';
 }
 
-/** Same formula as PHP olkil_count_tokens: UTF-8 bytes / 4. */
-export function countOlkilTokens(text: string): number {
-  if (!text) {
-    return 0;
-  }
-  return Math.ceil(Buffer.byteLength(text, 'utf8') / 4);
+export interface OlkilApiUsage {
+  promptTokens: number;
+  completionTokens: number;
+  totalTokens: number;
+  cacheHitTokens: number;
+  cacheMissTokens: number;
+  reasoningTokens: number;
 }
 
-export function countOlkilTokensFromUnknown(value: unknown): number {
-  if (value == null) {
-    return 0;
+function num(value: unknown): number {
+  const n = Number(value);
+  return Number.isFinite(n) && n > 0 ? Math.floor(n) : 0;
+}
+
+/**
+ * Parse DeepSeek / OpenAI-compatible `usage` (and OpenCode step token objects).
+ * Never estimates from text. Reasoning is not added on top of completion —
+ * DeepSeek already includes it in `completion_tokens`.
+ */
+export function parseProviderUsage(raw: unknown): OlkilApiUsage | null {
+  if (!raw || typeof raw !== 'object') {
+    return null;
   }
-  if (typeof value === 'string') {
-    return countOlkilTokens(value);
+  const u = raw as Record<string, any>;
+  const details = u.completion_tokens_details && typeof u.completion_tokens_details === 'object'
+    ? u.completion_tokens_details
+    : {};
+  const cache = u.cache && typeof u.cache === 'object' ? u.cache : {};
+
+  let promptTokens = num(
+    u.prompt_tokens ?? u.promptTokens ?? u.input,
+  );
+  const completionTokens = num(
+    u.completion_tokens ?? u.completionTokens ?? u.output,
+  );
+  const cacheHitTokens = num(
+    u.prompt_cache_hit_tokens ??
+      u.prompt_tokens_details?.cached_tokens ??
+      cache.read,
+  );
+  let cacheMissTokens = num(u.prompt_cache_miss_tokens);
+  const reasoningTokens = num(
+    details.reasoning_tokens ?? u.reasoning_tokens ?? u.reasoning,
+  );
+
+  // OpenCode often stores uncached input separately from cache.read.
+  if (cacheHitTokens > 0 && promptTokens > 0 && promptTokens < cacheHitTokens) {
+    promptTokens += cacheHitTokens;
   }
-  try {
-    return countOlkilTokens(JSON.stringify(value));
-  } catch {
-    return 0;
+  if (cacheMissTokens < 1 && cacheHitTokens > 0 && promptTokens >= cacheHitTokens) {
+    cacheMissTokens = promptTokens - cacheHitTokens;
+  } else if (cacheMissTokens < 1 && cacheHitTokens < 1) {
+    cacheMissTokens = promptTokens;
   }
+
+  const reportedTotal = num(u.total_tokens ?? u.total);
+  const summed = promptTokens + completionTokens;
+  const totalTokens = summed > 0 ? summed : reportedTotal;
+  if (totalTokens < 1) {
+    return null;
+  }
+  return {
+    promptTokens,
+    completionTokens,
+    totalTokens,
+    cacheHitTokens,
+    cacheMissTokens,
+    reasoningTokens,
+  };
+}
+
+export function addApiUsage(a: OlkilApiUsage | null, b: OlkilApiUsage | null): OlkilApiUsage | null {
+  if (!a) {
+    return b;
+  }
+  if (!b) {
+    return a;
+  }
+  return {
+    promptTokens: a.promptTokens + b.promptTokens,
+    completionTokens: a.completionTokens + b.completionTokens,
+    totalTokens: a.totalTokens + b.totalTokens,
+    cacheHitTokens: a.cacheHitTokens + b.cacheHitTokens,
+    cacheMissTokens: a.cacheMissTokens + b.cacheMissTokens,
+    reasoningTokens: a.reasoningTokens + b.reasoningTokens,
+  };
 }
 
 function parseJsonObject(text: string): Record<string, unknown> | null {
@@ -416,15 +482,18 @@ export async function chargeOlkilWallet(opts: {
   inputTokens: number;
   outputTokens: number;
   requestId: string;
+  usage?: OlkilApiUsage | null;
 }): Promise<boolean> {
-  const inputTokens = Math.max(0, Math.floor(opts.inputTokens));
-  const outputTokens = Math.max(0, Math.floor(opts.outputTokens));
-  const tokens = inputTokens + outputTokens;
+  const usage = opts.usage && opts.usage.totalTokens > 0 ? opts.usage : null;
+  const inputTokens = usage ? usage.promptTokens : Math.max(0, Math.floor(opts.inputTokens));
+  const outputTokens = usage ? usage.completionTokens : Math.max(0, Math.floor(opts.outputTokens));
+  const tokens = usage ? usage.totalTokens : inputTokens + outputTokens;
   if (tokens < 1 || !isMeteredProvider(opts.provider)) {
     console.warn('[olkil-wallet] skip charge', {
       provider: opts.provider,
       tokens,
       metered: isMeteredProvider(opts.provider),
+      source: usage ? 'api' : 'none',
     });
     return false;
   }
@@ -440,6 +509,9 @@ export async function chargeOlkilWallet(opts: {
       tokens,
       input_tokens: inputTokens,
       output_tokens: outputTokens,
+      prompt_cache_hit_tokens: usage?.cacheHitTokens || 0,
+      prompt_cache_miss_tokens: usage?.cacheMissTokens || 0,
+      reasoning_tokens: usage?.reasoningTokens || 0,
       model: opts.model,
       provider: opts.provider,
       request_id: opts.requestId,
@@ -477,6 +549,11 @@ export async function chargeOlkilWallet(opts: {
     };
     console.warn('[olkil-wallet] charged', {
       tokens,
+      input: inputTokens,
+      output: outputTokens,
+      cacheHit: usage?.cacheHitTokens || 0,
+      cacheMiss: usage?.cacheMissTokens || 0,
+      reasoning: usage?.reasoningTokens || 0,
       used: sub?.tokens_used,
       left: sub?.tokens_left,
     });

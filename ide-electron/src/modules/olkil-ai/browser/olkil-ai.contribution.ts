@@ -13,6 +13,7 @@ import {
 } from '@opensumi/ide-core-browser';
 import { MenuContribution, IMenuRegistry, MenuId } from '@opensumi/ide-core-browser/lib/menu/next';
 import { IOlkilChatService, IOlkilChatUiService } from '../common';
+import { IOlkilSettingsService } from '../../olkil-auth/common/settings';
 import { OlkilAiOverlay } from './overlay';
 
 export const OLKIL_AI_TOGGLE_COMMAND = {
@@ -50,12 +51,21 @@ export class OlkilAiContribution
   @Autowired(IOlkilChatService)
   private chat!: IOlkilChatService;
 
+  @Autowired(IOlkilSettingsService)
+  private settings!: IOlkilSettingsService;
+
   private host?: HTMLDivElement;
   private reactRoot?: Root;
 
   onDidStart() {
     this.ui.init();
     this.mountOverlay();
+    if (this.settings.get().openAgentOnStart) {
+      this.ui.open();
+    }
+    if (this.settings.get().pinAgentPanel) {
+      this.ui.setPinned(true);
+    }
   }
 
   onStop() {

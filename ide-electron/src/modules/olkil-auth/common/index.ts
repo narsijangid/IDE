@@ -12,8 +12,10 @@ export const OlkilAuthNodeServicePath = 'OlkilAuthNodeServicePath';
 export const IOlkilAuthNodeService = 'IOlkilAuthNodeService';
 export const IOlkilAuthService = 'IOlkilAuthService';
 
-/** Virtual editor scheme for the OLKIL Account tab (Cursor Settings–style). */
+/** Virtual editor scheme for the OLKIL Settings tab (Cursor Settings–style). */
 export const OLKIL_ACCOUNT_SCHEME = 'olkil-account';
+
+export * from './settings';
 
 /** Public Firebase web config (restricted by Auth domain allowlist). */
 export const OLKIL_FIREBASE_CONFIG = {

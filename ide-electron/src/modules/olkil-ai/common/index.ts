@@ -62,6 +62,15 @@ export interface ChatCompletionResult {
   content: string;
   tool_calls?: ChatToolCall[];
   finish_reason?: string;
+  /** DeepSeek (or OpenAI-compatible) usage from the API — never estimated. */
+  usage?: {
+    prompt_tokens?: number;
+    completion_tokens?: number;
+    total_tokens?: number;
+    prompt_cache_hit_tokens?: number;
+    prompt_cache_miss_tokens?: number;
+    completion_tokens_details?: { reasoning_tokens?: number };
+  };
 }
 
 export interface ChatStreamState {
@@ -425,6 +434,20 @@ export interface IOlkilAiNodeService {
   clineGetState(runId: string): Promise<ClineEngineRunState>;
   /** Abort an in-flight agent run. */
   clineCancel(runId: string): Promise<boolean>;
+  /** MCP servers discovered from Cursor/VS Code/extension mcp.json files (no secrets). */
+  listDiscoveredMcpServers(workspaceRoot?: string): Promise<DiscoveredMcpServer[]>;
+}
+
+export interface DiscoveredMcpServer {
+  id: string;
+  name: string;
+  type: 'local' | 'remote';
+  command?: string;
+  url?: string;
+  source: string;
+  sourceKind: 'extension' | 'user' | 'workspace';
+  hasAuth: boolean;
+  fileDisabled: boolean;
 }
 
 /** Request payload for the embedded coding agent. */
@@ -437,6 +460,24 @@ export interface ClineEngineRunRequest {
   modelId?: string;
   rules?: string;
   autoApprove?: boolean;
+  /** File writes inside the workspace */
+  autoApproveEdits?: boolean;
+  /** Public URL fetch */
+  autoApproveWeb?: boolean;
+  /** Shell during a run: always / matching prefixes only / never */
+  terminalAutoRun?: 'always' | 'allowlist' | 'never';
+  terminalAllowlist?: string[];
+  mcpServers?: Array<{
+    name: string;
+    enabled: boolean;
+    type: 'local' | 'remote';
+    command?: string;
+    url?: string;
+    env?: Record<string, string>;
+    headers?: Record<string, string>;
+  }>;
+  /** Discovered MCP ids the user turned off in OLKIL Settings. */
+  mcpDiscoveredDisabled?: string[];
   /** Stable Olkil chat id — OpenCode reuses this session so large repos are not re-explored every turn. */
   conversationId?: string;
 }

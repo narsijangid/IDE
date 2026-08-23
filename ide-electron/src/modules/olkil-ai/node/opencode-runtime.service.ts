@@ -1,3 +1,4 @@
+import * as crypto from 'crypto';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
@@ -15,10 +16,11 @@ import {
   EMBEDDED_ENV,
   EMBEDDED_POOLSIDE_API_KEY,
 } from './embedded-secrets';
-import { assertOlkilWallet, chargeOlkilWallet, countOlkilTokens, isLocalProvider } from './olkil-wallet.service';
-import { opencodeAgentForMode, opencodeModelRef } from './opencode/config';
+import { assertOlkilWallet, chargeOlkilWallet, addApiUsage, parseProviderUsage, type OlkilApiUsage } from './olkil-wallet.service';
+import { opencodeAgentForMode, opencodeModelRef, toOpencodeMcp } from './opencode/config';
 import { OpencodeSidecar } from './opencode/sidecar';
-import type { OpencodeProviderSecrets } from './opencode/config';
+import type { OpencodeMcpServer, OpencodeProviderSecrets } from './opencode/config';
+import { loadRuntimeMcpServers } from './mcp-discover';
 
 type ActivityKind = ClineEngineActivity['kind'];
 
@@ -33,8 +35,13 @@ interface LiveRun {
   directory: string;
   state: ClineEngineRunState;
   autoApprove: boolean;
+  autoApproveEdits: boolean;
+  autoApproveWeb: boolean;
+  terminalAutoRun: 'always' | 'allowlist' | 'never';
+  terminalAllowlist: string[];
   inputTokens: number;
   outputTokens: number;
+  apiUsage: OlkilApiUsage | null;
   userMessageIds: Set<string>;
   fileBefore: Map<string, string | null>;
   lastDiffAt: number;
@@ -195,8 +202,10 @@ export class OlkilOpencodeRuntimeHost {
   private readonly lives = new Map<string, LiveRun>();
   private readonly sessions = new Map<string, SessionHandle>();
   private readonly runBySession = new Map<string, string>();
-  private readonly usage = new Map<string, { inputTokens: number; outputTokens: number }>();
+  private readonly usage = new Map<string, OlkilApiUsage>();
   private eventsBound = false;
+  private mcpKey = '';
+  private lastMcpServers: OpencodeMcpServer[] | undefined;
 
   async prewarm(): Promise<void> {
     await this.ensureSidecar();
@@ -252,6 +261,7 @@ export class OlkilOpencodeRuntimeHost {
     try {
       const option = findModel(request.modelId);
       await assertOlkilWallet(option.provider);
+      this.syncMcp(this.mergeMcp(request));
       const sidecar = await this.ensureSidecar();
       const directory = this.sessionDirectory(request.workspaceRoot);
       const conversationKey = `${directory}::${request.conversationId || runId}`;
@@ -259,6 +269,10 @@ export class OlkilOpencodeRuntimeHost {
       const model = opencodeModelRef(option);
       const agent = opencodeAgentForMode(request.mode);
       const autoApprove = request.autoApprove !== false && request.mode === 'agent';
+      const terminalAutoRun =
+        request.mode === 'agent' ? request.terminalAutoRun || (autoApprove ? 'always' : 'never') : 'never';
+      const autoApproveEdits = request.mode === 'agent' && request.autoApproveEdits !== false;
+      const autoApproveWeb = request.mode === 'agent' && request.autoApproveWeb !== false;
 
       for (const [rid, prev] of this.lives) {
         if (prev.sessionId === session.id && rid !== runId) {
@@ -273,8 +287,13 @@ export class OlkilOpencodeRuntimeHost {
           directory,
           state,
           autoApprove,
+          autoApproveEdits,
+          autoApproveWeb,
+          terminalAutoRun,
+          terminalAllowlist: request.terminalAllowlist || [],
           inputTokens: 0,
           outputTokens: 0,
+          apiUsage: null,
           userMessageIds: new Set<string>(),
           fileBefore: new Map<string, string | null>(),
           lastDiffAt: 0,
@@ -333,9 +352,9 @@ export class OlkilOpencodeRuntimeHost {
       });
 
       await done;
-      const billed = this.usage.get(runId) || { inputTokens: 0, outputTokens: 0 };
+      const billed = this.usage.get(runId) || null;
       await this.syncDiffs(session.id, directory, state);
-      await this.charge(option.provider, option.model, runId, request.prompt, state, billed);
+      await this.charge(option.provider, option.model, runId, billed);
       this.usage.delete(runId);
       return state;
     } catch (error: any) {
@@ -386,7 +405,7 @@ export class OlkilOpencodeRuntimeHost {
 
   async ensureSidecar(): Promise<OpencodeSidecar> {
     if (!this.sidecar) {
-      this.sidecar = new OpencodeSidecar(providerSecrets());
+      this.sidecar = new OpencodeSidecar(providerSecrets(), { mcp: toOpencodeMcp(this.lastMcpServers) });
     }
     await this.sidecar.ensureStarted();
     if (!this.eventsBound) {
@@ -485,19 +504,24 @@ export class OlkilOpencodeRuntimeHost {
             label: 'Compacting context for this large project',
             done: false,
           });
-        } else if (part.type === 'step-finish' && part.tokens) {
-          live.inputTokens += Math.max(0, Number(part.tokens.input || 0));
-          live.outputTokens += Math.max(0, Number(part.tokens.output || 0) + Number(part.tokens.reasoning || 0));
-          this.usage.set(live.runId, { inputTokens: live.inputTokens, outputTokens: live.outputTokens });
+        } else if (part.type === 'step-finish') {
+          const stepUsage = parseProviderUsage(part.tokens || part.usage);
+          if (stepUsage) {
+            live.apiUsage = addApiUsage(live.apiUsage, stepUsage);
+            live.inputTokens = live.apiUsage.promptTokens;
+            live.outputTokens = live.apiUsage.completionTokens;
+            this.usage.set(live.runId, live.apiUsage);
+          }
         }
         break;
       }
+      case 'permission.asked':
       case 'permission.updated': {
         const permission = event.properties;
         if (!permission?.id) {
           return;
         }
-        const response = live.autoApprove ? 'always' : 'reject';
+        const response = decidePermissionResponse(live, permission);
         void this.sidecar
           ?.request('POST', `/session/${live.sessionId}/permissions/${permission.id}`, {
             query: { directory: live.directory },
@@ -741,26 +765,143 @@ export class OlkilOpencodeRuntimeHost {
     provider: AiProviderId,
     model: string,
     runId: string,
-    prompt: string,
-    state: ClineEngineRunState,
-    billed?: { inputTokens: number; outputTokens: number },
+    billed?: OlkilApiUsage | null,
   ): Promise<void> {
-    if (isLocalProvider(provider)) {
-      return;
-    }
-    const inputTokens = billed?.inputTokens || countOlkilTokens(prompt || '');
-    const outputTokens = billed?.outputTokens || countOlkilTokens(state.text || '');
-    if (inputTokens + outputTokens < 1) {
+    if (!billed || billed.totalTokens < 1) {
+      if (provider === 'deepseek') {
+        console.warn('[olkil-wallet] skip charge: OpenCode run had no DeepSeek usage');
+      }
       return;
     }
     await chargeOlkilWallet({
       provider,
       model,
-      inputTokens,
-      outputTokens,
+      inputTokens: billed.promptTokens,
+      outputTokens: billed.completionTokens,
       requestId: `${runId}:opencode`,
+      usage: billed,
     });
   }
+
+  private mergeMcp(request: ClineEngineRunRequest): OpencodeMcpServer[] {
+    const discovered = loadRuntimeMcpServers(request.workspaceRoot, request.mcpDiscoveredDisabled || []);
+    const byName = new Map<string, OpencodeMcpServer>();
+    for (const server of discovered) {
+      byName.set(server.name, server);
+    }
+    for (const server of request.mcpServers || []) {
+      if (!server?.name || server.enabled === false) {
+        continue;
+      }
+      byName.set(server.name, { ...server, enabled: true });
+    }
+    return [...byName.values()];
+  }
+
+  private syncMcp(servers?: OpencodeMcpServer[]) {
+    const enabled = (servers || []).filter((server) => server.enabled);
+    const key = JSON.stringify(
+      enabled.map((server) => ({
+        name: server.name,
+        type: server.type,
+        command: server.command || '',
+        url: server.url || '',
+        env: fingerprintMap(server.env),
+        headers: fingerprintMap(server.headers),
+      })),
+    );
+    this.lastMcpServers = enabled;
+    if (key === this.mcpKey) {
+      return;
+    }
+    this.mcpKey = key;
+    if (this.lives.size > 0) {
+      return;
+    }
+    this.sidecar?.close();
+    this.sidecar = null;
+    this.eventsBound = false;
+  }
+}
+
+function decidePermissionResponse(live: LiveRun, permission: any): 'always' | 'once' | 'reject' {
+  const kind = String(
+    permission?.permission || permission?.type || permission?.tool || permission?.name || '',
+  ).toLowerCase();
+  const command = permissionCommand(permission);
+
+  if (/(bash|shell|command|terminal|cmd)/.test(kind) || (!kind && command)) {
+    if (live.terminalAutoRun === 'always') {
+      return 'always';
+    }
+    if (live.terminalAutoRun === 'never') {
+      return 'reject';
+    }
+    return commandMatchesAllowlist(command, live.terminalAllowlist) ? 'once' : 'reject';
+  }
+  if (/(web|fetch|http)/.test(kind)) {
+    return live.autoApproveWeb ? 'always' : 'reject';
+  }
+  if (/(edit|write|patch|file)/.test(kind)) {
+    return live.autoApproveEdits ? 'always' : 'reject';
+  }
+  return live.autoApprove ? 'always' : 'reject';
+}
+
+function permissionCommand(permission: any): string {
+  if (!permission) {
+    return '';
+  }
+  const meta = permission.metadata || {};
+  if (typeof meta.command === 'string') {
+    return meta.command;
+  }
+  if (typeof permission.command === 'string') {
+    return permission.command;
+  }
+  if (typeof permission.pattern === 'string') {
+    return permission.pattern;
+  }
+  if (Array.isArray(permission.patterns) && permission.patterns[0]) {
+    return String(permission.patterns[0]);
+  }
+  return '';
+}
+
+function commandMatchesAllowlist(command: string, allowlist: string[]): boolean {
+  const value = String(command || '')
+    .trim()
+    .toLowerCase()
+    .replace(/^sudo\s+/, '');
+  if (!value) {
+    return false;
+  }
+  return allowlist.some((prefix) => {
+    const item = String(prefix || '')
+      .trim()
+      .toLowerCase();
+    if (!item) {
+      return false;
+    }
+    const base = item.endsWith('*') ? item.slice(0, -1).trim() : item;
+    return value === base || value.startsWith(`${base} `) || value.startsWith(base);
+  });
+}
+
+function fingerprintMap(map?: Record<string, string>): string {
+  if (!map || !Object.keys(map).length) {
+    return '';
+  }
+  return crypto
+    .createHash('sha256')
+    .update(
+      Object.keys(map)
+        .sort()
+        .map((key) => `${key}:${map[key]}`)
+        .join('|'),
+    )
+    .digest('hex')
+    .slice(0, 16);
 }
 
 let host: OlkilOpencodeRuntimeHost | null = null;

@@ -4,7 +4,8 @@
  *
  * The provider API key is a shared company pool. This file never touches it.
  * Each signed-in user has their own Lite/Pro/Ultra allowance on their account.
- * Every metered request subtracts OLKIL-counted tokens from THAT user only.
+ * Every metered request subtracts DeepSeek API usage tokens from THAT user only.
+ * Token counts come from the provider `usage` object — never estimated from text.
  *
  * @package OLKIL
  */
@@ -348,10 +349,15 @@ function olkil_payu_charge_user_tokens( $email, $tokens, array $meta = array() )
 			}
 			$log   = isset( $row['usage_log'] ) && is_array( $row['usage_log'] ) ? $row['usage_log'] : array();
 			$log[] = array(
-				'at'       => gmdate( 'c' ),
-				'tokens'   => $tokens,
-				'model'    => $model,
-				'provider' => $provider,
+				'at'            => gmdate( 'c' ),
+				'tokens'        => $tokens,
+				'input_tokens'  => $input_tok,
+				'output_tokens' => $output_tok,
+				'cache_hit'     => max( 0, (int) ( $meta['prompt_cache_hit_tokens'] ?? 0 ) ),
+				'cache_miss'    => max( 0, (int) ( $meta['prompt_cache_miss_tokens'] ?? 0 ) ),
+				'reasoning'     => max( 0, (int) ( $meta['reasoning_tokens'] ?? 0 ) ),
+				'model'         => $model,
+				'provider'      => $provider,
 			);
 			$row['usage_log'] = array_slice( $log, -40 );
 			olkil_payu_put_subscription_row( $email, $row );
@@ -404,18 +410,13 @@ function olkil_payu_rest_usage( WP_REST_Request $request ) {
 		return $email;
 	}
 
-	$input_text  = (string) olkil_payu_request_value( $request, 'input_text' );
-	$output_text = (string) olkil_payu_request_value( $request, 'output_text' );
 	$input_tok   = (int) olkil_payu_request_value( $request, 'input_tokens', 0 );
 	$output_tok  = (int) olkil_payu_request_value( $request, 'output_tokens', 0 );
 	$tokens      = (int) olkil_payu_request_value( $request, 'tokens', 0 );
+	$cache_hit   = (int) olkil_payu_request_value( $request, 'prompt_cache_hit_tokens', 0 );
+	$cache_miss  = (int) olkil_payu_request_value( $request, 'prompt_cache_miss_tokens', 0 );
+	$reasoning   = (int) olkil_payu_request_value( $request, 'reasoning_tokens', 0 );
 
-	if ( $input_text ) {
-		$input_tok = max( $input_tok, olkil_count_tokens( $input_text ) );
-	}
-	if ( $output_text ) {
-		$output_tok = max( $output_tok, olkil_count_tokens( $output_text ) );
-	}
 	if ( $tokens < 1 ) {
 		$tokens = $input_tok + $output_tok;
 	}
@@ -424,11 +425,14 @@ function olkil_payu_rest_usage( WP_REST_Request $request ) {
 		$email,
 		$tokens,
 		array(
-			'model'         => (string) olkil_payu_request_value( $request, 'model' ),
-			'provider'      => (string) olkil_payu_request_value( $request, 'provider' ),
-			'request_id'    => (string) olkil_payu_request_value( $request, 'request_id' ),
-			'input_tokens'  => $input_tok,
-			'output_tokens' => $output_tok,
+			'model'                     => (string) olkil_payu_request_value( $request, 'model' ),
+			'provider'                  => (string) olkil_payu_request_value( $request, 'provider' ),
+			'request_id'                => (string) olkil_payu_request_value( $request, 'request_id' ),
+			'input_tokens'              => $input_tok,
+			'output_tokens'             => $output_tok,
+			'prompt_cache_hit_tokens'   => $cache_hit,
+			'prompt_cache_miss_tokens'  => $cache_miss,
+			'reasoning_tokens'          => $reasoning,
 		)
 	);
 	$code = ! empty( $result['ok'] ) || ! empty( $result['deduped'] ) ? 200 : ( 'quota_exceeded' === ( $result['reason'] ?? '' ) ? 402 : 403 );

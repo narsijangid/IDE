@@ -26,9 +26,10 @@ import {
   RepositoryOverview,
   RepositorySearchResult,
   RepositorySymbolResult,
+  DiscoveredMcpServer,
 } from '../common';
 import { AI_MODELS, DEFAULT_MODEL_ID, findModel, AiProviderId } from '../common/models';
-import { AGENT_TOOLS } from '../common/tools';
+import { AGENT_TOOLS, selectAgentTools, stripLocalThinkTags } from '../common/tools';
 import { getSharedRepositoryIndex } from './repository-index.service';
 import { ripgrepSearch } from './ripgrep';
 import {
@@ -40,7 +41,8 @@ import { CommandRunner } from './command-runner';
 import { BrowserTestService } from './browser-test.service';
 import { getOlkilAgentRuntime } from './agent-runtime';
 import type { ClineEngineRunRequest, ClineEngineRunState } from '../common';
-import { assertOlkilWallet, chargeOlkilWallet, countOlkilTokensFromUnknown } from './olkil-wallet.service';
+import { listDiscoveredMcpServers as discoverMcpServers } from './mcp-discover';
+import { assertOlkilWallet, chargeOlkilWallet, parseProviderUsage } from './olkil-wallet.service';
 
 const POOLSIDE_URL = 'https://inference.poolside.ai/v1/chat/completions';
 const DEFAULT_DEEPSEEK_BASE = 'https://api.deepseek.com';
@@ -473,6 +475,10 @@ export class OlkilAiNodeService implements IOlkilAiNodeService {
     return getOlkilAgentRuntime().cancel(runId);
   }
 
+  listDiscoveredMcpServers(workspaceRoot?: string): Promise<DiscoveredMcpServer[]> {
+    return Promise.resolve(discoverMcpServers(workspaceRoot));
+  }
+
   private getKey(provider: AiProviderId): string {
     this.refreshEnv();
     if (provider === 'ollama') {
@@ -526,9 +532,10 @@ export class OlkilAiNodeService implements IOlkilAiNodeService {
   }
 
   /** Cap oversized tool/user payloads so cloud APIs don't burn tokens / 500. */
-  private slimMessages(messages: ChatMessage[]): ChatMessage[] {
-    const MAX_MSG = 10_000;
-    const MAX_TOOL = 6_000;
+  private slimMessages(messages: ChatMessage[], provider?: AiProviderId): ChatMessage[] {
+    const local = provider === 'ollama';
+    const MAX_MSG = local ? 4_000 : 10_000;
+    const MAX_TOOL = local ? 2_500 : 6_000;
     return messages.map((m) => {
       const content =
         typeof m.content === 'string'
@@ -1020,7 +1027,7 @@ export class OlkilAiNodeService implements IOlkilAiNodeService {
       this.streams.set(request.streamId, { text: '', done: false });
     }
 
-    const messages = this.slimMessages(request.messages).map((m) => this.serializeMessage(m));
+    const messages = this.slimMessages(request.messages, option.provider).map((m) => this.serializeMessage(m));
     const tokenBudget =
       request.maxTokens && request.maxTokens > 0
         ? Math.min(Math.floor(request.maxTokens), 8192)
@@ -1041,7 +1048,6 @@ export class OlkilAiNodeService implements IOlkilAiNodeService {
       }
     }
 
-    // DeepSeek V4 defaults to thinking mode (bills at output rate) — disable for agent speed/cost.
     if (option.provider === 'deepseek') {
       body.thinking = { type: 'disabled' };
       if (!request.maxTokens) {
@@ -1049,10 +1055,23 @@ export class OlkilAiNodeService implements IOlkilAiNodeService {
       } else {
         body.max_tokens = Math.min(Math.max(tokenBudget, 2048), 8192);
       }
+      if (useStream) {
+        body.stream_options = { include_usage: true };
+      }
       // Steer away from DSML text dumps when tools are present.
       if (request.tools?.length && request.toolChoice !== 'none') {
         body.tool_choice = request.toolChoice || 'auto';
       }
+    }
+
+    if (option.provider === 'ollama') {
+      const localBudget = Math.min(tokenBudget, 1536);
+      body.max_tokens = localBudget;
+      body.options = {
+        num_ctx: 4096,
+        num_predict: localBudget,
+        temperature: 0.2,
+      };
     }
 
     // Providers reject histories containing tool messages unless `tools` is also
@@ -1064,9 +1083,19 @@ export class OlkilAiNodeService implements IOlkilAiNodeService {
       body.tools = request.tools;
       body.tool_choice = request.toolChoice || 'auto';
     } else if (historyHasToolTraffic) {
-      body.tools = AGENT_TOOLS;
+      body.tools =
+        option.provider === 'ollama'
+          ? selectAgentTools({
+              local: true,
+              mode: 'agent',
+              madeEdits: true,
+              searchCount: 1,
+              readCount: 1,
+              hasSeedTargets: true,
+            })
+          : AGENT_TOOLS;
       body.tool_choice = request.toolChoice || 'none';
-    } else if (request.toolChoice === 'none') {
+    } else if (request.toolChoice === 'none' && option.provider !== 'ollama') {
       body.tool_choice = 'none';
     }
 
@@ -1105,7 +1134,7 @@ export class OlkilAiNodeService implements IOlkilAiNodeService {
       }
 
       if (useStream && request.streamId) {
-        const result = await this.consumeSse(res, request.streamId);
+        const result = await this.consumeSse(res, request.streamId, option.provider);
         this.streams.set(request.streamId, {
           text: result.content,
           done: true,
@@ -1123,7 +1152,7 @@ export class OlkilAiNodeService implements IOlkilAiNodeService {
         throw new Error(`Invalid ${option.provider} response: ${raw.slice(0, 300)}`);
       }
 
-      const parsed = this.parseCompletionChoice(data);
+      const parsed = this.parseCompletionChoice(data, option.provider);
       await this.chargeUserWallet(option, request, parsed);
       return parsed;
     } catch (e: any) {
@@ -1138,34 +1167,60 @@ export class OlkilAiNodeService implements IOlkilAiNodeService {
     }
   }
 
-  private parseCompletionChoice(data: any): ChatCompletionResult {
+  private parseCompletionChoice(data: any, provider?: AiProviderId): ChatCompletionResult {
     const choice = data?.choices?.[0];
     const message = choice?.message || {};
+    let content = normalizeMessageContent(message.content);
+    if (provider === 'ollama') {
+      content = stripLocalThinkTags(content);
+      if (!content.trim()) {
+        content = stripLocalThinkTags(
+          normalizeMessageContent(
+            message.reasoning ||
+              message.thinking ||
+              message.reasoning_content ||
+              choice?.delta?.reasoning,
+          ),
+        );
+      }
+    }
     return {
-      content: normalizeMessageContent(message.content),
+      content,
       tool_calls: message.tool_calls,
       finish_reason: choice?.finish_reason,
+      usage: data?.usage && typeof data.usage === 'object' ? data.usage : undefined,
     };
   }
 
   private async chargeUserWallet(
     option: { provider: AiProviderId; model: string },
-    request: ChatCompletionRequest,
+    _request: ChatCompletionRequest,
     result: ChatCompletionResult,
   ): Promise<void> {
-    const inputTokens = countOlkilTokensFromUnknown(request.messages);
-    const outputTokens = countOlkilTokensFromUnknown(result.content) + countOlkilTokensFromUnknown(result.tool_calls);
+    const usage = parseProviderUsage(result.usage);
+    if (!usage) {
+      if (option.provider === 'deepseek') {
+        console.warn('[olkil-wallet] skip charge: DeepSeek response had no usage');
+      }
+      return;
+    }
     await chargeOlkilWallet({
       provider: option.provider,
       model: option.model,
-      inputTokens,
-      outputTokens,
+      inputTokens: usage.promptTokens,
+      outputTokens: usage.completionTokens,
       requestId: `chat_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 10)}`,
+      usage,
     });
   }
 
-  private async consumeSse(res: any, streamId: string): Promise<ChatCompletionResult> {
+  private async consumeSse(
+    res: any,
+    streamId: string,
+    provider?: AiProviderId,
+  ): Promise<ChatCompletionResult> {
     let content = '';
+    let reasoning = '';
     const toolCalls: ChatToolCall[] = [];
     let finishReason: string | undefined;
 
@@ -1175,15 +1230,16 @@ export class OlkilAiNodeService implements IOlkilAiNodeService {
       const raw = await res.text();
       // some providers ignore stream and return JSON
       try {
-        return this.parseCompletionChoice(JSON.parse(raw));
+        return this.parseCompletionChoice(JSON.parse(raw), provider);
       } catch {
-        content = raw;
+        content = provider === 'ollama' ? stripLocalThinkTags(raw) : raw;
         this.streams.set(streamId, { text: content, done: false });
         return { content, finish_reason: 'stop' };
       }
     }
 
     let buffer = '';
+    let usage: ChatCompletionResult['usage'];
     await new Promise<void>((resolve, reject) => {
       body.on('data', (chunk: Buffer) => {
         buffer += chunk.toString('utf8');
@@ -1200,6 +1256,9 @@ export class OlkilAiNodeService implements IOlkilAiNodeService {
           }
           try {
             const json = JSON.parse(payload);
+            if (json?.usage && typeof json.usage === 'object') {
+              usage = json.usage;
+            }
             const choice = json?.choices?.[0];
             const delta = choice?.delta || {};
             if (choice?.finish_reason) {
@@ -1208,11 +1267,21 @@ export class OlkilAiNodeService implements IOlkilAiNodeService {
             const piece = normalizeMessageContent(delta.content);
             if (piece) {
               content += piece;
+              const visible =
+                provider === 'ollama' ? stripLocalThinkTags(content) || content : content;
               this.streams.set(streamId, {
-                text: content,
+                text: visible,
                 done: false,
                 toolNames: toolCalls.filter(Boolean).map((t) => t.function.name).filter(Boolean),
               });
+            }
+            if (provider === 'ollama') {
+              const thinkPiece = normalizeMessageContent(
+                delta.reasoning || delta.reasoning_content || delta.thinking,
+              );
+              if (thinkPiece) {
+                reasoning += thinkPiece;
+              }
             }
             if (Array.isArray(delta.tool_calls)) {
               for (const tc of delta.tool_calls) {
@@ -1261,8 +1330,16 @@ export class OlkilAiNodeService implements IOlkilAiNodeService {
       body.on('error', (err: Error) => reject(err));
     });
 
+    let out = content;
+    if (provider === 'ollama') {
+      out = stripLocalThinkTags(content);
+      if (!out.trim() && reasoning.trim()) {
+        out = stripLocalThinkTags(reasoning);
+      }
+    }
+
     return {
-      content,
+      content: out,
       tool_calls: toolCalls.length
         ? toolCalls.filter(Boolean).map((tc) => ({
             ...tc,
@@ -1273,6 +1350,7 @@ export class OlkilAiNodeService implements IOlkilAiNodeService {
           }))
         : undefined,
       finish_reason: finishReason,
+      usage,
     };
   }
 

@@ -24,7 +24,10 @@ export class OpencodeSidecar {
   private homeDir = '';
   private authHeader = '';
 
-  constructor(private readonly secrets: OpencodeProviderSecrets) {}
+  constructor(
+    private readonly secrets: OpencodeProviderSecrets,
+    private readonly extras?: { mcp?: Record<string, unknown> },
+  ) {}
 
   async ensureStarted(): Promise<string> {
     if (this.url && this.proc && this.proc.exitCode == null) {
@@ -81,7 +84,7 @@ export class OpencodeSidecar {
     const password = randomBytes(16).toString('hex');
     this.authHeader = `Basic ${Buffer.from(`olkil:${password}`).toString('base64')}`;
     const args = ['serve', `--hostname=127.0.0.1`, `--port=${port}`, '--pure'];
-    const config = buildOpencodeConfigContent(this.secrets);
+    const config = buildOpencodeConfigContent(this.secrets, this.extras);
     const env: NodeJS.ProcessEnv = {
       ...process.env,
       OPENCODE_CONFIG_CONTENT: JSON.stringify(config),

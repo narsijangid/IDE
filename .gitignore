@@ -59,3 +59,8 @@ tools/workspace/
 
 # Nested OpenSumi GH Actions (root workflows are tracked)
 ide-electron/.github/workflows/
+
+# # OpenCode source clone (reference only; runtime uses the official CLI binary)
+# vendor/opencode/
+# vendor/opencode-bin/
+# ide-electron/build/opencode/

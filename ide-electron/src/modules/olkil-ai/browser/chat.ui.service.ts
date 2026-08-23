@@ -9,6 +9,7 @@ import {
   IOlkilChatService,
   IOlkilChatUiService,
 } from '../common';
+import { IOlkilSettingsService } from '../../olkil-auth/common/settings';
 
 const STORAGE_KEY = 'olkil.ai.panel';
 
@@ -37,6 +38,9 @@ export class OlkilChatUiService extends Disposable implements IOlkilChatUiServic
 
   @Autowired(IOlkilChatService)
   private chat!: IOlkilChatService;
+
+  @Autowired(IOlkilSettingsService)
+  private settings!: IOlkilSettingsService;
 
   private readonly _onDidChange = new Emitter<void>();
   readonly onDidChange: Event<void> = this._onDidChange.event;
@@ -109,6 +113,7 @@ export class OlkilChatUiService extends Disposable implements IOlkilChatUiServic
     }
     this.pinned = pinned;
     this.writeLayout();
+    this.settings.patch({ pinAgentPanel: pinned });
     this.fire();
   }
 
@@ -144,6 +149,9 @@ export class OlkilChatUiService extends Disposable implements IOlkilChatUiServic
       this.width = clampWidth(saved.width ?? CHAT_PANEL_DEFAULT_WIDTH);
       this.expanded = Boolean(saved.expanded);
       this.pinned = Boolean(saved.pinned);
+      if (this.settings.get().pinAgentPanel) {
+        this.pinned = true;
+      }
     } catch {
       // Corrupt/blocked storage just means defaults.
     }

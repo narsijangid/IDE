@@ -5,8 +5,8 @@
   "description": "OLKIL IDE (Electron)",
   "main": "./app/main/index.js",
   "scripts": {
-    "start": "electron --inspect=9229 .",
-    "start:no-dev": "electron .",
+    "start": "node ./scripts/ensure-ripgrep.js && electron --inspect=9229 .",
+    "start:no-dev": "node ./scripts/ensure-ripgrep.js && electron .",
     "link-local": "node ./scripts/link-local.js",
     "build:browser": "webpack --config ./build/webpack.browser.config.js ",
     "build:node": "webpack --config ./build/webpack.node.config.js ",
@@ -40,6 +40,7 @@
     "stage-ollama": "node ./scripts/stage-ollama.js",
     "stage-opencode": "node ./scripts/stage-opencode.js",
     "stage-olkil-env": "node ./scripts/stage-olkil-env.js",
+    "ensure-ripgrep": "node ./scripts/ensure-ripgrep.js",
     "playwright:install": "playwright install chromium",
     "rebuild-native": "node ./scripts/rebuild-native.js --target=electron",
     "download-extension": "cross-env DEBUG=InstallExtension node scripts/download-extensions.js",

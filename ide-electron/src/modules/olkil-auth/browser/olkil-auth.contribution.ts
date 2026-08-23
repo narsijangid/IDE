@@ -21,8 +21,9 @@ import {
   EditorOpenType,
   WorkbenchEditorService,
 } from '@opensumi/ide-editor/lib/browser';
-import { IOlkilAuthService, OLKIL_ACCOUNT_SCHEME } from '../common';
+import { IOlkilAuthService, IOlkilSettingsService, OLKIL_ACCOUNT_SCHEME } from '../common';
 import { OlkilAuthService } from './auth.service';
+import { OlkilSettingsService } from './settings.service';
 import { OlkilAccountView } from './account.view';
 import { OlkilElectronHeaderBar } from './auth-header';
 import {
@@ -46,7 +47,7 @@ export class OlkilAccountResourceProvider extends WithEventBus implements IResou
   provideResource(uri: URI): MaybePromise<IResource<any>> {
     return {
       supportsRevive: true,
-      name: 'OLKIL Account',
+      name: 'OLKIL Settings',
       icon: getIcon('setting'),
       uri,
     };
@@ -79,6 +80,9 @@ export class OlkilAuthContribution
   @Autowired(IOlkilAuthService)
   private readonly auth!: OlkilAuthService;
 
+  @Autowired(IOlkilSettingsService)
+  private readonly settings!: OlkilSettingsService;
+
   @Autowired(IMessageService)
   private readonly messages!: IMessageService;
 
@@ -92,6 +96,7 @@ export class OlkilAuthContribution
   private readonly accountResourceProvider!: OlkilAccountResourceProvider;
 
   async onDidStart() {
+    await this.settings.initialize();
     await this.auth.init();
 
     const handleUrl = async (url?: string) => {
@@ -213,6 +218,11 @@ export class OlkilAuthContribution
       command: OLKIL_AUTH_SIGN_OUT.id,
       group: '9_olkil',
       order: 2,
+    });
+    menus.registerMenuItem(MenuId.SettingsIconMenu, {
+      command: OLKIL_AUTH_OPEN_ACCOUNT.id,
+      group: '0_olkil',
+      order: 0,
     });
   }
 }

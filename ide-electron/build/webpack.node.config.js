@@ -2,6 +2,7 @@ const TsconfigPathsPlugin = require('tsconfig-paths-webpack-plugin');
 const CopyPlugin = require('copy-webpack-plugin');
 const path = require('path');
 const { createConfig } = require('./webpack.base.config');
+const { ensureRipgrep } = require('../scripts/ensure-ripgrep');
 
 const tsConfigPath = path.join(__dirname, '../tsconfig.json');
 const srcDir = path.join(__dirname, '../src/node');
@@ -9,6 +10,7 @@ const distDir = path.join(__dirname, '../app/node');
 
 // `rgPath` resolves relative to the bundle's __dirname, so ripgrep must sit
 // next to app/node as app/bin.
+ensureRipgrep();
 const rgBinDir = path.join(__dirname, '../node_modules/@opensumi/vscode-ripgrep/bin');
 
 module.exports = createConfig({
@@ -23,7 +25,7 @@ module.exports = createConfig({
   },
   plugins: [
     new CopyPlugin({
-      patterns: [{ from: rgBinDir, to: path.join(__dirname, '../app/bin'), noErrorOnMissing: true }],
+      patterns: [{ from: rgBinDir, to: path.join(__dirname, '../app/bin') }],
     }),
   ],
   resolve: {

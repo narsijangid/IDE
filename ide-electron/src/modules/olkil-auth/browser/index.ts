@@ -1,7 +1,8 @@
 import { Injectable, Provider } from '@opensumi/di';
 import { BrowserModule } from '@opensumi/ide-core-browser';
-import { IOlkilAuthService, OlkilAuthNodeServicePath } from '../common';
+import { IOlkilAuthService, IOlkilSettingsService, OlkilAuthNodeServicePath } from '../common';
 import { OlkilAuthService } from './auth.service';
+import { OlkilSettingsService } from './settings.service';
 import {
   OlkilAccountResourceProvider,
   OlkilAuthContribution,
@@ -15,6 +16,10 @@ export class OlkilAuthModule extends BrowserModule {
     {
       token: IOlkilAuthService,
       useClass: OlkilAuthService,
+    },
+    {
+      token: IOlkilSettingsService,
+      useClass: OlkilSettingsService,
     },
   ];
 

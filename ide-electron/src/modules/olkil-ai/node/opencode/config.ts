@@ -46,10 +46,53 @@ function modelsFor(provider: AiProviderId): Record<string, unknown> {
  * OPENCODE_CONFIG_CONTENT for the sidecar. Only OLKIL's three providers are
  * enabled so OpenCode does not probe dozens of unused vendor SDKs at boot.
  */
-export function buildOpencodeConfigContent(secrets: OpencodeProviderSecrets): Record<string, unknown> {
+export interface OpencodeMcpServer {
+  name: string;
+  enabled: boolean;
+  type: 'local' | 'remote';
+  command?: string;
+  url?: string;
+  env?: Record<string, string>;
+  headers?: Record<string, string>;
+}
+
+export function toOpencodeMcp(servers?: OpencodeMcpServer[]): Record<string, unknown> | undefined {
+  if (!servers?.length) {
+    return undefined;
+  }
+  const mcp: Record<string, unknown> = {};
+  for (const server of servers) {
+    if (!server.enabled || !server.name) {
+      continue;
+    }
+    const key = server.name.replace(/[^\w.-]+/g, '-').slice(0, 40) || 'mcp';
+    if (server.type === 'remote' && server.url) {
+      const remote: Record<string, unknown> = { type: 'remote', url: server.url, enabled: true };
+      if (server.headers && Object.keys(server.headers).length) {
+        remote.headers = server.headers;
+      }
+      mcp[key] = remote;
+    } else if (server.command) {
+      const command = splitCommand(server.command);
+      if (command.length) {
+        const local: Record<string, unknown> = { type: 'local', command, enabled: true };
+        if (server.env && Object.keys(server.env).length) {
+          local.environment = server.env;
+        }
+        mcp[key] = local;
+      }
+    }
+  }
+  return Object.keys(mcp).length ? mcp : undefined;
+}
+
+export function buildOpencodeConfigContent(
+  secrets: OpencodeProviderSecrets,
+  extras?: { mcp?: Record<string, unknown> },
+): Record<string, unknown> {
   const deepseekBase = withV1(secrets.deepseekBase || DEFAULT_DEEPSEEK_BASE);
   const ollamaBase = withV1(secrets.ollamaBase || DEFAULT_OLLAMA_BASE);
-  return {
+  const config: Record<string, unknown> = {
     $schema: 'https://opencode.ai/config.json',
     username: 'OLKIL',
     autoupdate: false,
@@ -96,6 +139,20 @@ export function buildOpencodeConfigContent(secrets: OpencodeProviderSecrets): Re
       },
     },
   };
+  if (extras?.mcp && Object.keys(extras.mcp).length) {
+    config.mcp = extras.mcp;
+  }
+  return config;
+}
+
+function splitCommand(command: string): string[] {
+  const out: string[] = [];
+  const re = /"([^"]*)"|'([^']*)'|(\S+)/g;
+  let match: RegExpExecArray | null;
+  while ((match = re.exec(command))) {
+    out.push(match[1] || match[2] || match[3]);
+  }
+  return out;
 }
 
 export function opencodeAgentForMode(mode: 'agent' | 'plan' | 'ask'): 'build' | 'plan' {

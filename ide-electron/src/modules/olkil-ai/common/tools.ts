@@ -15,6 +15,9 @@ export function buildSystemPrompt(
   modelInfo?: { provider: string; model: string; label: string },
   extraRules?: string,
 ): string {
+  if (modelInfo?.provider === 'ollama') {
+    return buildLocalOllamaSystemPrompt(mode, workspaceRoot, activeFile, modelInfo, extraRules);
+  }
   return buildClineStyleSystemPrompt({
     mode,
     workspaceRoot,
@@ -22,6 +25,55 @@ export function buildSystemPrompt(
     rules: extraRules,
     identity: identityBlock(modelInfo),
   });
+}
+
+/** Drop local-model think/reasoning wrappers so the user sees the actual reply. */
+export function stripLocalThinkTags(text: string): string {
+  let t = (text || '').replace(/\r\n/g, '\n');
+  if (!t.trim()) {
+    return '';
+  }
+  const closed = t.replace(/<think>[\s\S]*?<\/think>/gi, '').replace(/<\/?redacted_thinking>/gi, '').trim();
+  if (closed) {
+    return closed.replace(/<\/?think>/gi, '').trim();
+  }
+  const inner = t.match(/<think>([\s\S]*)$/i);
+  if (inner?.[1]?.trim()) {
+    return inner[1].trim();
+  }
+  return t.replace(/<\/?think>/gi, '').trim();
+}
+
+/** Tiny prompt — small Ollama models choke on the full OLKIL/OpenCode agent template. */
+function buildLocalOllamaSystemPrompt(
+  mode: ChatMode,
+  workspaceRoot: string,
+  activeFile: string | undefined,
+  modelInfo: { provider: string; model: string; label: string },
+  extraRules?: string,
+): string {
+  const ask = mode === 'ask' || mode === 'plan';
+  const rules = (extraRules || '').trim().slice(0, 1200);
+  return [
+    `You are the coding assistant inside OLKIL IDE. Local model: ${modelInfo.label}.`,
+    `Workspace: ${workspaceRoot || '(none — open a folder first)'}`,
+    `Active file: ${activeFile || '(none)'}`,
+    `Mode: ${mode}`,
+    '',
+    'Reply in plain markdown. Be concise. Never claim to be ChatGPT, Claude, DeepSeek, or Dazzlone.',
+    ask
+      ? 'Ask/plan mode: answer questions. Do not edit files. Do not call write/search_replace.'
+      : [
+          'Agent mode: UPDATE THE PROJECT FILES. Chat code is not a solution.',
+          'You MUST call tools: read_file, then search_replace or write_file / create_file.',
+          'NEVER paste full files or big code fences in chat instead of editing.',
+          'After a successful edit, reply in 1–2 short sentences.',
+        ].join('\n'),
+    'Never output XML, DSML, <invoke>, or fake tool-call text.',
+    rules ? `\nProject rules:\n${rules}` : '',
+  ]
+    .filter((line) => line !== '')
+    .join('\n');
 }
 
 function identityBlock(modelInfo?: { provider: string; model: string; label: string }): string {
@@ -834,6 +886,22 @@ const BROWSER_TOOL_NAMES = new Set([
   'browser_close',
 ]);
 
+/** Small Ollama models cannot bind the full tool catalog. */
+const LOCAL_ASK_TOOL_NAMES = new Set([
+  'get_active_file',
+  'read_file',
+  'grep',
+  'find_files',
+  'list_dir',
+]);
+
+const LOCAL_EDIT_TOOL_NAMES = new Set([
+  ...LOCAL_ASK_TOOL_NAMES,
+  'search_replace',
+  'write_file',
+  'create_file',
+]);
+
 /**
  * Cursor-style schema routing: unlock edits as soon as we have a target.
  * Do NOT burn a whole round explore-only when seed files / active file exist.
@@ -846,7 +914,13 @@ export function selectAgentTools(opts: {
   readCount?: number;
   /** Known targets from index / active editor — allow mutate immediately. */
   hasSeedTargets?: boolean;
+  /** Compact tool set for local Ollama — do not use on paid/cloud models. */
+  local?: boolean;
 }): ToolDefinition[] {
+  if (opts.local) {
+    const names = opts.mode === 'ask' ? LOCAL_ASK_TOOL_NAMES : LOCAL_EDIT_TOOL_NAMES;
+    return AGENT_TOOLS.filter((t) => names.has(t.function.name));
+  }
   if (opts.mode === 'ask') {
     return AGENT_TOOLS.filter((t) => ASK_TOOL_NAMES.has(t.function.name));
   }
@@ -867,7 +941,10 @@ export function selectAgentTools(opts: {
 }
 
 /** Per-step completion budget — edits need room for tool-call JSON + patches. */
-export function routingMaxTokens(step: number, madeEdits: boolean): number {
+export function routingMaxTokens(step: number, madeEdits: boolean, local?: boolean): number {
+  if (local) {
+    return madeEdits ? 1200 : 1024;
+  }
   if (madeEdits) {
     return 3200;
   }

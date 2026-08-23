@@ -34,6 +34,7 @@ import {
   READONLY_TOOL_NAMES,
   MUTATING_TOOL_NAMES,
   routingMaxTokens,
+  stripLocalThinkTags,
 } from '../common/tools';
 import {
   chatModeToUserMode,
@@ -61,6 +62,7 @@ import { MarkerSeverity } from '@opensumi/ide-core-common';
 import { IMarkerService } from '@opensumi/ide-markers';
 import { SCMService } from '@opensumi/ide-scm';
 import { IOlkilAuthService } from '../../olkil-auth/common';
+import { IOlkilSettingsService, isModelEnabledInSettings } from '../../olkil-auth/common/settings';
 
 function notifyOlkilWalletUpdated() {
   try {
@@ -159,6 +161,9 @@ export class OlkilChatService extends Disposable implements IOlkilChatService {
   @Autowired(IOlkilAuthService)
   private auth!: IOlkilAuthService;
 
+  @Autowired(IOlkilSettingsService)
+  private settings!: IOlkilSettingsService;
+
   @Autowired(OlkilChatHistoryService)
   private chatHistoryStore!: OlkilChatHistoryService;
 
@@ -193,7 +198,8 @@ export class OlkilChatService extends Disposable implements IOlkilChatService {
   private modeSwitchTracker = createModeSwitchNoticeTracker();
   private historyUnsub?: { dispose: () => void };
   private authUnsub?: { dispose: () => void };
-  models: Array<{
+  private settingsUnsub?: { dispose: () => void };
+  private catalogModels: Array<{
     id: string;
     provider: string;
     model: string;
@@ -210,6 +216,15 @@ export class OlkilChatService extends Disposable implements IOlkilChatService {
     badge: m.badge,
     approxSizeGb: m.approxSizeGb,
   }));
+  models: Array<{
+    id: string;
+    provider: string;
+    model: string;
+    label: string;
+    displayName?: string;
+    badge?: string;
+    approxSizeGb?: number;
+  }> = [...this.catalogModels];
   ollamaDownload: OllamaDownloadUiState = {
     phase: 'idle',
     percent: 0,
@@ -258,7 +273,18 @@ export class OlkilChatService extends Disposable implements IOlkilChatService {
       // OpenCode explores on demand (grep/LSP). Do not warm a 120k-file index
       // in the IDE node process — that is a prime cause of large-repo stalls.
 
-      this.models = await this.aiNode.listModels();
+      const saved = this.settings.get();
+      if (saved.defaultChatMode === 'agent' || saved.defaultChatMode === 'plan' || saved.defaultChatMode === 'ask') {
+        this.chatMode = saved.defaultChatMode;
+      }
+      if (saved.defaultModelId && isModelEnabledInSettings(saved, saved.defaultModelId)) {
+        this.modelId = saved.defaultModelId;
+        this.modelName = findModel(saved.defaultModelId).model;
+      }
+
+      this.catalogModels = await this.aiNode.listModels();
+      this.applyVisibleModels();
+      this.wireSettings();
       this.modelName = await this.aiNode.getModelName(this.modelId);
       const option = findModel(this.modelId);
       if (option.provider === 'ollama') {
@@ -278,6 +304,41 @@ export class OlkilChatService extends Disposable implements IOlkilChatService {
     } catch (e: any) {
       this.pushUi('status', `AI backend init error: ${e?.message || e}`);
     }
+  }
+
+  private wireSettings() {
+    if (this.settingsUnsub) {
+      return;
+    }
+    this.settingsUnsub = this.settings.onDidChange(() => {
+      const prevId = this.modelId;
+      this.applyVisibleModels();
+      if (this.modelId !== prevId) {
+        const option = findModel(this.modelId);
+        if (option.provider === 'ollama') {
+          void this.refreshOllamaStatus();
+        } else {
+          this.ollamaDownload = { phase: 'idle', percent: 0, message: '' };
+        }
+      }
+      this.fire();
+    });
+    this.addDispose({ dispose: () => this.settingsUnsub?.dispose() });
+  }
+
+  private applyVisibleModels() {
+    const saved = this.settings.get();
+    const filtered = this.catalogModels.filter((model) => isModelEnabledInSettings(saved, model.id));
+    this.models = filtered.length ? filtered : [...this.catalogModels];
+    if (this.models.some((model) => model.id === this.modelId)) {
+      return;
+    }
+    const nextId =
+      (saved.defaultModelId && this.models.some((model) => model.id === saved.defaultModelId)
+        ? saved.defaultModelId
+        : this.models[0]?.id) || this.modelId;
+    this.modelId = nextId;
+    this.modelName = findModel(nextId).model;
   }
 
   private wireChatHistory() {
@@ -313,6 +374,9 @@ export class OlkilChatService extends Disposable implements IOlkilChatService {
   }
 
   private persistCurrentSession() {
+    if (!this.settings.get().keepChatHistory) {
+      return;
+    }
     if (!this.auth.isSignedIn() || !sessionHasUserContent(this.messages)) {
       return;
     }
@@ -611,6 +675,9 @@ export class OlkilChatService extends Disposable implements IOlkilChatService {
 
   setModel(modelId: string) {
     if (this.busy) {
+      return;
+    }
+    if (!this.models.some((model) => model.id === modelId)) {
       return;
     }
     if (
@@ -1175,7 +1242,16 @@ Required loop:
       (modeNotice
         ? `${formatModeSwitchNotice(modeNotice.from, modeNotice.to)}\n`
         : '') + formatUserInputBlock(enriched, userMode);
-    this.history.push({ role: 'user', content: wrapped });
+    // Local Ollama: skip the heavy <user_input> wrap — small models echo it and never answer.
+    this.history.push({
+      role: 'user',
+      content:
+        option.provider === 'ollama'
+          ? (modeNotice
+              ? `${formatModeSwitchNotice(modeNotice.from, modeNotice.to)}\n`
+              : '') + enriched
+          : wrapped,
+    });
 
     const pendingId = nextId();
     this.messages.push({ id: pendingId, role: 'assistant', content: '', pending: true });
@@ -1221,8 +1297,11 @@ Required loop:
       if (isLiveTestRun) {
         // Built-in loop owns live_test / browser_* tools. Cline does not.
         reply = await this.runAgentLoop(pendingId);
+      } else if (option.provider === 'ollama') {
+        // Local models cannot run OpenCode's huge agent prompt — use the compact Ollama loop.
+        reply = await this.runAgentLoop(pendingId);
       } else {
-        // OpenCode sidecar. Built-in loop is only for Live Test (browser tools).
+        // OpenCode sidecar for paid/cloud models only.
         try {
           reply = await this.runClineEngine(pendingId, enriched);
         } catch (clineErr: any) {
@@ -1260,9 +1339,10 @@ Required loop:
         this.setStatus('Auto-resuming…');
         await sleep(450);
         try {
-          const resumed = isLiveTestRun
-            ? await this.runAgentLoop(pendingId)
-            : await this.runClineEngine(pendingId, enriched);
+          const resumed =
+            isLiveTestRun || option.provider === 'ollama'
+              ? await this.runAgentLoop(pendingId)
+              : await this.runClineEngine(pendingId, enriched);
           finalText = this.sanitizeUserFacingReply((resumed || '').trim());
         } catch {
           const resumed = await this.runAgentLoop(pendingId);
@@ -1562,7 +1642,10 @@ Required loop:
   }
 
   private sanitizeUserFacingReply(text: string): string {
-    const t = this.stripHiddenEngineWrap(text || '').trim();
+    let t = this.stripHiddenEngineWrap(text || '').trim();
+    if (findModel(this.modelId).provider === 'ollama') {
+      t = stripLocalThinkTags(t);
+    }
     if (!t) return '';
     if (this.looksLikeStallFallback(t)) return '';
     if (this.looksLikeGarbageToolDump(t)) {
@@ -1772,6 +1855,7 @@ Required loop:
           searchCount: 1,
           readCount: 1,
           hasSeedTargets: true,
+          local: findModel(this.modelId).provider === 'ollama',
         });
         const result = await this.invokeCompletionResilient(pendingId, {
           messages,
@@ -1779,7 +1863,7 @@ Required loop:
           toolChoice: 'auto',
           modelId: this.modelId,
           stream: true,
-          maxTokens: 2800,
+          maxTokens: findModel(this.modelId).provider === 'ollama' ? 1024 : 2800,
         });
         let toolCalls = result.tool_calls;
         let content = (result.content || '').trim();
@@ -2597,7 +2681,8 @@ Read the highest-scoring evidence in trail order. For a bug, trace UI → handle
     const runId = `olkil_${Date.now()}_${++msgSeq}`;
     this.activeClineRunId = runId;
     const active = this.editorService.currentResource?.uri.codeUri.fsPath;
-    const projectRules = workspaceRoot ? this.getProjectRules() : '';
+    const projectRules = this.getProjectRules();
+    const saved = this.settings.get();
 
     this.setStatus('Thinking');
     const runPromise = this.aiNode.clineRun({
@@ -2608,7 +2693,21 @@ Read the highest-scoring evidence in trail order. For a bug, trace UI → handle
       mode: this.chatMode,
       modelId: this.modelId,
       rules: projectRules,
-      autoApprove: this.chatMode === 'agent',
+      autoApprove: this.chatMode === 'agent' && (saved.autoApproveEdits || saved.terminalAutoRun === 'always'),
+      autoApproveEdits: this.chatMode === 'agent' && saved.autoApproveEdits,
+      autoApproveWeb: this.chatMode === 'agent' && saved.autoApproveWeb,
+      terminalAutoRun: this.chatMode === 'agent' ? saved.terminalAutoRun : 'never',
+      terminalAllowlist: saved.terminalAllowlist,
+      mcpServers: saved.mcpServers
+        .filter((server) => server.enabled)
+        .map((server) => ({
+          name: server.name,
+          enabled: true,
+          type: server.type,
+          command: server.command,
+          url: server.url,
+        })),
+      mcpDiscoveredDisabled: saved.mcpDiscoveredDisabled,
       conversationId: this.sessionId,
     });
 
@@ -2817,31 +2916,48 @@ Read the highest-scoring evidence in trail order. For a bug, trace UI → handle
 
   private async runAgentLoop(pendingId: string): Promise<string> {
     const latestUser = [...this.history].reverse().find((m) => m.role === 'user')?.content || '';
+    const option = findModel(this.modelId);
+    const localOllama = option.provider === 'ollama';
     const liveTestIntent = this.liveTesting || this.isLiveTestIntent(latestUser);
+    const casual = this.isCasualMessage(latestUser);
     const needsImplementation =
-      this.chatMode === 'agent' && this.requiresImplementation(latestUser);
+      this.chatMode === 'agent' &&
+      (localOllama
+        ? this.localWantsFileEdit(latestUser) ||
+          (!casual && !liveTestIntent && !this.isQuestionIntent(latestUser))
+        : this.requiresImplementation(latestUser));
     // Implement tasks are never Ask — "can you fix…?" must mutate
     const questionIntent = this.isQuestionIntent(latestUser) && !needsImplementation;
     const capabilityQuestion =
       questionIntent && this.isCapabilityQuestionIntent(latestUser);
     const flowQuestion =
       questionIntent && !capabilityQuestion && this.isFlowQuestionIntent(latestUser);
-    // Large projects need many tool turns.
-    const maxSteps = capabilityQuestion
-      ? 12
-      : flowQuestion
+    // Local models: short loop so they actually answer instead of sitting on Thinking.
+    const maxSteps = localOllama
+      ? questionIntent || this.chatMode === 'ask'
+        ? 3
+        : 10
+      : capabilityQuestion
         ? 12
-        : questionIntent
-          ? 5
-          : this.chatMode === 'ask'
-            ? 24
-            : this.chatMode === 'plan'
-              ? 64
-              : this.chatMode === 'agent'
-                ? 200
-                : 12;
+        : flowQuestion
+          ? 12
+          : questionIntent
+            ? 5
+            : this.chatMode === 'ask'
+              ? 24
+              : this.chatMode === 'plan'
+                ? 64
+                : this.chatMode === 'agent'
+                  ? 200
+                  : 12;
     const active = this.editorService.currentResource?.uri.codeUri.fsPath;
-    const casual = this.isCasualMessage(latestUser);
+    // Ask/Q&A/chitchat: answer in chat. Agent coding tasks: keep tools so files get updated.
+    const localNoTools =
+      localOllama &&
+      (this.chatMode === 'ask' ||
+        this.chatMode === 'plan' ||
+        questionIntent ||
+        casual);
 
     // Auto checkpoint only when we may mutate files
     if (this.chatMode === 'agent' && !casual && needsImplementation) {
@@ -2865,7 +2981,7 @@ Read the highest-scoring evidence in trail order. For a bug, trace UI → handle
       candidates: string[];
       strongEvidence?: boolean;
     }> | null = null;
-    if (!casual && !liveTestIntent) {
+    if (!casual && !liveTestIntent && !localOllama) {
       this.pushActivity(
         pendingId,
         'indexing',
@@ -2913,19 +3029,20 @@ Read the highest-scoring evidence in trail order. For a bug, trace UI → handle
       }
     }
 
-    const option = findModel(this.modelId);
     // Cline-style: keep more transcript turns so planning + tool context survives.
+    // Local Ollama: short history + tight caps so 3B–7B models actually finish.
+    const historyCap = localOllama ? 4_000 : 12_000;
     const recentHistory = this.history
       .filter((m) => m.role === 'user' || m.role === 'assistant')
       .filter((m) => !m.tool_calls?.length)
       .map((m) => ({
         role: m.role,
         content:
-          typeof m.content === 'string' && m.content.length > 12_000
-            ? `${m.content.slice(0, 12_000)}\n/* truncated */`
+          typeof m.content === 'string' && m.content.length > historyCap
+            ? `${m.content.slice(0, historyCap)}\n/* truncated */`
             : m.content,
       }))
-      .slice(-14);
+      .slice(localOllama ? -6 : -14);
 
     const messages: ChatMessage[] = [
       {
@@ -3054,10 +3171,22 @@ Read the highest-scoring evidence in trail order. For a bug, trace UI → handle
     let autoContinues = 0;
     let diagnosticsInjected = false;
     let lastChanceTools = false;
-    const maxAutoContinues = 16;
-    const maxResearchNudges = capabilityQuestion || flowQuestion ? 3 : questionIntent ? 2 : 4;
-    const maxImplementNudges = needsImplementation ? 8 : 0;
-    const maxRejectNudges = 6;
+    const maxAutoContinues = localOllama ? 2 : 16;
+    const maxResearchNudges = localOllama
+      ? 1
+      : capabilityQuestion || flowQuestion
+        ? 3
+        : questionIntent
+          ? 2
+          : 4;
+    const maxImplementNudges = localOllama
+      ? needsImplementation
+        ? 4
+        : 0
+      : needsImplementation
+        ? 8
+        : 0;
+    const maxRejectNudges = localOllama ? 2 : 6;
     const frontendOnly = this.isFrontendOnlyIntent(latestUser);
     const exploredPaths = new Set<string>(
       this.rankCandidatePaths(candidatePaths.slice(0, 12), latestUser).slice(0, 8),
@@ -3070,7 +3199,7 @@ Read the highest-scoring evidence in trail order. For a bug, trace UI → handle
     const hasSeedTargets =
       needsImplementation &&
       (Boolean(active) || candidatePaths.length > 0 || exploredPaths.size > 0);
-    if (needsImplementation && hasSeedTargets) {
+    if (!localOllama && needsImplementation && hasSeedTargets) {
       const prefetchPaths = this.rankCandidatePaths(
         [...(active ? [active] : []), ...candidatePaths, ...exploredPaths],
         latestUser,
@@ -3108,6 +3237,27 @@ Read the highest-scoring evidence in trail order. For a bug, trace UI → handle
           'reading',
           `Prefetched ${prefetched.length} target${prefetched.length > 1 ? 's' : ''} for edit`,
         );
+      }
+    } else if (localOllama && needsImplementation && active) {
+      try {
+        const filePath = this.resolvePath(active);
+        if (fs.existsSync(filePath) && fs.statSync(filePath).isFile()) {
+          const content = await this.readText(filePath);
+          this.filesReadThisSession.add(normPath(filePath));
+          readCount++;
+          exploredPaths.add(normPath(filePath));
+          const lines = content.split('\n');
+          const end = Math.min(lines.length, 80);
+          messages.push({
+            role: 'system',
+            content:
+              `ACTIVE FILE (already read — edit with search_replace/write_file, do not paste in chat):\n` +
+              `FILE: ${filePath}\nLINES: 1-${end} of ${lines.length}\n\n` +
+              this.numberLines(lines.slice(0, end).join('\n'), 1).slice(0, 6_000),
+          });
+        }
+      } catch {
+        // skip unreadable
       }
     }
 
@@ -3253,28 +3403,36 @@ Read the highest-scoring evidence in trail order. For a bug, trace UI → handle
         searchCount,
         readCount,
         hasSeedTargets: hasSeedTargets || exploredPaths.size > 0 || readCount > 0,
+        local: localOllama,
       });
 
       let result;
       try {
         // Capability: never force-answer until enforcement evidence or enough reads.
         const forceAnswer =
-          questionIntent &&
-          (capabilityQuestion
-            ? (this.hasEnforcementEvidence(exploredPaths, repositoryContext) &&
-                (readCount >= 1 || step >= 2)) ||
-              step >= 4
-            : readCount >= 1 ||
-              searchCount >= 2 ||
-              (step >= 1 && strongQuestionEvidence) ||
-              step >= 3);
+          localNoTools ||
+          (questionIntent &&
+            (capabilityQuestion
+              ? (this.hasEnforcementEvidence(exploredPaths, repositoryContext) &&
+                  (readCount >= 1 || step >= 2)) ||
+                step >= 4
+              : readCount >= 1 ||
+                searchCount >= 2 ||
+                (step >= 1 && strongQuestionEvidence) ||
+                step >= 3));
         result = await this.invokeCompletionResilient(pendingId, {
           messages,
           tools: forceAnswer ? undefined : tools,
           toolChoice: forceAnswer ? 'none' : 'auto',
           modelId: this.modelId,
           stream: true,
-          maxTokens: questionIntent ? 900 : routingMaxTokens(step, madeEdits),
+          maxTokens: localOllama
+            ? questionIntent
+              ? 700
+              : routingMaxTokens(step, madeEdits, true)
+            : questionIntent
+              ? 900
+              : routingMaxTokens(step, madeEdits),
         });
       } catch (e: any) {
         // Transient API failures: auto-continue like Cursor (never dump "pick a file").
@@ -3341,6 +3499,9 @@ Read the highest-scoring evidence in trail order. For a bug, trace UI → handle
       }
 
       let content = (result.content || '').trim();
+      if (localOllama) {
+        content = stripLocalThinkTags(content);
+      }
       let toolCalls = result.tool_calls;
 
       // DeepSeek sometimes dumps tool calls as DSML/XML text instead of tool_calls[].
@@ -3387,6 +3548,20 @@ Read the highest-scoring evidence in trail order. For a bug, trace UI → handle
           ];
           content = this.stripGarbageToolDump(content);
           this.setStatus('Searching enforcement rules…');
+        }
+      }
+
+      // Local models often paste the solution in chat. Turn those fences into real file edits.
+      if (
+        localOllama &&
+        needsImplementation &&
+        (!toolCalls || !toolCalls.length)
+      ) {
+        const dumped = this.parseLocalCodeDumpToToolCalls(content, active);
+        if (dumped.length) {
+          toolCalls = dumped;
+          content = this.stripLocalCodeDump(content) || 'Applying the code to the project…';
+          this.setStatus('Applying edits to project…');
         }
       }
 
@@ -3522,6 +3697,34 @@ Read the highest-scoring evidence in trail order. For a bug, trace UI → handle
         continue;
       }
 
+      // Local Ollama: prose with no tools is the answer — unless they dumped code instead of editing.
+      if (localOllama && (!toolCalls || !toolCalls.length)) {
+        const safe = (this.bubbleSafeContent(content) || content).trim();
+        const dumpedCode = this.looksLikeLocalCodeDump(safe);
+        if (dumpedCode && needsImplementation && !madeEdits && step < maxSteps - 1) {
+          // fall through to implement nudge
+        } else if (safe.length >= 2 && !this.looksLikeGarbageToolDump(safe)) {
+          if (
+            localNoTools ||
+            !needsImplementation ||
+            madeEdits ||
+            this.chatMode !== 'agent' ||
+            questionIntent
+          ) {
+            this.completeLastActivity(pendingId);
+            this.setStatus('');
+            return safe;
+          }
+        } else if (step >= 1 && !needsImplementation) {
+          this.completeLastActivity(pendingId);
+          this.setStatus('');
+          return (
+            safe ||
+            'The local model did not return a reply. Try a shorter prompt, or pick a cloud model.'
+          );
+        }
+      }
+
       const minimumReads = capabilityQuestion
         ? 2
         : flowQuestion
@@ -3532,6 +3735,7 @@ Read the highest-scoring evidence in trail order. For a bug, trace UI → handle
               ? 2
               : 1;
       const needsResearch =
+        !localOllama &&
         !casual &&
         !madeEdits &&
         (questionIntent || this.chatMode === 'agent') &&
@@ -3542,7 +3746,8 @@ Read the highest-scoring evidence in trail order. For a bug, trace UI → handle
         !content ||
         this.looksLikePassiveOrFakeEdit(content, usedTools) ||
         this.looksLikeCannotFind(content) ||
-        this.looksLikeAskUserToPickFile(content);
+        this.looksLikeAskUserToPickFile(content) ||
+        (localOllama && needsImplementation && this.looksLikeLocalCodeDump(content));
 
       // Force light research; for questions never push edits.
       if (needsResearch && researchNudges < maxResearchNudges && step < maxSteps - 1) {
@@ -3681,9 +3886,14 @@ Read the highest-scoring evidence in trail order. For a bug, trace UI → handle
             : `exact_code_search the UI labels → read_file best HTML/TS → search_replace.`;
         messages.push({
           role: 'user',
-          content:
-            `Do not stop and do NOT ask which file. Execute now. ${pick}\n` +
-            `Investigation retry ${implementNudges}/${maxImplementNudges}. Request: "${latestUser.slice(0, 400)}"`,
+          content: localOllama
+            ? `STOP pasting code in chat. Call tools NOW to update the project.\n` +
+              `1) read_file ${top[0] || active || 'the target file'}\n` +
+              `2) search_replace or write_file with the real change\n` +
+              `${pick}\n` +
+              `Retry ${implementNudges}/${maxImplementNudges}. Request: "${latestUser.slice(0, 400)}"`
+            : `Do not stop and do NOT ask which file. Execute now. ${pick}\n` +
+              `Investigation retry ${implementNudges}/${maxImplementNudges}. Request: "${latestUser.slice(0, 400)}"`,
         });
         this.setStatus('Agent working…');
         this.pushActivity(
@@ -4600,7 +4810,10 @@ Read the highest-scoring evidence in trail order. For a bug, trace UI → handle
             : {
                 ...request,
                 // Keep enough room for tool calls + patches on retry (don't starve DeepSeek).
-                maxTokens: Math.min(request.maxTokens || 2200, attempt >= 3 ? 1600 : 2000),
+                maxTokens:
+                  findModel(request.modelId).provider === 'ollama'
+                    ? Math.min(request.maxTokens || 1024, 1024)
+                    : Math.min(request.maxTokens || 2200, attempt >= 3 ? 1600 : 2000),
                 messages: this.cloneAndShrinkMessages(request.messages, attempt),
                 stream: false as const,
               };
@@ -4724,6 +4937,134 @@ Read the highest-scoring evidence in trail order. For a bug, trace UI → handle
     return false;
   }
 
+  /** Local Agent: treat Hinglish / implicit coding asks as file edits (paid path unchanged). */
+  private localWantsFileEdit(text: string): boolean {
+    if (this.requiresImplementation(text)) {
+      return true;
+    }
+    const t = (text || '').toLowerCase();
+    if (
+      /\b(karo|kar do|kar dena|update kar|add kar|fix kar|likho|likh do|bana do|banao|dal do|daal do|laga do|change kar|edit kar)\b/i.test(
+        t,
+      )
+    ) {
+      return true;
+    }
+    if (/\b(code|file|project|component)\b/i.test(t) && /\b(me|mein|mai)\b/i.test(t)) {
+      return true;
+    }
+    return false;
+  }
+
+  private looksLikeLocalCodeDump(content: string): boolean {
+    const fences = [...(content || '').matchAll(/```[^\n]*\n([\s\S]*?)```/g)];
+    if (!fences.length) {
+      return false;
+    }
+    return fences.some((m) => {
+      const body = (m[1] || '').trim();
+      return (
+        body.length >= 60 ||
+        /\b(import |export |function |class |const |let |def |public |<html|<div|<template)\b/i.test(body)
+      );
+    });
+  }
+
+  private extractPathFromFenceHeader(header: string): string {
+    const parts = (header || '').trim().split(/\s+/).filter(Boolean);
+    const langs = new Set([
+      'ts',
+      'tsx',
+      'js',
+      'jsx',
+      'mjs',
+      'cjs',
+      'json',
+      'css',
+      'scss',
+      'html',
+      'py',
+      'php',
+      'md',
+      'sh',
+      'bash',
+      'text',
+      'plaintext',
+      'txt',
+      'typescript',
+      'javascript',
+      'python',
+      'xml',
+      'vue',
+      'svelte',
+      'diff',
+      'patch',
+    ]);
+    for (const raw of parts) {
+      const p = raw.replace(/^[`'"]+|[`'"]+$/g, '');
+      if (!p || langs.has(p.toLowerCase())) {
+        continue;
+      }
+      if (/[\\/]/.test(p) || /\.[A-Za-z][A-Za-z0-9]{0,7}$/.test(p)) {
+        return p;
+      }
+    }
+    return '';
+  }
+
+  private parseLocalCodeDumpToToolCalls(content: string, activeFile?: string): ChatToolCall[] {
+    const out: ChatToolCall[] = [];
+    const text = content || '';
+    const re = /```([^\n]*)\n([\s\S]*?)```/g;
+    let m: RegExpExecArray | null;
+    let idx = 0;
+    while ((m = re.exec(text)) && idx < 4) {
+      const header = (m[1] || '').trim();
+      const body = (m[2] || '').replace(/\s+$/, '');
+      if (body.trim().length < 40) {
+        continue;
+      }
+      let filePath = this.extractPathFromFenceHeader(header);
+      if (!filePath) {
+        const before = text.slice(Math.max(0, m.index - 240), m.index);
+        const prev =
+          /(?:^|\n)(?:#{1,4}\s+|File:\s*|Path:\s*|Update(?:d)?(?: file)?:\s*|\*\*)`?([^\s*`\n]+\.[A-Za-z][A-Za-z0-9]*)`?/i.exec(
+            before,
+          );
+        filePath = prev?.[1] || '';
+      }
+      if (!filePath && activeFile && idx === 0) {
+        filePath = activeFile;
+      }
+      if (!filePath) {
+        continue;
+      }
+      const id = `local_dump_${Date.now()}_${idx}`;
+      out.push({
+        id: `${id}_read`,
+        type: 'function',
+        function: { name: 'read_file', arguments: JSON.stringify({ path: filePath }) },
+      });
+      out.push({
+        id: `${id}_write`,
+        type: 'function',
+        function: {
+          name: 'write_file',
+          arguments: JSON.stringify({ path: filePath, content: body }),
+        },
+      });
+      idx++;
+    }
+    return out;
+  }
+
+  private stripLocalCodeDump(content: string): string {
+    return (content || '')
+      .replace(/```[^\n]*\n[\s\S]*?```/g, '')
+      .replace(/\n{3,}/g, '\n\n')
+      .trim();
+  }
+
   /** True when the model is stalling (asks permission) or claims edits without tools. */
   private isSuccessfulMutation(toolResult: string): boolean {
     const text = (toolResult || '').trim();
@@ -4799,6 +5140,7 @@ Read the highest-scoring evidence in trail order. For a bug, trace UI → handle
     const streamId = nextId();
     let stopPoll = false;
     const announcedTools = new Set<string>();
+    const localOllama = findModel(request.modelId).provider === 'ollama';
     const poll = (async () => {
       let last = '';
       while (!stopPoll && !this.cancelRequested) {
@@ -4809,14 +5151,16 @@ Read the highest-scoring evidence in trail order. For a bug, trace UI → handle
           }
           if (state.text && state.text !== last) {
             last = state.text;
-            const prose = state.text.trim();
             // Live final answer into the assistant bubble — NEVER paint DSML / tool XML.
             if (this.looksLikeGarbageToolDump(state.text)) {
               this.setStatus('Thinking');
             } else {
-              const painted = this.bubbleSafeContent(state.text);
+              const painted = this.bubbleSafeContent(
+                localOllama ? stripLocalThinkTags(state.text) : state.text,
+              );
               // Cursor: during tool rounds, NEVER paint into the answer bubble — activity only.
-              if (request.tools?.length && request.toolChoice === 'auto') {
+              // Local Ollama often answers in prose instead of tool_calls — show it live.
+              if (request.tools?.length && request.toolChoice === 'auto' && !localOllama) {
                 if (painted.trim().length > 8) {
                   this.setStatus('Thinking');
                 }
@@ -6186,16 +6530,49 @@ Read the highest-scoring evidence in trail order. For a bug, trace UI → handle
 
   private getProjectRules(): string {
     const root = this.workspaceRoot();
-    if (!root) {
-      return '';
+    const saved = this.settings.get();
+    const chunks: string[] = [];
+    if (root) {
+      const now = Date.now();
+      if (this.rulesCache && this.rulesCache.root === root && now - this.rulesCache.at < 60_000) {
+        if (this.rulesCache.text) {
+          chunks.push(this.rulesCache.text);
+        }
+      } else {
+        const text = loadProjectRules(root);
+        this.rulesCache = { root, text, at: now };
+        if (text) {
+          chunks.push(text);
+        }
+      }
     }
-    const now = Date.now();
-    if (this.rulesCache && this.rulesCache.root === root && now - this.rulesCache.at < 60_000) {
-      return this.rulesCache.text;
+    if (saved.userRules.trim()) {
+      chunks.push(`USER RULES (from OLKIL Settings):\n${saved.userRules.trim()}`);
     }
-    const text = loadProjectRules(root);
-    this.rulesCache = { root, text, at: now };
-    return text;
+    if (!saved.includeDotfiles) {
+      chunks.push(
+        'Do not read, print, or commit secret dotfiles (.env, credentials, private keys) unless the user explicitly asks.',
+      );
+    }
+    chunks.push(this.gitPolicyRules(saved));
+    return chunks.filter(Boolean).join('\n\n');
+  }
+
+  private gitPolicyRules(saved: {
+    gitAllowCommit: boolean;
+    gitAllowPush: boolean;
+    gitAllowPr: boolean;
+    gitCommitStyle: string;
+    gitDefaultBranch: string;
+  }): string {
+    return [
+      'GIT & PR POLICY (from OLKIL Settings):',
+      `- Commits: ${saved.gitAllowCommit ? 'allowed when the user asks' : 'do not run git commit'}`,
+      `- git push: ${saved.gitAllowPush ? 'allowed when the user asks' : 'do not push to remotes'}`,
+      `- Pull requests: ${saved.gitAllowPr ? 'allowed when the user asks (gh/glab)' : 'do not open pull requests'}`,
+      `- Commit message style: ${saved.gitCommitStyle === 'conventional' ? 'Conventional Commits (feat/fix/chore)' : 'plain sentence'}`,
+      `- Default branch: ${saved.gitDefaultBranch || 'main'}`,
+    ].join('\n');
   }
 
   private toolGetDiagnostics(pathFilter?: string, severity = 'error', maxResults = 40): string {
