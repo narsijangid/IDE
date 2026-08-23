@@ -65,9 +65,14 @@ jobs:
         env:
           HUSKY: '0'
 
-      - name: Python setuptools for node-gyp
+      - name: Python 3.11 + setuptools for node-gyp
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install setuptools
         shell: bash
-        run: python3 -m pip install --user setuptools
+        run: python -m pip install --upgrade setuptools
 
       - name: MSVC environment
         uses: ilammy/msvc-dev-cmd@v1
@@ -76,6 +81,7 @@ jobs:
         run: yarn rebuild-native
         env:
           npm_config_msvs_version: '2022'
+          npm_config_python: python
 
       - name: Stage OpenCode sidecar
         run: yarn stage-opencode
