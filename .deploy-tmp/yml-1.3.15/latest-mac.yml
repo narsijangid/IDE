@@ -1,0 +1,11 @@
+version: 1.3.15
+files:
+  - url: OLKIL-1.3.15-x64.dmg
+    sha512: 06KhcAnZ1DxzbcR9FL8/0ZZElREJG+91D+i7obAz/576jJm6uSgi5oiEmG7Uvb8zaqRIwqvYp8eJVm/uI34fvg==
+    size: 180467582
+  - url: OLKIL-1.3.15-arm64.dmg
+    sha512: HNY732z4ipgfyG3/sgef/d7yPVZHlih+R+wf5TBDryo2qU2xCfzpUCxnt4UPa6km0vHyGJbfSt4qfA/dAeicQg==
+    size: 175896115
+path: OLKIL-1.3.15-x64.dmg
+sha512: 06KhcAnZ1DxzbcR9FL8/0ZZElREJG+91D+i7obAz/576jJm6uSgi5oiEmG7Uvb8zaqRIwqvYp8eJVm/uI34fvg==
+releaseDate: '2026-08-23T14:39:18.329Z'

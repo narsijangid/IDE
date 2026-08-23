@@ -1,0 +1,9 @@
+version: 1.3.14
+files:
+  - url: OLKIL-1.3.14.AppImage
+    sha512: IXZVTcve8ahpIeNQU33lSY4j59IaVMfoYh9vy0ElnkO7ijW7y8CYfzYBl079It9da3pc3gujjV7uC5cNcqqiww==
+    size: 145177697
+    blockMapSize: 150645
+path: OLKIL-1.3.14.AppImage
+sha512: IXZVTcve8ahpIeNQU33lSY4j59IaVMfoYh9vy0ElnkO7ijW7y8CYfzYBl079It9da3pc3gujjV7uC5cNcqqiww==
+releaseDate: '2026-08-23T11:33:43.904Z'

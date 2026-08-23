@@ -1,0 +1,8 @@
+version: 1.3.16
+files:
+  - url: https://olkil.com/downloads/OLKIL-1.3.16.exe
+    sha512: JX0tiZXBndscvI47AAFnc1lRUkU5R80QhW1KMMyD2Lyv6rs09N7xE/nckBLxhiCgWNliducViySH0g9eHmJolQ==
+    size: 148663386
+path: https://olkil.com/downloads/OLKIL-1.3.16.exe
+sha512: JX0tiZXBndscvI47AAFnc1lRUkU5R80QhW1KMMyD2Lyv6rs09N7xE/nckBLxhiCgWNliducViySH0g9eHmJolQ==
+releaseDate: '2026-08-23T16:10:10.963Z'
