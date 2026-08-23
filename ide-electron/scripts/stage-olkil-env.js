@@ -4,6 +4,9 @@
  * 2) embedded-secrets.ts → webpack-bundled into the node process (reliable)
  *
  * Never commit build/olkil.env or embedded-secrets.ts.
+ *
+ * CI must pass DEEPSEEK_API_KEY / POOLSIDE_API_KEY as Actions secrets.
+ * Local yarn start reads ide-electron/.env — packaged apps cannot.
  */
 const fs = require('fs');
 const path = require('path');
@@ -17,6 +20,12 @@ const ALLOWED = new Set([
   'OLKIL_MAX_TOKENS',
   'OLKIL_UPDATE_URL',
 ]);
+
+const ALIASES = {
+  DEEPSEEK_KEY: 'DEEPSEEK_API_KEY',
+  DEEPSEEK_TOKEN: 'DEEPSEEK_API_KEY',
+  POOLSIDE_KEY: 'POOLSIDE_API_KEY',
+};
 
 const root = path.join(__dirname, '..');
 const src = path.join(root, '.env');
@@ -43,32 +52,83 @@ function parseEnv(text) {
   return out;
 }
 
+function usable(value) {
+  const v = String(value || '').trim();
+  if (!v) return '';
+  if (/your_|changeme|placeholder|example/i.test(v)) return '';
+  return v;
+}
+
 function jsString(value) {
   return JSON.stringify(String(value));
 }
 
+function readPreviousEmbedded() {
+  try {
+    const text = fs.readFileSync(destTs, 'utf8');
+    const grab = (name) => {
+      const m = text.match(new RegExp(`export const ${name} = ("(?:\\\\.|[^"\\\\])*")`));
+      return m ? usable(JSON.parse(m[1])) : '';
+    };
+    return {
+      DEEPSEEK_API_KEY: grab('EMBEDDED_DEEPSEEK_API_KEY'),
+      POOLSIDE_API_KEY: grab('EMBEDDED_POOLSIDE_API_KEY'),
+    };
+  } catch {
+    return { DEEPSEEK_API_KEY: '', POOLSIDE_API_KEY: '' };
+  }
+}
+
+function pick(merged, key) {
+  return usable(merged[key]);
+}
+
 function main() {
   const parsed = fs.existsSync(src) ? parseEnv(fs.readFileSync(src, 'utf8')) : {};
-  const values = {};
-  for (const key of ALLOWED) {
-    const val = process.env[key] || parsed[key];
-    if (!val || String(val).includes('your_')) continue;
-    values[key] = String(val);
+  const merged = { ...parsed };
+  for (const [key, val] of Object.entries(process.env)) {
+    if (usable(val)) merged[key] = val;
+  }
+  for (const [from, to] of Object.entries(ALIASES)) {
+    if (!usable(merged[to]) && usable(merged[from])) {
+      merged[to] = merged[from];
+    }
   }
 
-  const hasCloud = Boolean(values.POOLSIDE_API_KEY || values.DEEPSEEK_API_KEY);
-  if (!hasCloud) {
-    console.warn('[stage-olkil-env] No cloud API key — DeepSeek/Dazzlone will fail.');
+  const previous = readPreviousEmbedded();
+  const values = {};
+  for (const key of ALLOWED) {
+    const val = pick(merged, key);
+    if (val) values[key] = val;
   }
-  if (!values.POOLSIDE_API_KEY) {
+  if (!values.DEEPSEEK_API_KEY && previous.DEEPSEEK_API_KEY) {
+    values.DEEPSEEK_API_KEY = previous.DEEPSEEK_API_KEY;
+  }
+  if (!values.POOLSIDE_API_KEY && previous.POOLSIDE_API_KEY) {
+    values.POOLSIDE_API_KEY = previous.POOLSIDE_API_KEY;
+  }
+
+  const requireCloud =
+    process.env.OLKIL_REQUIRE_CLOUD_KEYS === '1' || process.env.GITHUB_ACTIONS === 'true';
+  const hasDeepseek = Boolean(values.DEEPSEEK_API_KEY);
+  const hasPoolside = Boolean(values.POOLSIDE_API_KEY);
+
+  if (!hasPoolside) {
     console.warn('[stage-olkil-env] POOLSIDE_API_KEY missing — Dazzlone will fail.');
   }
-  if (!values.DEEPSEEK_API_KEY) {
-    console.warn('[stage-olkil-env] DEEPSEEK_API_KEY missing — DeepSeek will fail.');
+  if (!hasDeepseek) {
+    console.warn('[stage-olkil-env] DEEPSEEK_API_KEY missing — DeepSeek will 401 (governor).');
+  }
+  if (requireCloud && !hasDeepseek) {
+    console.error(
+      '[stage-olkil-env] Refusing to pack without DEEPSEEK_API_KEY.\n' +
+        'Add repo secret DEEPSEEK_API_KEY (same key as ide-electron/.env) and pass it into the build job.',
+    );
+    process.exit(1);
   }
 
   fs.mkdirSync(path.dirname(destTs), { recursive: true });
-  if (!hasCloud) {
+  if (!hasDeepseek && !hasPoolside) {
     fs.writeFileSync(
       destTs,
       `/** Auto-generated — do not commit. Run: node scripts/stage-olkil-env.js */\n` +
@@ -83,7 +143,11 @@ function main() {
   const lines = Object.entries(values).map(([k, v]) => `${k}=${v}`);
   fs.mkdirSync(path.dirname(destEnv), { recursive: true });
   fs.writeFileSync(destEnv, lines.join('\n') + '\n', 'utf8');
-  console.log('[stage-olkil-env] Wrote', destEnv, `(${lines.length} keys)`);
+  console.log(
+    '[stage-olkil-env] Wrote',
+    destEnv,
+    `(deepseek=${hasDeepseek ? 'yes' : 'NO'} poolside=${hasPoolside ? 'yes' : 'NO'})`,
+  );
 
   const embeddedObj = Object.entries(values)
     .map(([k, v]) => `  ${jsString(k)}: ${jsString(v)},`)

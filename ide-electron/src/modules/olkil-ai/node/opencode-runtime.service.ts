@@ -94,15 +94,31 @@ function readEnvFile(): Record<string, string> {
   return out;
 }
 
+function firstKey(...vals: Array<string | undefined>): string {
+  for (const val of vals) {
+    const v = String(val || '').trim();
+    if (v && !/your_|changeme|placeholder/i.test(v)) {
+      return v;
+    }
+  }
+  return '';
+}
+
 function providerSecrets(): OpencodeProviderSecrets {
   const env = readEnvFile();
   return {
-    deepseekKey:
-      process.env.DEEPSEEK_API_KEY || env.DEEPSEEK_API_KEY || EMBEDDED_DEEPSEEK_API_KEY || '',
+    deepseekKey: firstKey(
+      process.env.DEEPSEEK_API_KEY,
+      env.DEEPSEEK_API_KEY,
+      EMBEDDED_DEEPSEEK_API_KEY,
+    ),
     deepseekBase:
       process.env.DEEPSEEK_BASE_URL || env.DEEPSEEK_BASE_URL || DEFAULT_DEEPSEEK_BASE,
-    poolsideKey:
-      process.env.POOLSIDE_API_KEY || env.POOLSIDE_API_KEY || EMBEDDED_POOLSIDE_API_KEY || '',
+    poolsideKey: firstKey(
+      process.env.POOLSIDE_API_KEY,
+      env.POOLSIDE_API_KEY,
+      EMBEDDED_POOLSIDE_API_KEY,
+    ),
     ollamaBase: process.env.OLLAMA_BASE_URL || env.OLLAMA_BASE_URL || DEFAULT_OLLAMA_BASE,
   };
 }
@@ -277,6 +293,11 @@ export class OlkilOpencodeRuntimeHost {
     try {
       const option = findModel(request.modelId);
       await assertOlkilWallet(option.provider);
+      if (option.provider === 'deepseek' && !providerSecrets().deepseekKey) {
+        throw new Error(
+          'DeepSeek is not configured in this OLKIL build. Reinstall the latest app from olkil.com.',
+        );
+      }
       this.syncMcp(this.mergeMcp(request));
       const sidecar = await this.ensureSidecar();
       const directory = this.sessionDirectory(request.workspaceRoot);

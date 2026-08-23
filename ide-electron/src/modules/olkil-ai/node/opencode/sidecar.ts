@@ -83,22 +83,23 @@ export class OpencodeSidecar {
     }
     this.homeDir = path.join(os.homedir(), '.olkil', 'opencode-home');
     fs.mkdirSync(this.homeDir, { recursive: true });
+    this.writeProviderAuth();
 
     const port = 20000 + Math.floor(Math.random() * 20000);
     const password = randomBytes(16).toString('hex');
     this.authHeader = `Basic ${Buffer.from(`olkil:${password}`).toString('base64')}`;
     const args = ['serve', `--hostname=127.0.0.1`, `--port=${port}`, '--pure'];
     const config = buildOpencodeConfigContent(this.secrets, this.extras);
-    const env: NodeJS.ProcessEnv = {
-      ...process.env,
+    const env: NodeJS.ProcessEnv = isolatedSidecarEnv({
+      OPENCODE_HOME: this.homeDir,
       OPENCODE_CONFIG_CONTENT: JSON.stringify(config),
       OPENCODE_CALLER: 'olkil',
       OPENCODE_DISABLE_AUTOUPDATE: '1',
       OPENCODE_SERVER_USERNAME: 'olkil',
       OPENCODE_SERVER_PASSWORD: password,
-      DEEPSEEK_API_KEY: this.secrets.deepseekKey || process.env.DEEPSEEK_API_KEY || '',
-      POOLSIDE_API_KEY: this.secrets.poolsideKey || process.env.POOLSIDE_API_KEY || '',
-    };
+      DEEPSEEK_API_KEY: this.secrets.deepseekKey || '',
+      POOLSIDE_API_KEY: this.secrets.poolsideKey || '',
+    });
 
     const proc = spawn(binary, args, {
       cwd: this.homeDir,
@@ -113,6 +114,18 @@ export class OpencodeSidecar {
     await this.waitHealthy(8000);
     this.attachExitHandler(proc);
     this.startEventStream();
+  }
+
+  /** OpenCode also reads auth.json; keep it in sync so packaged users don't 401. */
+  private writeProviderAuth(): void {
+    const auth: Record<string, { type: 'api'; key: string }> = {};
+    if (this.secrets.deepseekKey) {
+      auth.deepseek = { type: 'api', key: this.secrets.deepseekKey };
+    }
+    if (this.secrets.poolsideKey) {
+      auth.poolside = { type: 'api', key: this.secrets.poolsideKey };
+    }
+    fs.writeFileSync(path.join(this.homeDir, 'auth.json'), JSON.stringify(auth), 'utf8');
   }
 
   private attachExitHandler(proc: ChildProcess): void {
@@ -234,6 +247,22 @@ function parseSseBlock(block: string): any | null {
   } catch {
     return null;
   }
+}
+
+/**
+ * Don't inherit the user's OPENAI_API_KEY / other vendor keys — OpenCode's
+ * openai-compatible DeepSeek adapter will 401 "Authentication Fails (governor)"
+ * if a foreign key wins over ours.
+ */
+function isolatedSidecarEnv(overrides: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  const env: NodeJS.ProcessEnv = { ...process.env };
+  for (const key of Object.keys(env)) {
+    if (/_API_KEY$/i.test(key) || /_ACCESS_TOKEN$/i.test(key) || key === 'OPENAI_API_KEY') {
+      delete env[key];
+    }
+  }
+  Object.assign(env, overrides);
+  return env;
 }
 
 function waitForListen(proc: ChildProcess, port: number, timeoutMs: number, authHeader: string): Promise<string> {

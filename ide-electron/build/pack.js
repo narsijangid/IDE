@@ -103,22 +103,26 @@ const extraResources = [
   },
 ];
 
-// Ship Dazzlone (Poolside) API key from local .env into packaged resources (gitignored).
-try {
-  require('../scripts/stage-olkil-env');
-} catch (e) {
-  console.warn('[pack] stage-olkil-env failed', e?.message || e);
-}
+// Bake DeepSeek / Dazzlone keys into extraResources (gitignored olkil.env).
+require('../scripts/stage-olkil-env');
 const olkilEnvFile = path.join(__dirname, 'olkil.env');
+const requireCloud = process.env.OLKIL_REQUIRE_CLOUD_KEYS === '1' || process.env.GITHUB_ACTIONS === 'true';
 if (fs.existsSync(olkilEnvFile)) {
   extraResources.push({
     from: path.join(__dirname),
     to: '.',
     filter: ['olkil.env'],
   });
-  console.log('[pack] Bundling olkil.env for Dazzlone (from local .env)');
+  const envText = fs.readFileSync(olkilEnvFile, 'utf8');
+  const hasDeepseek = /^DEEPSEEK_API_KEY=.+$/m.test(envText);
+  console.log(`[pack] Bundling olkil.env (deepseek=${hasDeepseek ? 'yes' : 'NO'})`);
+  if (requireCloud && !hasDeepseek) {
+    throw new Error('[pack] olkil.env has no DEEPSEEK_API_KEY — installers would 401 in chat.');
+  }
+} else if (requireCloud) {
+  throw new Error('[pack] build/olkil.env missing — set DEEPSEEK_API_KEY before pack');
 } else {
-  console.warn('[pack] build/olkil.env missing — set POOLSIDE_API_KEY in ide-electron/.env before pack');
+  console.warn('[pack] build/olkil.env missing — cloud chat will 401 in this installer');
 }
 
 if (fs.existsSync(ollamaDir)) {

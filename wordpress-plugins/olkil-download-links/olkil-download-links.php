@@ -11,7 +11,7 @@ if ( ! defined( 'ABSPATH' ) ) {
 }
 
 function olkil_dl_app_version() {
-	return '1.3.15';
+	return '1.3.16';
 }
 
 function olkil_dl_release_tag() {
@@ -58,6 +58,11 @@ function olkil_dl_urls() {
 	$gh    = olkil_dl_github_base();
 	$out   = array();
 	foreach ( $files as $os => $name ) {
+		// Hostinger WAF 403s this .deb (OpenCode sidecar). Keep GitHub for .deb.
+		if ( $os === 'linux' ) {
+			$out[ $os ] = $gh . '/' . $name;
+			continue;
+		}
 		$out[ $os ] = olkil_dl_has_local( $name )
 			? home_url( '/downloads/' . $name )
 			: $gh . '/' . $name;
@@ -110,8 +115,10 @@ function olkil_dl_fetch_missing_from_github() {
 	$gh    = olkil_dl_github_base();
 	$files = olkil_dl_filenames();
 	$ok    = true;
-	foreach ( $files as $name ) {
-		// Keep existing Windows.exe if already present.
+	foreach ( $files as $os => $name ) {
+		if ( $os === 'linux' ) {
+			continue;
+		}
 		if ( olkil_dl_has_local( $name ) ) {
 			continue;
 		}

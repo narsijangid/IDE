@@ -495,7 +495,7 @@ export class OlkilAiNodeService implements IOlkilAiNodeService {
         this.env.DEEPSEEK_API_KEY ||
         EMBEDDED_DEEPSEEK_API_KEY ||
         ''
-      );
+      ).trim();
     }
     return (
       process.env.POOLSIDE_API_KEY ||

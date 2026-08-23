@@ -89,6 +89,9 @@ jobs:
       - name: Build + pack (generate latest.yml)
         shell: bash
         env:
+          OLKIL_REQUIRE_CLOUD_KEYS: '1'
+          DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
+          POOLSIDE_API_KEY: ${{ secrets.POOLSIDE_API_KEY }}
           OLKIL_PUBLISH: '1'
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           OLKIL_UPDATE_URL: https://updates.olkil.com
