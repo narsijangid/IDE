@@ -83,6 +83,10 @@ jobs:
         env:
           HUSKY: '0'
 
+      - name: Python setuptools for node-gyp
+        shell: bash
+        run: python3 -m pip install --user setuptools
+
       - name: MSVC environment
         if: runner.os == 'Windows'
         uses: ilammy/msvc-dev-cmd@v1
