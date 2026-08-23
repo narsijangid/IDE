@@ -53,7 +53,7 @@ export class ProjectSwitcherContribution
           {
             execute: () => {
               this.windowService.openWorkspace(new URI(workspace), {
-                newWindow: true,
+                newWindow: false,
               });
             },
           },
@@ -67,6 +67,7 @@ export class ProjectSwitcherContribution
       submenu: 'recentProjects',
       label: 'Open Recent',
       group: '1_open',
+      order: 3,
     });
 
     this.workspaceService.getMostRecentlyUsedWorkspaces().then((workspaces) => {
@@ -85,14 +86,14 @@ export class ProjectSwitcherContribution
       {
         command: WORKSPACE_COMMANDS.ADD_WORKSPACE_FOLDER.id,
         label: 'Add Folder to Workspace...',
-        group: '2_new',
+        group: '2_workspace',
       },
       {
         command: {
           id: WORKSPACE_COMMANDS.SAVE_WORKSPACE_AS_FILE.id,
           label: 'Save Workspace As...',
         },
-        group: '3_save',
+        group: '2_workspace',
       },
     ]);
   }

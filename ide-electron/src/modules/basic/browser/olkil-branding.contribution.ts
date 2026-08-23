@@ -62,12 +62,16 @@ export class OlkilBrandingContribution implements ComponentContribution, ClientA
   private readonly eventBus: IEventBus;
 
   registerComponent(registry: ComponentRegistry) {
-    registry.register('@opensumi/ide-menu-bar-logo', {
-      id: '@opensumi/ide-menu-bar-logo',
-      component: OlkilMenuBarLogo,
-    }, {
-      containerId: '@opensumi/ide-menu-bar-logo',
-    });
+    registry.register(
+      '@opensumi/ide-menu-bar-logo',
+      {
+        id: '@opensumi/ide-menu-bar-logo',
+        component: OlkilMenuBarLogo,
+      },
+      {
+        containerId: '@opensumi/ide-menu-bar-logo',
+      },
+    );
   }
 
   onDidStart() {
