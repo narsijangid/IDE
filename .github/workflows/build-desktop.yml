@@ -28,7 +28,9 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - os: windows-latest
+          # windows-2022 has VS 2022. windows-latest is VS 18, which node-gyp 9 cannot use,
+          # so node-pty never builds and Windows users see "Cannot find module conpty.node".
+          - os: windows-2022
             platform: win32
             arches: x64
           - os: macos-latest
@@ -81,9 +83,17 @@ jobs:
         env:
           HUSKY: '0'
 
+      - name: MSVC environment
+        if: runner.os == 'Windows'
+        uses: ilammy/msvc-dev-cmd@v1
+
       - name: Rebuild native modules
         run: yarn rebuild-native
-        continue-on-error: true
+        env:
+          npm_config_msvs_version: '2022'
+
+      - name: Stage OpenCode sidecar
+        run: yarn stage-opencode
 
       - name: Download extensions
         run: yarn download-extension

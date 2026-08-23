@@ -101,6 +101,20 @@ function getBuildCacheDir(modulePath, type, version, target) {
   );
 }
 
-nativeModules.forEach((path) => {
-  rebuildModule(path, target, version);
+const requiredNatives = new Set(['node-pty', '@parcel/watcher']);
+
+nativeModules.forEach((modulePath) => {
+  if (!pathExistsSync(join(modulePath, 'package.json'))) {
+    console.log('skip missing native module', modulePath);
+    return;
+  }
+  const name = require(join(modulePath, './package.json')).name;
+  try {
+    rebuildModule(modulePath, target, version);
+  } catch (err) {
+    if (requiredNatives.has(name)) {
+      throw err;
+    }
+    console.warn('optional native rebuild failed for', name, err && err.message ? err.message : err);
+  }
 });

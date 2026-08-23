@@ -73,8 +73,12 @@ export class OpencodeSidecar {
   private async start(): Promise<void> {
     const binary = resolveOpencodeBinary();
     if (!binary) {
+      const packaged = typeof (process as { resourcesPath?: string }).resourcesPath === 'string'
+        || /app\.asar[/\\]/.test(__dirname);
       throw new Error(
-        'OpenCode binary not found. Run `yarn stage-opencode` in ide-electron (or set OLKIL_OPENCODE_BIN).',
+        packaged
+          ? 'OpenCode sidecar is missing from this install. Reinstall OLKIL from olkil.com, or set OLKIL_OPENCODE_BIN.'
+          : 'OpenCode binary not found. Run `yarn stage-opencode` in ide-electron (or set OLKIL_OPENCODE_BIN).',
       );
     }
     this.homeDir = path.join(os.homedir(), '.olkil', 'opencode-home');

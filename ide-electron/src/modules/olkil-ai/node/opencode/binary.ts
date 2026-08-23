@@ -61,15 +61,21 @@ export function resolveOpencodeBinary(): string | undefined {
     dirs.push(path.join(resourcesPath, 'opencode'));
   }
   try {
-    dirs.push(path.join(path.dirname(process.execPath), 'resources', 'opencode'));
+    const execDir = path.dirname(process.execPath);
+    dirs.push(path.join(execDir, 'resources', 'opencode'));
+    // macOS .app: Contents/MacOS/OLKIL → Contents/Resources/opencode
+    dirs.push(path.join(execDir, '..', 'Resources', 'opencode'));
   } catch {
     // ignore
   }
   dirs.push(path.join(__dirname, '..', 'opencode'));
   dirs.push(path.join(__dirname, '..', '..', 'opencode'));
+  // Packaged node process lives in resources/app.asar/node → ../../opencode
+  dirs.push(path.join(__dirname, '..', '..', '..', 'opencode'));
   dirs.push(path.join(process.cwd(), 'build', 'opencode'));
   dirs.push(path.join(__dirname, '..', '..', 'build', 'opencode'));
   dirs.push(path.join(__dirname, '..', '..', '..', 'build', 'opencode'));
+  dirs.push(path.join(__dirname, '..', '..', '..', '..', 'build', 'opencode'));
   dirs.push(path.join(os.homedir(), '.opencode', 'bin'));
   dirs.push(path.join(os.homedir(), 'bin'));
 

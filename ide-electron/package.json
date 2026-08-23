@@ -5,8 +5,8 @@
   "description": "OLKIL IDE (Electron)",
   "main": "./app/main/index.js",
   "scripts": {
-    "start": "node ./scripts/ensure-ripgrep.js && electron --inspect=9229 .",
-    "start:no-dev": "node ./scripts/ensure-ripgrep.js && electron .",
+    "start": "node ./scripts/ensure-ripgrep.js && node ./scripts/stage-opencode.js && electron --inspect=9229 .",
+    "start:no-dev": "node ./scripts/ensure-ripgrep.js && node ./scripts/stage-opencode.js && electron .",
     "link-local": "node ./scripts/link-local.js",
     "build:browser": "webpack --config ./build/webpack.browser.config.js ",
     "build:node": "webpack --config ./build/webpack.node.config.js ",

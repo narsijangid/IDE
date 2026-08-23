@@ -23,7 +23,7 @@ permissions:
 
 jobs:
   build-windows:
-    runs-on: windows-latest
+    runs-on: windows-2022
     defaults:
       run:
         working-directory: ide-electron
@@ -61,7 +61,20 @@ jobs:
           node scripts/apply-product.js
 
       - name: Install dependencies
-        run: yarn install --frozen-lockfile
+        run: yarn install --frozen-lockfile --ignore-scripts
+        env:
+          HUSKY: '0'
+
+      - name: MSVC environment
+        uses: ilammy/msvc-dev-cmd@v1
+
+      - name: Rebuild native modules
+        run: yarn rebuild-native
+        env:
+          npm_config_msvs_version: '2022'
+
+      - name: Stage OpenCode sidecar
+        run: yarn stage-opencode
 
       - name: Build + pack (generate latest.yml)
         shell: bash

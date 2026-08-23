@@ -18,8 +18,44 @@ process.env.CSC_IDENTITY_AUTO_DISCOVERY = false;
 // use double package.json structure, auto handle node_modules
 fs.copyFileSync(path.join(__dirname, '../build/package.json'), path.join(__dirname, '../app/package.json'));
 
+const NATIVE_MODULE_NAMES = ['node-pty', '@parcel/watcher', 'spdlog', 'nsfw', 'keytar'];
+
+function copyNativeBuildsIntoApp(appDir) {
+  const rootNm = path.join(__dirname, '../node_modules');
+  const appNm = path.join(appDir, 'node_modules');
+  for (const name of NATIVE_MODULE_NAMES) {
+    const src = path.join(rootNm, name);
+    const dest = path.join(appNm, name);
+    if (!fs.existsSync(path.join(src, 'build'))) {
+      continue;
+    }
+    fs.cpSync(src, dest, { recursive: true, dereference: true });
+    console.log('[pack] copied rebuilt native module', name);
+  }
+}
+
+function assertWindowsConpty(appDir) {
+  if (!targetPlatforms.includes('win32')) {
+    return;
+  }
+  const candidates = [
+    path.join(__dirname, '../node_modules/node-pty/build/Release/conpty.node'),
+    appDir && path.join(appDir, 'node_modules/node-pty/build/Release/conpty.node'),
+  ].filter(Boolean);
+  const found = candidates.find((p) => fs.existsSync(p));
+  if (!found) {
+    throw new Error(
+      '[pack] node-pty is missing build/Release/conpty.node.\n' +
+        'Run `yarn rebuild-native` on Windows before packing.\n' +
+        'Without it, installed OLKIL shows: Cannot find module conpty.node',
+    );
+  }
+}
+
 const targetPlatforms = (process.env.TARGET_PLATFORMS || DEFAULT_TARGET_PLATFORM).split(',').map((str) => str.trim());
 const targetArches = TARGET_ARCH.split(',').map((str) => str.trim());
+
+assertWindowsConpty();
 
 const targets = new Map();
 if (targetPlatforms.includes('win32')) {
@@ -90,18 +126,20 @@ if (fs.existsSync(ollamaDir)) {
 }
 
 const opencodeDir = path.join(__dirname, 'opencode');
-if (fs.existsSync(opencodeDir)) {
-  extraResources.push({
-    from: opencodeDir,
-    to: 'opencode',
-    filter: ['**/*'],
-  });
-  console.log('[pack] Bundling OpenCode sidecar from', opencodeDir);
-} else {
-  console.warn(
-    '[pack] build/opencode not found — run `yarn stage-opencode` so the coding agent can start.',
+const opencodeBin = path.join(opencodeDir, process.platform === 'win32' ? 'opencode.exe' : 'opencode');
+if (!fs.existsSync(opencodeBin)) {
+  throw new Error(
+    '[pack] OpenCode sidecar missing at ' +
+      opencodeBin +
+      '. Run `yarn stage-opencode` before packing — without it DeepSeek/agent chat cannot start.',
   );
 }
+extraResources.push({
+  from: opencodeDir,
+  to: 'opencode',
+  filter: ['**/*'],
+});
+console.log('[pack] Bundling OpenCode sidecar from', opencodeDir);
 
 // Auto-update publish targets:
 // - generic → Hostinger feed at updates.olkil.com (primary for installed apps)
@@ -146,9 +184,21 @@ electronBuilder
         output: outputPath,
       },
       asar: true,
-      asarUnpack: ['bin/**', 'node_modules/@opensumi/ripgrep/**', 'node_modules/@opensumi/vscode-ripgrep/**'],
-      // Native modules are rebuilt via `yarn rebuild-native` (Spectre libs may be missing on some VS installs)
+      asarUnpack: [
+        'bin/**',
+        'node_modules/@opensumi/ripgrep/**',
+        'node_modules/@opensumi/vscode-ripgrep/**',
+        'node_modules/node-pty/**',
+        'node_modules/@parcel/watcher/**',
+        'node_modules/spdlog/**',
+        '**/*.node',
+      ],
+      // Native modules are rebuilt via `yarn rebuild-native` then copied in beforePack.
       npmRebuild: process.env.OLKIL_NPM_REBUILD === '1',
+      beforePack: async (context) => {
+        copyNativeBuildsIntoApp(context.appDir);
+        assertWindowsConpty(context.appDir);
+      },
       publish: publishProviders,
       mac: {
         icon: 'build/icon/olkilmainlogo.png',
