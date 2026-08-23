@@ -63,6 +63,60 @@ function truncate(s: string, n: number): string {
   return s.length > n ? `${s.slice(0, n)}…` : s;
 }
 
+/** Webpack wraps require(); Live Test must load real Playwright from extraResources. */
+function nativeNodeRequire(id: string): any {
+  const g = globalThis as { __non_webpack_require__?: NodeRequire };
+  if (typeof g.__non_webpack_require__ === 'function') {
+    return g.__non_webpack_require__(id);
+  }
+  try {
+    return eval('require')(id);
+  } catch {
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    return require(id);
+  }
+}
+
+function unwrapPlaywright(mod: any): PlaywrightModule | null {
+  if (!mod) {
+    return null;
+  }
+  if (mod.chromium && typeof mod.chromium.launchPersistentContext === 'function') {
+    return mod as PlaywrightModule;
+  }
+  if (mod.default?.chromium && typeof mod.default.chromium.launchPersistentContext === 'function') {
+    return mod.default as PlaywrightModule;
+  }
+  return null;
+}
+
+function resourceRoots(): string[] {
+  const roots: string[] = [];
+  const seen = new Set<string>();
+  const push = (p?: string) => {
+    if (!p) {
+      return;
+    }
+    const n = path.resolve(p);
+    if (seen.has(n)) {
+      return;
+    }
+    seen.add(n);
+    roots.push(n);
+  };
+  const proc = process as NodeJS.Process & { resourcesPath?: string };
+  push(proc.resourcesPath);
+  push(process.env.OLKIL_RESOURCES_PATH);
+  push(process.env.MAC_RESOURCES_PATH);
+  try {
+    push(path.join(path.dirname(process.execPath), 'resources'));
+    push(path.join(path.dirname(process.execPath), '..', 'Resources'));
+  } catch {
+    // ignore
+  }
+  return roots;
+}
+
 function isApiLike(resourceType: string, url: string): boolean {
   const t = (resourceType || '').toLowerCase();
   if (t === 'xhr' || t === 'fetch') {
@@ -245,16 +299,92 @@ export class BrowserTestService {
     if (this.pw) {
       return this.pw;
     }
-    try {
-      // eslint-disable-next-line @typescript-eslint/no-var-requires
-      this.pw = require('playwright') as PlaywrightModule;
-      return this.pw;
-    } catch (e: any) {
-      throw new Error(
-        `Playwright is not available (${e?.message || e}). ` +
-          `From ide-electron run: yarn add playwright && npx playwright install chromium`,
-      );
+    this.preparePlaywrightEnv();
+    const errors: string[] = [];
+    for (const spec of this.playwrightRequireIds()) {
+      try {
+        const raw = nativeNodeRequire(spec);
+        const pw = unwrapPlaywright(raw);
+        if (pw?.chromium?.launchPersistentContext) {
+          this.pw = pw;
+          return pw;
+        }
+        const keys = raw && typeof raw === 'object' ? Object.keys(raw).join(',') : String(raw);
+        errors.push(`${spec}: no chromium.launchPersistentContext (exports: ${keys})`);
+      } catch (e: any) {
+        errors.push(`${spec}: ${e?.message || e}`);
+      }
     }
+    throw new Error(
+      `Playwright is not available in this OLKIL install. ${errors.slice(0, 4).join(' | ')}. ` +
+        `Reinstall the latest app from olkil.com.`,
+    );
+  }
+
+  private preparePlaywrightEnv() {
+    process.env.PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD = process.env.PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD || '1';
+    for (const root of resourceRoots()) {
+      const browsers = path.join(root, 'ms-playwright');
+      if (fs.existsSync(browsers)) {
+        process.env.PLAYWRIGHT_BROWSERS_PATH = browsers;
+        return;
+      }
+    }
+  }
+
+  private playwrightRequireIds(): string[] {
+    const ids: string[] = [];
+    for (const root of resourceRoots()) {
+      ids.push(path.join(root, 'playwright-modules', 'node_modules', 'playwright'));
+      ids.push(path.join(root, 'playwright-modules', 'node_modules', 'playwright-core'));
+      ids.push(path.join(root, 'app.asar.unpacked', 'node_modules', 'playwright'));
+      ids.push(path.join(root, 'app.asar.unpacked', 'node_modules', 'playwright-core'));
+    }
+    ids.push('playwright', 'playwright-core');
+    return ids;
+  }
+
+  private findSystemChromium(): string | undefined {
+    const candidates =
+      process.platform === 'win32'
+        ? [
+            path.join(process.env.PROGRAMFILES || 'C:\\Program Files', 'Microsoft', 'Edge', 'Application', 'msedge.exe'),
+            path.join(
+              process.env['PROGRAMFILES(X86)'] || 'C:\\Program Files (x86)',
+              'Microsoft',
+              'Edge',
+              'Application',
+              'msedge.exe',
+            ),
+            path.join(process.env.PROGRAMFILES || 'C:\\Program Files', 'Google', 'Chrome', 'Application', 'chrome.exe'),
+            path.join(
+              process.env.LOCALAPPDATA || path.join(os.homedir(), 'AppData', 'Local'),
+              'Google',
+              'Chrome',
+              'Application',
+              'chrome.exe',
+            ),
+          ]
+        : process.platform === 'darwin'
+          ? [
+              '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
+              '/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge',
+              '/Applications/Chromium.app/Contents/MacOS/Chromium',
+            ]
+          : [
+              '/usr/bin/google-chrome-stable',
+              '/usr/bin/google-chrome',
+              '/usr/bin/microsoft-edge',
+              '/usr/bin/chromium-browser',
+              '/usr/bin/chromium',
+            ];
+    return candidates.find((file) => {
+      try {
+        return fs.existsSync(file);
+      } catch {
+        return false;
+      }
+    });
   }
 
   private isAlive(): boolean {
@@ -667,12 +797,18 @@ export class BrowserTestService {
     try {
       this.seedDevToolsPreferences('console');
 
-      // Fast visible window: skip heavy CDP until after first paint.
-      this.context = await pw.chromium.launchPersistentContext(this.userDataDir, {
+      const chromium = pw.chromium;
+      if (!chromium?.launchPersistentContext) {
+        throw new Error(
+          "Cannot read properties of undefined (reading 'launchPersistentContext') — Playwright Chromium driver did not load.",
+        );
+      }
+
+      const executablePath = this.findSystemChromium();
+      const launchOpts: Parameters<PlaywrightModule['chromium']['launchPersistentContext']>[1] = {
         headless: !headed,
         viewport: { width: VIEWPORT_W, height: VIEWPORT_H },
         ignoreHTTPSErrors: true,
-        // Faster cold start — avoid waiting for network idle on blank page
         args: [
           '--disable-dev-shm-usage',
           '--no-first-run',
@@ -684,7 +820,16 @@ export class BrowserTestService {
           `--window-size=${WINDOW_W},${WINDOW_H}`,
           '--window-position=100,60',
         ],
-      });
+      };
+      if (executablePath) {
+        launchOpts.executablePath = executablePath;
+      } else if (process.platform === 'win32') {
+        launchOpts.channel = 'msedge';
+      } else {
+        launchOpts.channel = 'chrome';
+      }
+
+      this.context = await chromium.launchPersistentContext(this.userDataDir, launchOpts);
       this.browser = this.context.browser();
 
       const pages = this.context.pages();
@@ -713,9 +858,11 @@ export class BrowserTestService {
       };
     } catch (e: any) {
       const msg = e?.message || String(e);
-      const hint = /Executable doesn't exist|browserType\.launch/i.test(msg)
-        ? ' Run: npx playwright install chromium'
-        : '';
+      const hint = /Executable doesn't exist|browserType\.launch|Failed to launch/i.test(msg)
+        ? ' Install Google Chrome or Microsoft Edge, then retry Live Test.'
+        : /launchPersistentContext/i.test(msg)
+          ? ' Update OLKIL — this build was missing the Playwright driver.'
+          : '';
       return {
         ok: false,
         action: 'launch',

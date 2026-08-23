@@ -27,6 +27,21 @@ function resolvePackAppDir(context) {
   );
 }
 
+function copyPlaywrightIntoApp(appDir) {
+  const rootNm = path.join(__dirname, '../node_modules');
+  const appNm = path.join(appDir, 'node_modules');
+  fs.mkdirSync(appNm, { recursive: true });
+  for (const name of ['playwright-core', 'playwright']) {
+    const src = path.join(rootNm, name);
+    const dest = path.join(appNm, name);
+    if (!fs.existsSync(src)) {
+      throw new Error('[pack] missing ' + name);
+    }
+    fs.cpSync(src, dest, { recursive: true, dereference: true });
+    console.log('[pack] copied', name, 'into app for Live Test');
+  }
+}
+
 function copyNativeBuildsIntoApp(appDir) {
   const rootNm = path.join(__dirname, '../node_modules');
   const appNm = path.join(appDir, 'node_modules');
@@ -139,6 +154,19 @@ if (fs.existsSync(ollamaDir)) {
   );
 }
 
+const playwrightCoreDir = path.join(__dirname, '../node_modules/playwright-core');
+const playwrightDir = path.join(__dirname, '../node_modules/playwright');
+if (!fs.existsSync(playwrightCoreDir) || !fs.existsSync(playwrightDir)) {
+  throw new Error(
+    '[pack] playwright/playwright-core missing. Live Test would fail in production. Run yarn install in ide-electron.',
+  );
+}
+extraResources.push(
+  { from: playwrightCoreDir, to: 'playwright-modules/node_modules/playwright-core', filter: ['**/*'] },
+  { from: playwrightDir, to: 'playwright-modules/node_modules/playwright', filter: ['**/*'] },
+);
+console.log('[pack] Bundling Playwright driver for Live Test');
+
 const opencodeDir = path.join(__dirname, 'opencode');
 const opencodeBin = path.join(opencodeDir, process.platform === 'win32' ? 'opencode.exe' : 'opencode');
 if (!fs.existsSync(opencodeBin)) {
@@ -205,6 +233,8 @@ electronBuilder
         'node_modules/node-pty/**',
         'node_modules/@parcel/watcher/**',
         'node_modules/spdlog/**',
+        'node_modules/playwright/**',
+        'node_modules/playwright-core/**',
         '**/*.node',
       ],
       // Native modules are rebuilt via `yarn rebuild-native` then copied in beforePack.
@@ -212,6 +242,7 @@ electronBuilder
       beforePack: async (context) => {
         const appDir = resolvePackAppDir(context);
         copyNativeBuildsIntoApp(appDir);
+        copyPlaywrightIntoApp(appDir);
         assertWindowsConpty(appDir);
       },
       publish: publishProviders,

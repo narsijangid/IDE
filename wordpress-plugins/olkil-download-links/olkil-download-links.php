@@ -11,7 +11,7 @@ if ( ! defined( 'ABSPATH' ) ) {
 }
 
 function olkil_dl_app_version() {
-	return '1.3.16';
+	return '1.3.17';
 }
 
 function olkil_dl_release_tag() {
