@@ -1,11 +1,11 @@
 version: 1.3.17
 files:
-  - url: https://olkil.com/downloads/OLKIL-1.3.17-x64.dmg
+  - url: OLKIL-1.3.17-x64.dmg
     sha512: 52ydbgQJoUpfuTGgE4dpxRdXyZgKqwBShI2TlLesx2tQzHQN371bLQ8TTu3hbgyXhK56w8CdaCVBa8iOTBct0w==
     size: 183234118
-  - url: https://olkil.com/downloads/OLKIL-1.3.17-arm64.dmg
+  - url: OLKIL-1.3.17-arm64.dmg
     sha512: PBkdZlF/euSs7GpswrwGHglgLuwIV79CkSkT5fnEiXf722Lw9MvTftv9XrRnljeUMacuzvHDBHyIvQLbmXkn4Q==
     size: 178724363
-path: https://olkil.com/downloads/OLKIL-1.3.17-x64.dmg
+path: OLKIL-1.3.17-x64.dmg
 sha512: 52ydbgQJoUpfuTGgE4dpxRdXyZgKqwBShI2TlLesx2tQzHQN371bLQ8TTu3hbgyXhK56w8CdaCVBa8iOTBct0w==
 releaseDate: '2026-08-23T17:59:59.372Z'

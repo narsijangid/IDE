@@ -1,9 +1,9 @@
 version: 1.3.17
 files:
-  - url: https://olkil.com/downloads/OLKIL-1.3.17.AppImage
+  - url: OLKIL-1.3.17.AppImage
     sha512: 8QUOo2k8rScpIJtzIOZb7JHDNJJYvsQUj9IB8F0fAya1StjqBMZsnN2AvJl+lz0v5xPEr7sWv85mybV61Jldog==
     size: 209495104
     blockMapSize: 218196
-path: https://olkil.com/downloads/OLKIL-1.3.17.AppImage
+path: OLKIL-1.3.17.AppImage
 sha512: 8QUOo2k8rScpIJtzIOZb7JHDNJJYvsQUj9IB8F0fAya1StjqBMZsnN2AvJl+lz0v5xPEr7sWv85mybV61Jldog==
 releaseDate: '2026-08-23T17:58:43.327Z'
