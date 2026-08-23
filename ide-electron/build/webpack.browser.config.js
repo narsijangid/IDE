@@ -121,7 +121,7 @@ module.exports = createConfig({
   plugins: [
     new HtmlWebpackPlugin({
       template: path.join(srcDir, '/index.html'),
-      favicon: path.join(srcDir, 'assets/olkil-logo.png'),
+      favicon: path.join(srcDir, 'assets/olkilmainlogo.png'),
     }),
     new MiniCssExtractPlugin({
       filename: '[name].[chunkhash:8].css',
@@ -136,6 +136,10 @@ module.exports = createConfig({
         {
           from: path.join(srcDir, 'assets/olkil-logo.png'),
           to: path.join(distDir, 'assets/olkil-logo.png'),
+        },
+        {
+          from: path.join(srcDir, 'assets/olkilmainlogo.png'),
+          to: path.join(distDir, 'assets/olkilmainlogo.png'),
         },
         {
           from: path.join(srcDir, 'assets/olkil.mp4'),

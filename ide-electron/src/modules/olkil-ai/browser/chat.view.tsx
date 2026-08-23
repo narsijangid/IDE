@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState, startTransition } from 'react';
 import { createPortal } from 'react-dom';
-import { useInjectable } from '@opensumi/ide-core-browser';
+import { CommandService, useInjectable } from '@opensumi/ide-core-browser';
 import {
   AgentTodoItem,
   ChatAttachment,
@@ -25,6 +25,7 @@ import { DeepSeekIcon, isDeepSeekProvider } from './deepseek-icon';
 import { CheckIcon, CopyIcon, RefreshIcon, SendIcon, ShieldStarIcon, StopIcon } from './icons';
 import styles from './chat.view.module.less';
 import logoUrl from './olkil-logo.png';
+import { OLKIL_AUTH_OPEN_ACCOUNT, rememberOlkilSettingsSection } from '../../olkil-auth/browser/commands';
 
 /** How long the composer confirms a finished turn before offering Send again. */
 const DONE_HINT_MS = 1800;
@@ -535,6 +536,7 @@ export const OlkilAiChatView = ({ dormant = false }: OlkilAiChatViewProps) => {
   const chat = useInjectable<IOlkilChatService>(IOlkilChatService);
   const chatUi = useInjectable<IOlkilChatUiService>(IOlkilChatUiService);
   const virtualOffice = useInjectable<IOlkilVirtualOfficeService>(IOlkilVirtualOfficeService);
+  const commands = useInjectable<CommandService>(CommandService);
   const [messages, setMessages] = useState<UiChatMessage[]>(chat.messages);
   const [status, setStatus] = useState(chat.status);
   const [busy, setBusy] = useState(chat.busy);
@@ -542,6 +544,8 @@ export const OlkilAiChatView = ({ dormant = false }: OlkilAiChatViewProps) => {
   const [models, setModels] = useState(chat.models);
   const [chatMode, setChatMode] = useState(chat.chatMode);
   const [liveTesting, setLiveTesting] = useState(chat.liveTesting);
+  const [deepseekLocked, setDeepseekLocked] = useState(chat.deepseekLocked);
+  const [lockHoverId, setLockHoverId] = useState<string | null>(null);
   const [ollamaDownload, setOllamaDownload] = useState<OllamaDownloadUiState>(chat.ollamaDownload);
   const [pendingCount, setPendingCount] = useState(chat.pendingChanges.length);
   const [queue, setQueue] = useState<QueuedChatMessage[]>(chat.queuedMessages);
@@ -569,6 +573,7 @@ export const OlkilAiChatView = ({ dormant = false }: OlkilAiChatViewProps) => {
     setModels([...chat.models]);
     setChatMode(chat.chatMode);
     setLiveTesting(chat.liveTesting);
+    setDeepseekLocked(chat.deepseekLocked);
     setOllamaDownload({ ...chat.ollamaDownload });
     setPendingCount(chat.pendingChanges.length);
     setQueue([...chat.queuedMessages]);
@@ -1046,21 +1051,54 @@ export const OlkilAiChatView = ({ dormant = false }: OlkilAiChatViewProps) => {
             </button>
             {modelMenuOpen ? (
               <div className={styles.modelMenu} role="listbox" aria-label="AI models">
-                {models.map((m) => (
-                  <button
-                    key={m.id}
-                    type="button"
-                    role="option"
-                    aria-selected={m.id === modelId}
-                    className={`${styles.modelOption} ${m.id === modelId ? styles.modelOptionActive : ''}`}
-                    onClick={() => {
-                      chat.setModel(m.id);
-                      setModelMenuOpen(false);
-                    }}
-                  >
-                    {renderModelLabel(m)}
-                  </button>
-                ))}
+                {models.map((m) => {
+                  const locked = deepseekLocked && isDeepSeekProvider(m.provider);
+                  return (
+                    <div
+                      key={m.id}
+                      className={styles.modelOptionWrap}
+                      onMouseEnter={() => locked && setLockHoverId(m.id)}
+                      onMouseLeave={() => setLockHoverId((id) => (id === m.id ? null : id))}
+                    >
+                      <button
+                        type="button"
+                        role="option"
+                        aria-selected={m.id === modelId}
+                        aria-disabled={locked}
+                        title={locked ? 'Upgrade the plan' : undefined}
+                        className={`${styles.modelOption} ${m.id === modelId ? styles.modelOptionActive : ''} ${
+                          locked ? styles.modelOptionLocked : ''
+                        }`}
+                        onClick={() => {
+                          if (locked) {
+                            return;
+                          }
+                          chat.setModel(m.id);
+                          setModelMenuOpen(false);
+                        }}
+                      >
+                        {renderModelLabel(m)}
+                      </button>
+                      {locked && lockHoverId === m.id ? (
+                        <div className={styles.modelLockTip} role="tooltip">
+                          <span>Upgrade the plan</span>
+                          <button
+                            type="button"
+                            className={styles.modelLockBtn}
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setModelMenuOpen(false);
+                              rememberOlkilSettingsSection('plan');
+                              void commands.executeCommand(OLKIL_AUTH_OPEN_ACCOUNT.id, 'plan');
+                            }}
+                          >
+                            Open Plan
+                          </button>
+                        </div>
+                      ) : null}
+                    </div>
+                  );
+                })}
               </div>
             ) : null}
           </div>

@@ -374,6 +374,14 @@ export interface IOlkilAiNodeService {
   refreshRepositoryFiles(root: string, filePaths: string[]): Promise<void>;
   getModelName(modelId?: string): Promise<string>;
   hasApiKey(provider?: string): Promise<boolean>;
+  getDeepseekAccess(): Promise<{
+    signedIn: boolean;
+    isPaid: boolean;
+    used: number;
+    limit: number;
+    remaining: number;
+    locked: boolean;
+  }>;
   listModels(): Promise<
     Array<{
       id: string;
@@ -647,6 +655,8 @@ export interface IOlkilChatService {
   chatMode: 'agent' | 'plan' | 'ask';
   /** True while a Live Test run is active (pink Testing badge). */
   liveTesting: boolean;
+  /** Free-plan DeepSeek 50k token cap used up — models stay visible but locked. */
+  deepseekLocked: boolean;
   /** Local Ollama download / readiness for the selected model */
   ollamaDownload: OllamaDownloadUiState;
   /** Pending (not yet accepted/reverted) file changes from the agent */

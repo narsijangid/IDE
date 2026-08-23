@@ -42,7 +42,12 @@ import { BrowserTestService } from './browser-test.service';
 import { getOlkilAgentRuntime } from './agent-runtime';
 import type { ClineEngineRunRequest, ClineEngineRunState } from '../common';
 import { listDiscoveredMcpServers as discoverMcpServers } from './mcp-discover';
-import { assertOlkilWallet, chargeOlkilWallet, parseProviderUsage } from './olkil-wallet.service';
+import {
+  assertOlkilWallet,
+  chargeOlkilWallet,
+  getDeepseekAccess as loadDeepseekAccess,
+  parseProviderUsage,
+} from './olkil-wallet.service';
 
 const POOLSIDE_URL = 'https://inference.poolside.ai/v1/chat/completions';
 const DEFAULT_DEEPSEEK_BASE = 'https://api.deepseek.com';
@@ -966,6 +971,10 @@ export class OlkilAiNodeService implements IOlkilAiNodeService {
       installed,
       approxSizeGb: option.approxSizeGb,
     };
+  }
+
+  getDeepseekAccess() {
+    return loadDeepseekAccess();
   }
 
   async hasApiKey(provider?: string): Promise<boolean> {

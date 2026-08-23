@@ -30,6 +30,7 @@ import {
   OLKIL_AUTH_OPEN_ACCOUNT,
   OLKIL_AUTH_SIGN_IN,
   OLKIL_AUTH_SIGN_OUT,
+  rememberOlkilSettingsSection,
 } from './commands';
 
 export {
@@ -194,7 +195,10 @@ export class OlkilAuthContribution
     });
 
     commands.registerCommand(OLKIL_AUTH_OPEN_ACCOUNT, {
-      execute: async () => {
+      execute: async (section?: string) => {
+        if (typeof section === 'string' && section) {
+          rememberOlkilSettingsSection(section);
+        }
         await this.editorService.open(new URI().withScheme(OLKIL_ACCOUNT_SCHEME), {
           preview: false,
           focus: true,

@@ -26,7 +26,7 @@ import {
   newMcpServerId,
   toggleEnabledModelId,
 } from '../common/settings';
-import { OLKIL_AUTH_SIGN_IN, OLKIL_AUTH_SIGN_OUT } from './commands';
+import { OLKIL_AUTH_OPEN_ACCOUNT, OLKIL_AUTH_SIGN_IN, OLKIL_AUTH_SIGN_OUT, OLKIL_SETTINGS_SECTION_EVENT, rememberOlkilSettingsSection } from './commands';
 import styles from './account.view.module.less';
 
 type OlkilSubscription = {
@@ -210,6 +210,25 @@ export const OlkilAccountView: ReactEditorComponent<null> = () => {
     setSection(id);
     saveSection(id);
   };
+
+  useEffect(() => {
+    try {
+      const saved = window.localStorage.getItem(OLKIL_SETTINGS_SECTION_KEY);
+      if (saved && SETTINGS_NAV.some((item) => item.id === saved)) {
+        setSection(saved as SettingsSectionId);
+      }
+    } catch {
+      // ignore
+    }
+    const onSection = (e: Event) => {
+      const id = (e as CustomEvent).detail;
+      if (typeof id === 'string' && SETTINGS_NAV.some((item) => item.id === id)) {
+        go(id as SettingsSectionId);
+      }
+    };
+    window.addEventListener(OLKIL_SETTINGS_SECTION_EVENT, onSection);
+    return () => window.removeEventListener(OLKIL_SETTINGS_SECTION_EVENT, onSection);
+  }, []);
 
   const filteredNav = useMemo(() => {
     const q = query.trim().toLowerCase();
@@ -589,6 +608,20 @@ function ModelsPane({
 }) {
   const catalogIds = AI_MODELS.map((model) => model.id);
   const enabledCount = AI_MODELS.filter((model) => isModelEnabledInSettings(settings, model.id)).length;
+  const chat = useInjectable<IOlkilChatService>(IOlkilChatService);
+  const commands = useInjectable<CommandService>(CommandService);
+  const [locked, setLocked] = useState(chat.deepseekLocked);
+  const [hoverId, setHoverId] = useState<string | null>(null);
+
+  useEffect(() => {
+    const sub = chat.onDidChange(() => setLocked(chat.deepseekLocked));
+    return () => sub.dispose();
+  }, [chat]);
+
+  const openPlan = () => {
+    rememberOlkilSettingsSection('plan');
+    void commands.executeCommand(OLKIL_AUTH_OPEN_ACCOUNT.id, 'plan');
+  };
 
   const setVisible = (modelId: string, enabled: boolean) => {
     if (!enabled && enabledCount <= 1 && isModelEnabledInSettings(settings, modelId)) {
@@ -607,8 +640,17 @@ function ModelsPane({
         <div className={styles.modelList}>
           {AI_MODELS.map((model) => {
             const on = isModelEnabledInSettings(settings, model.id);
+            const modelLocked = locked && isDeepSeekProvider(model.provider);
             return (
-              <div key={model.id} className={`${styles.modelItem} ${on ? '' : styles.modelItemOff}`}>
+              <div
+                key={model.id}
+                className={`${styles.modelItem} ${on ? '' : styles.modelItemOff} ${
+                  modelLocked ? styles.modelItemLocked : ''
+                }`}
+                onMouseEnter={() => modelLocked && setHoverId(model.id)}
+                onMouseLeave={() => setHoverId((id) => (id === model.id ? null : id))}
+                title={modelLocked ? 'Upgrade the plan' : undefined}
+              >
                 <div>
                   <div className={styles.modelName}>
                     {isDeepSeekProvider(model.provider) ? (
@@ -617,7 +659,21 @@ function ModelsPane({
                     {model.displayName || model.label}
                     {model.badge ? ` · ${model.badge}` : ''}
                   </div>
-                  <div className={styles.modelSub}>{on ? 'Shown in chat dropdown' : 'Hidden from chat dropdown'}</div>
+                  <div className={styles.modelSub}>
+                    {modelLocked
+                      ? 'Locked — 50,000 free tokens used up'
+                      : on
+                        ? 'Shown in chat dropdown'
+                        : 'Hidden from chat dropdown'}
+                  </div>
+                  {modelLocked && hoverId === model.id ? (
+                    <div className={styles.modelLockTip}>
+                      <span>Upgrade the plan</span>
+                      <button type="button" className={`${styles.btn} ${styles.btnPrimary}`} onClick={openPlan}>
+                        Open Plan
+                      </button>
+                    </div>
+                  ) : null}
                 </div>
                 <Switch on={on} onChange={(next) => setVisible(model.id, next)} />
               </div>

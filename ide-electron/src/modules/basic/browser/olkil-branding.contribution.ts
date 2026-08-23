@@ -76,7 +76,7 @@ export class OlkilBrandingContribution implements ComponentContribution, ClientA
       const link = document.createElement('link');
       link.rel = 'icon';
       link.type = 'image/png';
-      link.href = './assets/olkil-logo.png';
+      link.href = './assets/olkilmainlogo.png';
       document.head.appendChild(link);
     }
 

@@ -8,7 +8,7 @@ import * as path from 'path';
 import * as http from 'http';
 import * as https from 'https';
 import { homedir } from 'os';
-import { pathExists, readJson, writeJson } from 'fs-extra';
+import { ensureDir, pathExists, readJson, writeJson } from 'fs-extra';
 import fetch from 'node-fetch';
 import type { AiProviderId } from '../common/models';
 import { OLKIL_FIREBASE_CONFIG, type OlkilAuthSession } from '../../olkil-auth/common';
@@ -40,6 +40,68 @@ export function isLocalProvider(provider: AiProviderId): boolean {
  */
 export function isMeteredProvider(provider: AiProviderId, _isPaid = false): boolean {
   return provider === 'deepseek';
+}
+
+/** Free-plan DeepSeek allowance (not Lite/Pro/Ultra). */
+export const FREE_DEEPSEEK_TOKENS = 50_000;
+
+export interface DeepseekAccess {
+  signedIn: boolean;
+  isPaid: boolean;
+  used: number;
+  limit: number;
+  remaining: number;
+  locked: boolean;
+}
+
+function isPaidPlanName(plan?: string): boolean {
+  return /\b(lite|pro|ultra)\b/i.test(String(plan || ''));
+}
+
+function freeTokenFile(): string {
+  return path.join(homedir(), '.olkil', 'deepseek-free-tokens.json');
+}
+
+type FreeTokenStore = Record<string, { tokens: number; at: number }>;
+
+async function readFreeStore(): Promise<FreeTokenStore> {
+  const file = freeTokenFile();
+  if (!(await pathExists(file))) {
+    return {};
+  }
+  try {
+    const raw = (await readJson(file)) as FreeTokenStore;
+    return raw && typeof raw === 'object' ? raw : {};
+  } catch {
+    return {};
+  }
+}
+
+async function readFreeTokens(email: string): Promise<number> {
+  const key = email.trim().toLowerCase();
+  if (!key) {
+    return 0;
+  }
+  const used = Number((await readFreeStore())[key]?.tokens || 0);
+  return Number.isFinite(used) && used > 0 ? Math.floor(used) : 0;
+}
+
+async function addFreeTokens(email: string, delta: number): Promise<number> {
+  const key = email.trim().toLowerCase();
+  if (!key || delta < 1) {
+    return readFreeTokens(email);
+  }
+  const file = freeTokenFile();
+  await ensureDir(path.dirname(file));
+  const raw = await readFreeStore();
+  const next = Math.floor(Number(raw[key]?.tokens || 0) + delta);
+  raw[key] = { tokens: next, at: Date.now() };
+  await writeJson(file, raw);
+  return next;
+}
+
+function freeTokensExhaustedMessage(): string {
+  return 'Your 50,000 free DeepSeek tokens are used up. Upgrade your plan to keep using DeepSeek.';
 }
 
 export interface OlkilApiUsage {
@@ -287,6 +349,8 @@ type QuotaPayload = {
     tokens_used?: number;
     spendable_left?: number;
     quota_reason?: string;
+    plan?: string;
+    plan_name?: string;
   };
 };
 
@@ -297,6 +361,7 @@ type QuotaDecision = {
   message: string;
   reason: string;
   upgradeUrl?: string;
+  plan?: string;
 };
 
 let quotaCache: QuotaDecision | null = null;
@@ -320,12 +385,16 @@ function decisionFromSubscription(sub: {
   spendable_left?: number;
   quota_reason?: string;
   upgrade_url?: string;
+  plan?: string;
+  plan_name?: string;
 } | null): QuotaDecision | null {
   if (!sub) {
     return null;
   }
+  const plan = String(sub.plan || sub.plan_name || '');
   const spendable = Number(sub.spendable_left ?? sub.tokens_left ?? 0);
-  const isPaid = Boolean(sub.is_paid) || spendable > 0 || sub.quota_reason === 'ok';
+  const isPaid =
+    Boolean(sub.is_paid) || isPaidPlanName(plan) || spendable > 0 || sub.quota_reason === 'ok';
   const allowed = sub.quota_reason === 'ok' || (isPaid && spendable > 0);
   const reason = String(sub.quota_reason || (allowed ? 'ok' : isPaid ? 'quota_exceeded' : 'plan_required'));
   return {
@@ -335,6 +404,7 @@ function decisionFromSubscription(sub: {
     message: allowed ? '' : usedUpMessage(),
     reason,
     upgradeUrl: sub.upgrade_url,
+    plan,
   };
 }
 
@@ -401,12 +471,13 @@ async function fetchQuotaDecision(idToken: string): Promise<QuotaDecision> {
     ? (data.subscription as Record<string, unknown>)
     : data) as QuotaPayload['subscription'] & Record<string, unknown>;
   const spendable = Number(sub?.spendable_left ?? sub?.tokens_left ?? 0);
+  const plan = String(sub?.plan || sub?.plan_name || data.plan || '');
   const allowed =
     data.allowed === true ||
     data.cloud_allowed === true ||
     data.reason === 'ok' ||
     spendable > 0;
-  const isPaid = Boolean(sub?.is_paid) || spendable > 0;
+  const isPaid = Boolean(sub?.is_paid) || isPaidPlanName(plan) || spendable > 0;
   const reason = String(data.reason || (allowed ? 'ok' : 'quota_exceeded'));
   const fromApi = typeof data.message === 'string' ? String(data.message).trim() : '';
   return {
@@ -418,6 +489,46 @@ async function fetchQuotaDecision(idToken: string): Promise<QuotaDecision> {
       : fromApi || (reason === 'quota_exceeded' ? usedUpMessage() : signInMessage()),
     reason,
     upgradeUrl: typeof data.upgrade_url === 'string' ? data.upgrade_url : undefined,
+    plan,
+  };
+}
+
+export async function getDeepseekAccess(): Promise<DeepseekAccess> {
+  const session = await loadSession();
+  const email = session?.user?.email || '';
+  const signedIn = Boolean(email);
+
+  let isPaid = false;
+  if (quotaCache && Date.now() - quotaCache.at < 30_000) {
+    isPaid = quotaCache.isPaid || isPaidPlanName(quotaCache.plan);
+  } else {
+    const fromEmail = await quotaFromEmailFallback();
+    if (fromEmail) {
+      applyCache(fromEmail);
+      isPaid = fromEmail.isPaid || isPaidPlanName(fromEmail.plan);
+    }
+    if (!isPaid) {
+      const token = await validIdToken();
+      if (token) {
+        try {
+          const decision = applyCache(await fetchQuotaDecision(token));
+          isPaid = decision.isPaid || isPaidPlanName(decision.plan);
+        } catch {
+          // keep email fallback
+        }
+      }
+    }
+  }
+
+  const used = signedIn ? await readFreeTokens(email) : 0;
+  const remaining = Math.max(0, FREE_DEEPSEEK_TOKENS - used);
+  return {
+    signedIn,
+    isPaid,
+    used,
+    limit: FREE_DEEPSEEK_TOKENS,
+    remaining,
+    locked: signedIn && !isPaid && used >= FREE_DEEPSEEK_TOKENS,
   };
 }
 
@@ -426,11 +537,22 @@ export async function assertOlkilWallet(provider: AiProviderId): Promise<void> {
     return;
   }
 
+  const access = await getDeepseekAccess();
+  if (!access.signedIn) {
+    throw new OlkilWalletError(signInMessage(), 'auth_required');
+  }
+  if (!access.isPaid) {
+    if (access.locked) {
+      throw new OlkilWalletError(freeTokensExhaustedMessage(), 'free_tokens_exhausted');
+    }
+    return;
+  }
+
   if (quotaCache?.allowed && Date.now() - quotaCache.at < 5_000) {
     return;
   }
 
-  // Same API the website dashboard uses — this is the source of truth.
+  // Paid Lite/Pro/Ultra — olkil.com wallet is the source of truth.
   const fromEmail = await quotaFromEmailFallback();
   if (fromEmail?.allowed) {
     applyCache(fromEmail);
@@ -454,7 +576,6 @@ export async function assertOlkilWallet(provider: AiProviderId): Promise<void> {
       if (decision.reason === 'auth_required') {
         throw new OlkilWalletError(signInMessage(), 'auth_required');
       }
-      // Network/parse uncertainty: do not fake "tokens used up" for a paying user.
       return;
     } catch (err) {
       if (err instanceof OlkilWalletError) {
@@ -496,6 +617,21 @@ export async function chargeOlkilWallet(opts: {
       source: usage ? 'api' : 'none',
     });
     return false;
+  }
+
+  const access = await getDeepseekAccess();
+  if (access.signedIn && !access.isPaid) {
+    const session = await loadSession();
+    const email = session?.user?.email || '';
+    await addFreeTokens(email, tokens);
+    console.warn('[olkil-wallet] free DeepSeek tokens', {
+      tokens,
+      used: access.used + tokens,
+      limit: FREE_DEEPSEEK_TOKENS,
+    });
+    if (quotaCache) {
+      return true;
+    }
   }
 
   const token = await validIdToken();
@@ -542,10 +678,11 @@ export async function chargeOlkilWallet(opts: {
     quotaCache = {
       at: Date.now(),
       allowed: data.allowed === true || data.cloud_allowed === true || data.ok === true || spendable > 0,
-      isPaid: Boolean(sub?.is_paid ?? quotaCache?.isPaid) || spendable > 0,
+      isPaid: Boolean(sub?.is_paid ?? quotaCache?.isPaid) || spendable > 0 || isPaidPlanName(String(sub?.plan || '')),
       message: String(data.message || ''),
       reason: String(data.reason || 'ok'),
       upgradeUrl: typeof data.upgrade_url === 'string' ? data.upgrade_url : undefined,
+      plan: String(sub?.plan || sub?.plan_name || quotaCache?.plan || ''),
     };
     console.warn('[olkil-wallet] charged', {
       tokens,

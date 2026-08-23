@@ -188,6 +188,8 @@ export class OlkilChatService extends Disposable implements IOlkilChatService {
   chatMode: ChatMode = DEFAULT_CHAT_MODE;
   /** Active Live Test session — UI shows pink Testing badge; browser boot runs immediately. */
   liveTesting = false;
+  /** Free-plan DeepSeek 50k token cap used up. */
+  deepseekLocked = false;
   private liveTestBootPromise: Promise<LiveTestResult | null> | null = null;
   private liveTestBootResult: LiveTestResult | null = null;
   /** Virtual Office Jasmine desk task while Live Test uses the Dev Studio browser loop. */
@@ -301,6 +303,7 @@ export class OlkilChatService extends Disposable implements IOlkilChatService {
       }
       this.fire();
       this.wireChatHistory();
+      void this.refreshDeepseekAccess();
     } catch (e: any) {
       this.pushUi('status', `AI backend init error: ${e?.message || e}`);
     }
@@ -352,6 +355,7 @@ export class OlkilChatService extends Disposable implements IOlkilChatService {
     if (!this.authUnsub) {
       this.authUnsub = this.auth.onDidChangeSession(() => {
         void this.refreshChatHistory();
+        void this.refreshDeepseekAccess();
       });
       this.addDispose({ dispose: () => this.authUnsub?.dispose() });
     }
@@ -677,6 +681,9 @@ export class OlkilChatService extends Disposable implements IOlkilChatService {
     if (this.busy) {
       return;
     }
+    if (this.deepseekLocked && findModel(modelId).provider === 'deepseek') {
+      return;
+    }
     if (!this.models.some((model) => model.id === modelId)) {
       return;
     }
@@ -697,6 +704,25 @@ export class OlkilChatService extends Disposable implements IOlkilChatService {
     } else {
       this.ollamaDownload = { phase: 'idle', percent: 0, message: '' };
       this.fire();
+    }
+  }
+
+  private async refreshDeepseekAccess() {
+    try {
+      const access = await this.aiNode.getDeepseekAccess();
+      this.deepseekLocked = Boolean(access.locked);
+      if (this.deepseekLocked && !this.busy && findModel(this.modelId).provider === 'deepseek') {
+        const next =
+          this.models.find((m) => m.provider === 'poolside')?.id ||
+          this.models.find((m) => m.provider !== 'deepseek')?.id;
+        if (next) {
+          this.modelId = next;
+          this.modelName = findModel(next).model;
+        }
+      }
+      this.fire();
+    } catch {
+      // ignore — Dazzlone/Ollama still work
     }
   }
 
@@ -1160,6 +1186,17 @@ Required loop:
       return;
     }
 
+    if (findModel(this.modelId).provider === 'deepseek') {
+      await this.refreshDeepseekAccess();
+      if (this.deepseekLocked) {
+        this.pushUi(
+          'status',
+          'Your 50,000 free DeepSeek tokens are used up. Upgrade your plan to keep using DeepSeek.',
+        );
+        return;
+      }
+    }
+
     const isLiveTestRun =
       Boolean(opts?.liveTest) ||
       this.liveTesting ||
@@ -1452,6 +1489,7 @@ Required loop:
       this.persistCurrentSession();
       this.fire();
       this.scheduleFlushQueue();
+      void this.refreshDeepseekAccess();
     }
   }
 

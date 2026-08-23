@@ -107,7 +107,7 @@ async function init() {
       backgroundColor: themeData?.editorBackground || Constants.DEFAULT_BACKGROUND,
       trafficLightPosition: { x: 9, y: 6 },
       // Resolved from app/main → app/browser/assets (copied by webpack)
-      icon: join(__dirname, '../browser/assets/olkil-logo.png'),
+      icon: join(__dirname, '../browser/assets/olkilmainlogo.png'),
     },
     overrideWebPreferences: {},
   });

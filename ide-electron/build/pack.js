@@ -151,13 +151,13 @@ electronBuilder
       npmRebuild: process.env.OLKIL_NPM_REBUILD === '1',
       publish: publishProviders,
       mac: {
-        icon: 'build/icon/sumi.png',
+        icon: 'build/icon/olkilmainlogo.png',
         artifactName: '${productName}-${version}-${arch}.${ext}',
         target: 'dmg',
       },
       win: {
         artifactName: '${productName}-${version}.${ext}',
-        icon: 'build/icon/sumi.png',
+        icon: 'build/icon/olkilmainlogo.png',
         target: [
           {
             target: 'nsis',
@@ -178,7 +178,7 @@ electronBuilder
       },
       linux: {
         artifactName: '${productName}-${version}.${ext}',
-        icon: 'build/icon/sumi.png',
+        icon: 'build/icon/olkilmainlogo.png',
         category: 'Development',
         maintainer: 'OLKIL <hello@olkil.com>',
         vendor: 'OLKIL',
