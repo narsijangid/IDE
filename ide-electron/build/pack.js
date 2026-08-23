@@ -20,9 +20,19 @@ fs.copyFileSync(path.join(__dirname, '../build/package.json'), path.join(__dirna
 
 const NATIVE_MODULE_NAMES = ['node-pty', '@parcel/watcher', 'spdlog', 'nsfw', 'keytar'];
 
+function resolvePackAppDir(context) {
+  return (
+    (context && (context.appDir || (context.packager && context.packager.appDir))) ||
+    path.join(__dirname, '../app')
+  );
+}
+
 function copyNativeBuildsIntoApp(appDir) {
   const rootNm = path.join(__dirname, '../node_modules');
   const appNm = path.join(appDir, 'node_modules');
+  if (!fs.existsSync(appNm)) {
+    fs.mkdirSync(appNm, { recursive: true });
+  }
   for (const name of NATIVE_MODULE_NAMES) {
     const src = path.join(rootNm, name);
     const dest = path.join(appNm, name);
@@ -196,8 +206,9 @@ electronBuilder
       // Native modules are rebuilt via `yarn rebuild-native` then copied in beforePack.
       npmRebuild: process.env.OLKIL_NPM_REBUILD === '1',
       beforePack: async (context) => {
-        copyNativeBuildsIntoApp(context.appDir);
-        assertWindowsConpty(context.appDir);
+        const appDir = resolvePackAppDir(context);
+        copyNativeBuildsIntoApp(appDir);
+        assertWindowsConpty(appDir);
       },
       publish: publishProviders,
       mac: {
