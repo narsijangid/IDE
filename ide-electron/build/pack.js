@@ -284,22 +284,15 @@ electronBuilder
         ...(process.env.WIN_PUBLISHER_NAME ? { publisherName: process.env.WIN_PUBLISHER_NAME } : {}),
       },
       nsis: {
-        // Assisted wizard (welcome + install + finish) with OLKIL chrome.
-        // Silent `/S --updated` from electron-updater still skips every page.
-        oneClick: false,
+        // oneClick + per-user makes silent background updates reliable
+        // (electron-updater quitAndInstall /S works without wizard UI)
+        oneClick: true,
         perMachine: false,
         allowToChangeInstallationDirectory: false,
         deleteAppDataOnUninstall: false,
         runAfterFinish: true,
+        // Required so electron-updater can patch installed builds
         differentialPackage: true,
-        displayLanguageSelector: false,
-        installerIcon: 'build/icon/olkilmainlogo.png',
-        uninstallerIcon: 'build/icon/olkilmainlogo.png',
-        installerHeader: 'build/installerHeader.bmp',
-        installerSidebar: 'build/installerSidebar.bmp',
-        uninstallerSidebar: 'build/installerSidebar.bmp',
-        include: 'build/installer.nsh',
-        shortcutName: 'OLKIL',
       },
       linux: {
         artifactName: '${productName}-${version}.${ext}',

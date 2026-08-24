@@ -1,9 +1,9 @@
-﻿version: 1.3.19
+version: 1.3.19
 files:
-  - url: https://github.com/narsijangid/IDE/releases/download/v1.3.19/OLKIL-1.3.19.AppImage
+  - url: OLKIL-1.3.19.AppImage
     sha512: Vd5C9gwztG4BhFFyYdG1sgnHn18zlTHCaOSlCkzT4yNQ2EMT1Hz30NLnkUgz3VcedORgLtqzo5lc86jhsrs+7w==
     size: 209495201
     blockMapSize: 218293
-path: https://github.com/narsijangid/IDE/releases/download/v1.3.19/OLKIL-1.3.19.AppImage
+path: OLKIL-1.3.19.AppImage
 sha512: Vd5C9gwztG4BhFFyYdG1sgnHn18zlTHCaOSlCkzT4yNQ2EMT1Hz30NLnkUgz3VcedORgLtqzo5lc86jhsrs+7w==
 releaseDate: '2026-08-24T17:34:01.017Z'
