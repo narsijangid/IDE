@@ -122,7 +122,8 @@ renderApp({
     // `ide-dark` (upstream default) is not contributed by any installed extension,
     // which leaves the editor without token colors.
     'general.theme': 'Default Dark+',
-    'general.icon': 'vscode-icons',
+    // vscode-theme-seti → File Icon Theme "Seti (Visual Studio Code)"
+    'general.icon': 'vs-seti',
     'editor.semanticHighlighting.enabled': true,
     'editor.bracketPairColorization.enabled': true,
     'editor.guides.bracketPairs': true,
