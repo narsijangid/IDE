@@ -18,14 +18,14 @@ function olkil_payu_is_success_status( $status ) {
  * @param string               $source notify|browser|firebase.
  * @return array{ok:bool,paid:bool,txnid:string}
  */
-function olkil_payu_fulfill( array $data, $source = 'notify' ) {
+function olkil_payu_fulfill( array $data, $source = 'notify', $preverified = false ) {
 	$txnid  = sanitize_text_field( (string) ( $data['txnid'] ?? '' ) );
 	$status = strtolower( (string) ( $data['status'] ?? '' ) );
 	if ( '' === $txnid ) {
 		return array( 'ok' => false, 'paid' => false, 'txnid' => '' );
 	}
 
-	$ok = olkil_payu_verify_response( $data );
+	$ok = $preverified ? true : olkil_payu_verify_response( $data );
 	if ( ! $ok ) {
 		return array( 'ok' => false, 'paid' => false, 'txnid' => $txnid );
 	}

@@ -63,7 +63,10 @@
 
   function formatAmount(value) {
     var n = parseFloat(value, 10);
-    if (isNaN(n)) return value ? '₹' + value : '—';
+    if (isNaN(n)) return value ? String(value) : '—';
+    var usdMap = { 0: '0', 249: '3', 287: '3', 849: '10', 957: '10', 2499: '30', 4199: '49', 4692: '49' };
+    var mapped = usdMap[Math.round(n)];
+    if (mapped !== undefined) return '$' + mapped;
     return '₹' + n.toLocaleString('en-IN', { maximumFractionDigits: 0 });
   }
 

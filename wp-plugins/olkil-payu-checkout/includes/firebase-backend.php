@@ -92,7 +92,7 @@ function olkil_payu_backend_request( $path, $args = array() ) {
 }
 
 function olkil_payu_backend_health() {
-	$cached = get_transient( 'olkil_payu_fb_health' );
+	$cached = get_transient( 'olkil_payu_fb_health_250' );
 	if ( is_array( $cached ) ) {
 		return $cached;
 	}
@@ -102,11 +102,11 @@ function olkil_payu_backend_health() {
 			'ok'    => false,
 			'error' => $res->get_error_message(),
 		);
-		set_transient( 'olkil_payu_fb_health', $out, 30 );
+		set_transient( 'olkil_payu_fb_health_250', $out, 30 );
 		return $out;
 	}
 	$res['ok'] = ! empty( $res['ok'] );
-	set_transient( 'olkil_payu_fb_health', $res, 60 );
+	set_transient( 'olkil_payu_fb_health_250', $res, 60 );
 	return $res;
 }
 

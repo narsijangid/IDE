@@ -1,8 +1,8 @@
 <?php
 /**
  * Plugin Name: OLKIL PayU Compliance
- * Description: Creates/updates PayU-required legal pages, About/Contact, INR pricing labels, and footer policy links.
- * Version: 2.0.2
+ * Description: Creates/updates PayU-required legal pages, About/Contact, and footer policy links.
+ * Version: 2.0.4
  * Author: OLKIL
  */
 
@@ -10,7 +10,7 @@ if ( ! defined( 'ABSPATH' ) ) {
 	exit;
 }
 
-define( 'OLKIL_PAYU_VERSION', '2.0.2' );
+define( 'OLKIL_PAYU_VERSION', '2.0.4' );
 define( 'OLKIL_PAYU_DIR', plugin_dir_path( __FILE__ ) );
 
 /** Business details — update mobile/full address if GST docs differ. */
@@ -88,7 +88,7 @@ function olkil_payu_pages_content() {
 <h2>What We Offer</h2>
 <p>OLKIL provides digital software subscriptions (token-based AI coding plans) and a free local-model tier (Dazzlone). All paid services are delivered digitally online after successful payment.</p>
 <h2>Our Mission</h2>
-<p>Make professional AI coding tools accessible, transparent, and affordable for builders worldwide, with clear pricing in INR for Indian customers.</p>
+<p>Make professional AI coding tools accessible, transparent, and affordable for builders worldwide, with clear pricing in USD.</p>
 <h2>Contact</h2>
 <p>For support or business queries, email <a href=\"mailto:{$e}\">{$e}</a>" . ( $m_tel !== '' ? " or call {$m_html}" : '' ) . ".</p>",
 	);
@@ -110,7 +110,7 @@ Address: {$a}</p>
 <li><a href=\"" . esc_url( home_url( '/terms-and-conditions/' ) ) . "\">Terms &amp; Conditions</a></li>
 <li><a href=\"" . esc_url( home_url( '/refund-policy/' ) ) . "\">Return &amp; Refund Policy</a></li>
 <li><a href=\"" . esc_url( home_url( '/cancellation-policy/' ) ) . "\">Cancellation Policy</a></li>
-<li><a href=\"" . esc_url( home_url( '/pricing/' ) ) . "\">Pricing (INR)</a></li>
+<li><a href=\"" . esc_url( home_url( '/pricing/' ) ) . "\">Pricing</a></li>
 </ul>",
 	);
 
@@ -151,11 +151,11 @@ Address: {$a}</p>
 <h2>1. Operator / Trade Details</h2>
 {$biz_block}
 <h2>2. Services</h2>
-<p>OLKIL provides a digital AI code editor/IDE and related online subscription services (plans such as Dazzlone Free, Lite, Pro, Max, Ultra). Features and pricing may change; current INR prices are listed on the <a href=\"" . esc_url( home_url( '/pricing/' ) ) . "\">Pricing</a> page.</p>
+<p>OLKIL provides a digital AI code editor/IDE and related online subscription services (plans such as Dazzlone Free, Lite, Pro, Ultra). Features and pricing may change; current USD prices are listed on the <a href=\"" . esc_url( home_url( '/pricing/' ) ) . "\">Pricing</a> page.</p>
 <h2>3. Accounts</h2>
 <p>You are responsible for account credentials and activity under your account. Contact us immediately at <a href=\"mailto:{$e}\">{$e}</a> if you suspect unauthorized access.</p>
 <h2>4. Payments</h2>
-<p>Paid plans are charged in <strong>INR (Indian Rupees)</strong> as displayed at checkout via our payment gateway. Taxes may apply as required by law.</p>
+<p>Paid plans are listed in <strong>USD (US dollars)</strong> on this website. Checkout is processed securely via our payment gateway. Taxes may apply as required by law.</p>
 <h2>5. Refunds, Returns, Cancellation &amp; Delivery</h2>
 <p>Governed by our:
 <a href=\"" . esc_url( home_url( '/refund-policy/' ) ) . "\">Return &amp; Refund Policy</a> and
@@ -274,77 +274,6 @@ function olkil_payu_sync_footer() {
 	}
 }
 add_action( 'init', 'olkil_payu_sync_footer', 6 );
-
-/**
- * Force INR currency labels on pricing cards (PayU wants INR).
- */
-function olkil_payu_inr_pricing_script() {
-	?>
-	<script id="olkil-payu-inr">
-	(function () {
-		var map = { '0': '0', '3': '249', '10': '849', '30': '2,499', '50': '4,199' };
-		function convert() {
-			document.querySelectorAll('.olkil-price-card').forEach(function (card) {
-				var cur = card.querySelector('.olkil-price-card__currency');
-				var amt = card.querySelector('.olkil-price-card__amount, .olkil-price-card__price, [class*="price"]');
-				// Common structure: currency span + text/number sibling
-				var currencyEls = card.querySelectorAll('.olkil-price-card__currency');
-				currencyEls.forEach(function (el) {
-					el.textContent = '₹';
-				});
-				card.querySelectorAll('.olkil-price-card__amount, .olkil-price-card__value').forEach(function (el) {
-					var raw = (el.getAttribute('data-usd') || el.textContent || '').replace(/[^0-9.]/g, '');
-					if (map[raw]) el.textContent = map[raw];
-				});
-				// Fallback: replace "$X" patterns inside card
-				card.querySelectorAll('span, strong, p').forEach(function (el) {
-					if (el.children.length) return;
-					var t = el.textContent.trim();
-					if (/^\$?\s*0$/.test(t)) { el.textContent = '0'; }
-					else if (t === '3' || t === '$3') { el.textContent = '249'; }
-					else if (t === '10' || t === '$10') { el.textContent = '849'; }
-					else if (t === '30' || t === '$30') { el.textContent = '2,499'; }
-					else if (t === '50' || t === '$50') { el.textContent = '4,199'; }
-					if (el.classList.contains('olkil-price-card__currency') || t === '$') el.textContent = '₹';
-				});
-			});
-			document.querySelectorAll('.olkil-price-card__currency').forEach(function (el) { el.textContent = '₹'; });
-		}
-		if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', convert);
-		else convert();
-		window.addEventListener('load', convert);
-	})();
-	</script>
-	<style id="olkil-payu-inr-css">
-		.olkil-price-card__currency{font-weight:700}
-		.olkil-payu-inr-note{text-align:center;color:var(--olkil-text-muted,#a1a1aa);margin:0 0 1.25rem;font-size:.95rem}
-	</style>
-	<?php
-}
-add_action( 'wp_footer', 'olkil_payu_inr_pricing_script', 20 );
-
-/**
- * Add INR note near pricing section head via footer JS.
- */
-function olkil_payu_inr_note_js() {
-	?>
-	<script>
-	(function(){
-		function addNote(){
-			var head = document.querySelector('.olkil-pricing .olkil-section__head, #pricing .olkil-section__head, .olkil-price-grid');
-			if(!head || document.querySelector('.olkil-payu-inr-note')) return;
-			var note = document.createElement('p');
-			note.className = 'olkil-payu-inr-note';
-			note.textContent = 'All plan prices are shown in INR (Indian Rupees). Digital software subscriptions — no physical shipping.';
-			if (head.classList.contains('olkil-price-grid')) head.parentNode.insertBefore(note, head);
-			else head.appendChild(note);
-		}
-		if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', addNote); else addNote();
-	})();
-	</script>
-	<?php
-}
-add_action( 'wp_footer', 'olkil_payu_inr_note_js', 21 );
 
 /**
  * Keep long articles visible (from earlier reveal bug).

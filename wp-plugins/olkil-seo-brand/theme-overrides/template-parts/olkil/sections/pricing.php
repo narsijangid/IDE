@@ -1,6 +1,6 @@
 <?php
 /**
- * Pricing — Dazzlone → Ultra (INR for PayU)
+ * Pricing — Dazzlone → Ultra (USD display)
  *
  * @package OLKIL
  */
@@ -33,7 +33,7 @@ $plans = array(
 	array(
 		'slug'     => 'lite',
 		'name'     => 'Lite',
-		'price'    => '249',
+		'price'    => '3',
 		'period'   => __( '/ mo', 'olkil' ),
 		'badge'    => __( 'Starter', 'olkil' ),
 		'blurb'    => __( 'Everyday AI coding, unlocked.', 'olkil' ),
@@ -55,7 +55,7 @@ $plans = array(
 	array(
 		'slug'     => 'pro',
 		'name'     => 'Pro',
-		'price'    => '849',
+		'price'    => '10',
 		'period'   => __( '/ mo', 'olkil' ),
 		'badge'    => __( 'Popular', 'olkil' ),
 		'blurb'    => __( 'Full project power for builders.', 'olkil' ),
@@ -77,7 +77,7 @@ $plans = array(
 	array(
 		'slug'     => 'ultra',
 		'name'     => 'Ultra',
-		'price'    => '4,199',
+		'price'    => '49',
 		'period'   => __( '/ mo', 'olkil' ),
 		'badge'    => __( 'Flagship', 'olkil' ),
 		'blurb'    => __( 'Unlimited ceiling. Parallel agents.', 'olkil' ),
@@ -103,9 +103,9 @@ $plans = array(
 <section class="olkil-section olkil-pricing" id="pricing" aria-labelledby="olkil-pricing-title">
 	<div class="olkil-wrap">
 		<div class="olkil-section__head olkil-reveal">
-			<p class="olkil-pricing__kicker"><?php esc_html_e( 'Plans · Prices in INR', 'olkil' ); ?></p>
+			<p class="olkil-pricing__kicker"><?php esc_html_e( 'Plans · Prices in USD', 'olkil' ); ?></p>
 			<h2 id="olkil-pricing-title"><?php esc_html_e( 'Choose your velocity.', 'olkil' ); ?></h2>
-			<p><?php esc_html_e( 'Digital AI coding subscriptions priced in Indian Rupees (INR). Unlimited Browser Testing on every plan. No physical shipping.', 'olkil' ); ?></p>
+			<p><?php esc_html_e( 'Digital AI coding subscriptions priced in US dollars (USD). Unlimited Browser Testing on every plan. No physical shipping.', 'olkil' ); ?></p>
 		</div>
 
 		<div class="olkil-price-grid olkil-reveal" role="list">
@@ -120,7 +120,7 @@ $plans = array(
 					<?php endif; ?>
 					<h3 class="olkil-price-card__name"><?php echo esc_html( $plan['name'] ); ?></h3>
 					<p class="olkil-price-card__amount">
-						<span class="olkil-price-card__currency">₹</span><?php echo esc_html( $plan['price'] ); ?>
+						<span class="olkil-price-card__currency">$</span><?php echo esc_html( $plan['price'] ); ?>
 						<span class="olkil-price-card__period"><?php echo esc_html( $plan['period'] ); ?></span>
 					</p>
 					<?php if ( ! empty( $plan['tokens'] ) ) : ?>
@@ -151,6 +151,6 @@ $plans = array(
 				</article>
 			<?php endforeach; ?>
 		</div>
-		<p class="olkil-pricing__footnote olkil-reveal"><?php esc_html_e( '* Fair-use limits may apply on Unlimited Agent Usage. Token estimates are approximate. Prices in INR. Cancel anytime.', 'olkil' ); ?></p>
+		<p class="olkil-pricing__footnote olkil-reveal"><?php esc_html_e( '* Fair-use limits may apply on Unlimited Agent Usage. Token estimates are approximate. Prices in USD. Cancel anytime.', 'olkil' ); ?></p>
 	</div>
 </section>

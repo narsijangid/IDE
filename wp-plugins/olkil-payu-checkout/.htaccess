@@ -1,0 +1,10 @@
+<IfModule mod_authz_core.c>
+	<FilesMatch "(^\.env.*|secrets\.php)$">
+		Require all denied
+	</FilesMatch>
+</IfModule>
+<IfModule !mod_authz_core.c>
+	<FilesMatch "(^\.env.*|secrets\.php)$">
+		Deny from all
+	</FilesMatch>
+</IfModule>

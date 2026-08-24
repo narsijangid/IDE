@@ -8,11 +8,22 @@ const { onRequest } = require('firebase-functions/v2/https');
 const { setGlobalOptions } = require('firebase-functions/v2');
 const { PLANS } = require('./lib/plans');
 const { requestHash, paymentUrl, newTxnid } = require('./lib/payu');
+const { defineSecret } = require('firebase-functions/params');
 const { getPayuCredentials, syncCredentialsToFirestore, publicCredsView } = require('./lib/credentials');
 const { fulfillPayment, getSubscription, emailKey } = require('./lib/fulfill');
+const { getPublicJwk, decryptFrontendPayload } = require('./lib/frontend-crypto');
+const { quotePlan } = require('./lib/fx');
+
+const payuKeySecret = defineSecret('PAYU_KEY');
+const payuSaltSecret = defineSecret('PAYU_SALT');
+const internalSecretParam = defineSecret('INTERNAL_SECRET');
 
 if (!admin.apps.length) {
   admin.initializeApp();
+}
+
+if (!process.env.PAYU_MODE) {
+  process.env.PAYU_MODE = 'live';
 }
 
 setGlobalOptions({
@@ -83,11 +94,27 @@ app.get('/v1/plans', (_req, res) => {
   res.json({ plans: PLANS });
 });
 
+app.get('/v1/crypto/public', async (_req, res) => {
+  try {
+    await ensureCredsSynced();
+    const pub = await getPublicJwk();
+    res.json({ ok: true, ...pub });
+  } catch (err) {
+    res.status(503).json({ ok: false, error: err.code || 'crypto_unavailable' });
+  }
+});
+
 app.post('/v1/checkout', async (req, res) => {
   try {
     await ensureCredsSynced();
     const creds = await getPayuCredentials();
-    const body = req.body || {};
+    let body = req.body || {};
+    if (body.enc) {
+      const outerCountry = body.country;
+      body = Object.assign({ country: outerCountry }, await decryptFrontendPayload(body.enc), {
+        uidHint: body.uidHint,
+      });
+    }
     const planSlug = String(body.plan || '').toLowerCase();
     const plan = PLANS[planSlug];
     if (!plan) {
@@ -97,17 +124,18 @@ app.post('/v1/checkout', async (req, res) => {
     const firstname = String(body.firstname || '').trim();
     const email = emailKey(body.email);
     const phone = String(body.phone || '').replace(/\D+/g, '');
-    if (firstname.length < 2 || !email.includes('@') || phone.length < 10) {
+    if (firstname.length < 2 || !email.includes('@') || phone.length < 8) {
       return res.status(400).json({ error: 'invalid_customer' });
     }
 
     const decoded = await optionalAuth(req);
     const txnid = newTxnid();
     const site = SITE();
+    const quote = quotePlan(plan, body.country || req.get('cf-ipcountry') || req.get('x-country-code') || '');
     const params = {
       key: creds.key,
       txnid,
-      amount: plan.amount,
+      amount: quote.amount,
       productinfo: plan.name,
       firstname,
       email,
@@ -118,8 +146,11 @@ app.post('/v1/checkout', async (req, res) => {
       udf1: plan.slug,
       udf2: decoded ? decoded.uid : '',
       udf3: creds.mode,
-      udf4: '',
-      udf5: '',
+      udf4: quote.country,
+      udf5: quote.transactionCurrency,
+      currency: quote.currency,
+      transactionCurrency: quote.transactionCurrency,
+      country: quote.country,
       service_provider: 'payu_paisa',
     };
     params.hash = requestHash(params, creds.salt);
@@ -127,13 +158,15 @@ app.post('/v1/checkout', async (req, res) => {
     await admin.firestore().collection('orders').doc(txnid).set({
       txnid,
       plan: plan.slug,
-      amount: plan.amount,
+      amount: quote.amount,
       email,
       firstname,
       phone,
       uid: decoded ? decoded.uid : '',
       status: 'pending',
       payuMode: creds.mode,
+      country: quote.country,
+      currency: quote.transactionCurrency,
       createdAt: admin.firestore.FieldValue.serverTimestamp(),
     });
 
@@ -255,6 +288,7 @@ exports.olkilPayuApi = onRequest(
     cors: true,
     invoker: 'public',
     region: 'asia-south1',
+    secrets: [payuKeySecret, payuSaltSecret, internalSecretParam],
   },
   app
 );

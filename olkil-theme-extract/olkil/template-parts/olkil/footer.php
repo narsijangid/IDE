@@ -18,11 +18,6 @@ $year = gmdate( 'Y' );
 					<span>OLKIL</span>
 				</a>
 				<p><?php esc_html_e( 'Free AI-powered IDE for ambitious builders. Windows, macOS & Linux.', 'astra' ); ?></p>
-				<p style="margin-top:.75rem;font-size:.85rem;color:var(--olkil-text-dim);">
-					<strong>OLKIL</strong><br />
-					Rajasthan, India - 341503<br />
-					<a href="mailto:narsi@olkil.com">narsi@olkil.com</a>
-				</p>
 			</div>
 
 			<div>
@@ -30,7 +25,7 @@ $year = gmdate( 'Y' );
 				<ul>
 					<li><a href="<?php echo esc_url( olkil_page_url( 'features' ) ); ?>"><?php esc_html_e( 'Features', 'astra' ); ?></a></li>
 					<li><a href="<?php echo esc_url( olkil_page_url( 'download' ) ); ?>"><?php esc_html_e( 'Download', 'astra' ); ?></a></li>
-					<li><a href="<?php echo esc_url( olkil_page_url( 'pricing' ) ); ?>"><?php esc_html_e( 'Pricing (INR)', 'astra' ); ?></a></li>
+					<li><a href="<?php echo esc_url( olkil_page_url( 'pricing' ) ); ?>"><?php esc_html_e( 'Pricing', 'astra' ); ?></a></li>
 					<li><a href="<?php echo esc_url( home_url( '/about-us/' ) ); ?>"><?php esc_html_e( 'About Us', 'astra' ); ?></a></li>
 				</ul>
 			</div>

@@ -12,8 +12,22 @@ const DEFAULT_TARGET_PLATFORM = process.platform;
 // x64 arm64 全部值见 {electronBuilder.Arch}
 const TARGET_ARCH = process.env.TARGET_ARCHES || 'x64';
 
-// disable code sign
-process.env.CSC_IDENTITY_AUTO_DISCOVERY = false;
+/**
+ * SmartScreen ("Windows protected your PC" / Unknown publisher) appears when
+ * Setup.exe is not Authenticode-signed. Local/dev packs stay unsigned.
+ * Production: set WIN_CSC_LINK + WIN_CSC_KEY_PASSWORD (or WIN_CERTIFICATE_FILE).
+ */
+const winCertFile = process.env.WIN_CERTIFICATE_FILE || process.env.CSC_LINK || process.env.WIN_CSC_LINK || '';
+const winCertPassword =
+  process.env.WIN_CERTIFICATE_PASSWORD || process.env.CSC_KEY_PASSWORD || process.env.WIN_CSC_KEY_PASSWORD || '';
+const winSign = Boolean(winCertFile || process.env.CSC_NAME);
+if (!winSign) {
+  process.env.CSC_IDENTITY_AUTO_DISCOVERY = 'false';
+  console.log('[pack] Windows Authenticode: off (installer will show SmartScreen until you sign)');
+} else {
+  delete process.env.CSC_IDENTITY_AUTO_DISCOVERY;
+  console.log('[pack] Windows Authenticode: on');
+}
 
 // use double package.json structure, auto handle node_modules
 fs.copyFileSync(path.join(__dirname, '../build/package.json'), path.join(__dirname, '../app/package.json'));
@@ -260,17 +274,32 @@ electronBuilder
             arch: ['x64'],
           },
         ],
+        signingHashAlgorithms: ['sha256'],
+        ...(winCertFile
+          ? {
+              certificateFile: winCertFile,
+              ...(winCertPassword ? { certificatePassword: winCertPassword } : {}),
+            }
+          : {}),
+        ...(process.env.WIN_PUBLISHER_NAME ? { publisherName: process.env.WIN_PUBLISHER_NAME } : {}),
       },
       nsis: {
-        // oneClick + per-user makes silent background updates reliable
-        // (electron-updater quitAndInstall /S works without wizard UI)
-        oneClick: true,
+        // Assisted wizard (welcome + install + finish) with OLKIL chrome.
+        // Silent `/S --updated` from electron-updater still skips every page.
+        oneClick: false,
         perMachine: false,
         allowToChangeInstallationDirectory: false,
         deleteAppDataOnUninstall: false,
         runAfterFinish: true,
-        // Required so electron-updater can patch installed builds
         differentialPackage: true,
+        displayLanguageSelector: false,
+        installerIcon: 'build/icon/olkilmainlogo.png',
+        uninstallerIcon: 'build/icon/olkilmainlogo.png',
+        installerHeader: 'build/installerHeader.bmp',
+        installerSidebar: 'build/installerSidebar.bmp',
+        uninstallerSidebar: 'build/installerSidebar.bmp',
+        include: 'build/installer.nsh',
+        shortcutName: 'OLKIL',
       },
       linux: {
         artifactName: '${productName}-${version}.${ext}',

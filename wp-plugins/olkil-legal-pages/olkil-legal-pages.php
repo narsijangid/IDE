@@ -2,7 +2,7 @@
 /**
  * Plugin Name: OLKIL Legal Pages Footer
  * Description: Legal footer links + fixes blank long pages/posts (reveal animation) and syncs theme templates.
- * Version: 1.1.8
+ * Version: 1.2.0
  * Author: OLKIL
  */
 
@@ -10,7 +10,7 @@ if ( ! defined( 'ABSPATH' ) ) {
 	exit;
 }
 
-define( 'OLKIL_LEGAL_PAGES_VERSION', '1.1.8' );
+define( 'OLKIL_LEGAL_PAGES_VERSION', '1.2.0' );
 define( 'OLKIL_LEGAL_PAGES_DIR', plugin_dir_path( __FILE__ ) );
 define( 'OLKIL_LEGAL_PAGES_URL', plugin_dir_url( __FILE__ ) );
 
