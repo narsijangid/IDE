@@ -10,7 +10,7 @@ if ( ! defined( 'ABSPATH' ) ) {
 	exit;
 }
 
-define( 'OLKIL_VERSION', '1.4.5' );
+define( 'OLKIL_VERSION', '1.4.9' );
 /** Desktop installer version (matches ide-electron/product.json). */
 define( 'OLKIL_APP_VERSION', '1.3.19' );
 define( 'OLKIL_DIR', trailingslashit( get_template_directory() ) );
