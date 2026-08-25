@@ -267,7 +267,7 @@ electronBuilder
       },
       win: {
         artifactName: '${productName}-${version}.${ext}',
-        icon: 'build/icon/olkilmainlogo.png',
+        icon: 'build/icon/olkil.ico',
         target: [
           {
             target: 'nsis',
