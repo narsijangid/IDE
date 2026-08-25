@@ -1,6 +1,6 @@
 <?php
 /**
- * Tax invoice + payment receipt HTML.
+ * Invoice + payment receipt HTML.
  *
  * @package OLKIL
  */
@@ -10,23 +10,30 @@ if ( ! defined( 'ABSPATH' ) ) {
 }
 
 function olkil_payu_biz_invoice() {
-	$b = function_exists( 'olkil_payu_biz' ) ? olkil_payu_biz() : array();
 	return array(
-		'legal_name' => $b['trade_name'] ?? 'OLKIL',
-		'trade_name' => $b['trade_name'] ?? 'OLKIL',
-		'address'    => $b['address'] ?? 'Rajasthan, India - 341503',
-		'email'      => $b['email'] ?? 'narsi@olkil.com',
-		'website'    => $b['website'] ?? 'https://olkil.com',
-		'gstin'      => (string) get_option( 'olkil_payu_gstin', '' ),
-		'sac'        => '998439',
+		'legal_name' => 'OLKIL',
+		'trade_name' => 'OLKIL',
+		'email'      => 'hi@olkil.com',
+		'website'    => 'https://olkil.com',
 	);
 }
 
+function olkil_payu_is_live() {
+	if ( function_exists( 'olkil_payu_credentials' ) ) {
+		$creds = olkil_payu_credentials();
+		return 'test' !== strtolower( (string) ( $creds['mode'] ?? 'live' ) );
+	}
+	return true;
+}
+
 function olkil_payu_next_invoice_no() {
-	$year = (int) gmdate( 'Y' );
+	$year  = (int) gmdate( 'Y' );
 	$state = get_option( 'olkil_payu_invoice_counter', array() );
 	if ( ! is_array( $state ) || (int) ( $state['year'] ?? 0 ) !== $year ) {
-		$state = array( 'year' => $year, 'seq' => 0 );
+		$state = array(
+			'year' => $year,
+			'seq'  => 0,
+		);
 	}
 	$state['seq'] = (int) $state['seq'] + 1;
 	update_option( 'olkil_payu_invoice_counter', $state, false );
@@ -37,12 +44,13 @@ function olkil_payu_inr( $amount ) {
 	return '₹' . number_format( (float) $amount, 2, '.', ',' );
 }
 
-function olkil_payu_doc_wrap( $title, $body, $mode = 'test', $badge = '' ) {
-	$test = ( 'live' !== $mode )
-		? '<p style="margin:0 0 16px;padding:8px 12px;background:#fff8e1;border:1px solid #f5d76e;border-radius:8px;color:#7a5b00;font-size:12px;font-weight:600;letter-spacing:.04em;text-transform:uppercase">Test mode — not a live charge</p>'
-		: '';
+function olkil_payu_doc_wrap( $title, $body, $mode = 'live', $badge = '' ) {
+	$live       = olkil_payu_is_live();
+	$test       = $live
+		? ''
+		: '<p style="margin:0 0 16px;padding:8px 12px;background:#fff8e1;border:1px solid #f5d76e;border-radius:8px;color:#7a5b00;font-size:12px;font-weight:600;letter-spacing:.04em;text-transform:uppercase">Test mode — not a live charge</p>';
 	$badge_html = $badge ? '<p style="margin:8px 0 0;font-size:13px;opacity:.85">' . esc_html( $badge ) . '</p>' : '';
-	$b = olkil_payu_biz_invoice();
+	$b          = olkil_payu_biz_invoice();
 	return '<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>' . esc_html( $title ) . '</title></head>
 <body style="margin:0;background:#f4f4f5;font-family:Segoe UI,Helvetica,Arial,sans-serif;color:#18181b">
 <div style="max-width:640px;margin:24px auto;padding:0 16px">
@@ -61,13 +69,9 @@ function olkil_payu_doc_wrap( $title, $body, $mode = 'test', $badge = '' ) {
  * @param array<string,mixed> $inv Invoice payload.
  */
 function olkil_payu_invoice_html( array $inv ) {
-	$b      = olkil_payu_biz_invoice();
-	$gstin  = $b['gstin'] ? 'GSTIN: ' . esc_html( $b['gstin'] ) : 'GSTIN: Unregistered';
-	$gstnote = $b['gstin']
-		? 'GST as applicable is included as per registered GSTIN.'
-		: 'Supplier is unregistered under GST. No GST has been charged on this invoice.';
+	$b    = olkil_payu_biz_invoice();
 	$body = '<table style="width:100%;border-collapse:collapse;margin-bottom:18px;font-size:13px;table-layout:fixed"><tr>
-<td style="vertical-align:top;width:55%;word-wrap:break-word"><strong>' . esc_html( $b['trade_name'] ) . '</strong><br>' . esc_html( $b['address'] ) . '<br>' . $gstin . '<br>SAC: ' . esc_html( $b['sac'] ) . '<br>Email: ' . esc_html( $b['email'] ) . '</td>
+<td style="vertical-align:top;width:55%;word-wrap:break-word"><strong>' . esc_html( $b['trade_name'] ) . '</strong><br>Email: ' . esc_html( $b['email'] ) . '</td>
 <td style="vertical-align:top;text-align:right">
 <div><strong>Invoice</strong> ' . esc_html( (string) ( $inv['invoice_no'] ?? '' ) ) . '</div>
 <div>Date: ' . esc_html( (string) ( $inv['issued_on'] ?? '' ) ) . '</div>
@@ -83,16 +87,17 @@ function olkil_payu_invoice_html( array $inv ) {
 <tfoot><tr><td style="padding:10px 0;border-top:1px solid #e4e4e7"><strong>Total payable (INR)</strong></td>
 <td style="text-align:right;padding:10px 0;border-top:1px solid #e4e4e7"><strong>' . esc_html( olkil_payu_inr( $inv['amount'] ?? 0 ) ) . '</strong></td></tr></tfoot>
 </table>
-<p style="font-size:12px;color:#52525b;margin:16px 0 0">' . esc_html( $gstnote ) . ' Amount: ' . esc_html( olkil_payu_inr( $inv['amount'] ?? 0 ) ) . ' only.</p>
+<p style="font-size:12px;color:#52525b;margin:16px 0 0">Amount: ' . esc_html( olkil_payu_inr( $inv['amount'] ?? 0 ) ) . ' only.</p>
 <p style="font-size:12px;color:#52525b;margin:8px 0 0">Period: ' . esc_html( (string) ( $inv['period_start'] ?? '' ) ) . ' → ' . esc_html( (string) ( $inv['period_end'] ?? '' ) ) . '. Digital delivery — no physical shipment.</p>';
-	$mode = (string) ( $inv['mode'] ?? 'test' );
-	return olkil_payu_doc_wrap( 'Tax Invoice', $body, $mode, 'live' === $mode ? 'PAID' : 'TEST INVOICE' );
+	$mode = olkil_payu_is_live() ? 'live' : 'test';
+	return olkil_payu_doc_wrap( 'Invoice', $body, $mode, 'live' === $mode ? 'PAID' : 'TEST INVOICE' );
 }
 
 /**
  * @param array<string,mixed> $inv Invoice payload.
  */
 function olkil_payu_receipt_html( array $inv ) {
+	$b    = olkil_payu_biz_invoice();
 	$name = (string) ( $inv['firstname'] ?? 'there' );
 	$body = '<p style="margin:0 0 16px;font-size:15px">Hi ' . esc_html( $name ) . ',</p>
 <p style="margin:0 0 16px;font-size:14px;line-height:1.55">We received your payment for <strong>' . esc_html( (string) ( $inv['plan_name'] ?? 'OLKIL' ) ) . '</strong>. Your plan is active and tokens are ready to use.</p>
@@ -106,8 +111,9 @@ function olkil_payu_receipt_html( array $inv ) {
 </table>
 <p style="margin:18px 0 0"><a href="' . esc_url( (string) ( $inv['invoice_url'] ?? home_url( '/invoice/' ) ) ) . '" style="display:inline-block;background:#fe019a;color:#fff;text-decoration:none;padding:10px 16px;border-radius:10px;font-weight:600">View invoice</a>
 <a href="' . esc_url( home_url( '/dashboard/' ) ) . '" style="display:inline-block;margin-left:8px;color:#fe019a;padding:10px 8px;font-weight:600">Open dashboard</a></p>
-<p style="margin:18px 0 0;font-size:12px;color:#71717a">Need help? Email <a href="mailto:' . esc_attr( olkil_payu_biz_invoice()['email'] ) . '">' . esc_html( olkil_payu_biz_invoice()['email'] ) . '</a>.</p>';
-	return olkil_payu_doc_wrap( 'Payment receipt', $body, (string) ( $inv['mode'] ?? 'test' ), 'Thank you for your purchase' );
+<p style="margin:18px 0 0;font-size:12px;color:#71717a">Need help? Email <a href="mailto:' . esc_attr( $b['email'] ) . '">' . esc_html( $b['email'] ) . '</a>.</p>';
+	$mode = olkil_payu_is_live() ? 'live' : 'test';
+	return olkil_payu_doc_wrap( 'Payment receipt', $body, $mode, 'Thank you for your purchase' );
 }
 
 /**
@@ -117,22 +123,18 @@ function olkil_payu_receipt_html( array $inv ) {
  * @param bool                $with_receipt Include receipt block.
  */
 function olkil_payu_invoice_screen_html( array $inv, $with_receipt = true ) {
-	$b       = olkil_payu_biz_invoice();
-	$gstin   = $b['gstin'] ? 'GSTIN: ' . esc_html( $b['gstin'] ) : 'GSTIN: Unregistered';
-	$gstnote = $b['gstin']
-		? 'GST as applicable is included as per registered GSTIN.'
-		: 'Supplier is unregistered under GST. No GST has been charged on this invoice.';
-	$mode  = (string) ( $inv['mode'] ?? 'test' );
+	$b     = olkil_payu_biz_invoice();
+	$mode  = olkil_payu_is_live() ? 'live' : 'test';
 	$badge = ( 'live' === $mode ) ? 'PAID' : 'TEST INVOICE';
 	$test  = ( 'live' !== $mode )
 		? '<p class="olkil-inv-note olkil-inv-note--test">Test mode — not a live charge</p>'
 		: '';
 
 	$invoice = '<section class="olkil-inv-sheet">'
-		. '<header class="olkil-inv-head"><span class="olkil-inv-brand">OLKIL</span><h1>Tax Invoice</h1><p>' . esc_html( $badge ) . '</p></header>'
+		. '<header class="olkil-inv-head"><span class="olkil-inv-brand">OLKIL</span><h1>Invoice</h1><p>' . esc_html( $badge ) . '</p></header>'
 		. '<div class="olkil-inv-body">' . $test
 		. '<table class="olkil-inv-meta"><tr>'
-		. '<td><strong>' . esc_html( $b['trade_name'] ) . '</strong><br>' . esc_html( $b['address'] ) . '<br>' . $gstin . '<br>SAC: ' . esc_html( $b['sac'] ) . '<br>Email: ' . esc_html( $b['email'] ) . '</td>'
+		. '<td><strong>' . esc_html( $b['trade_name'] ) . '</strong><br>Email: ' . esc_html( $b['email'] ) . '</td>'
 		. '<td class="olkil-inv-meta__right">'
 		. '<div><strong>Invoice</strong> ' . esc_html( (string) ( $inv['invoice_no'] ?? '' ) ) . '</div>'
 		. '<div>Date: ' . esc_html( (string) ( $inv['issued_on'] ?? '' ) ) . '</div>'
@@ -145,7 +147,7 @@ function olkil_payu_invoice_screen_html( array $inv, $with_receipt = true ) {
 		. '<tbody><tr><td>' . esc_html( (string) ( $inv['plan_name'] ?? 'OLKIL plan' ) ) . ' — 30-day digital subscription<br><span>' . esc_html( (string) ( $inv['tokens'] ?? '' ) ) . '</span></td>'
 		. '<td>' . esc_html( olkil_payu_inr( $inv['amount'] ?? 0 ) ) . '</td></tr></tbody>'
 		. '<tfoot><tr><td><strong>Total payable (INR)</strong></td><td><strong>' . esc_html( olkil_payu_inr( $inv['amount'] ?? 0 ) ) . '</strong></td></tr></tfoot></table>'
-		. '<p class="olkil-inv-foot">' . esc_html( $gstnote ) . ' Amount: ' . esc_html( olkil_payu_inr( $inv['amount'] ?? 0 ) ) . ' only.</p>'
+		. '<p class="olkil-inv-foot">Amount: ' . esc_html( olkil_payu_inr( $inv['amount'] ?? 0 ) ) . ' only.</p>'
 		. '<p class="olkil-inv-foot">Period: ' . esc_html( (string) ( $inv['period_start'] ?? '' ) ) . ' → ' . esc_html( (string) ( $inv['period_end'] ?? '' ) ) . '. Digital delivery — no physical shipment.</p>'
 		. '</div></section>';
 
@@ -188,6 +190,7 @@ function olkil_payu_ensure_invoice( array $order, array $data ) {
 	$start = gmdate( 'j M Y' );
 	$end   = gmdate( 'j M Y', time() + ( 30 * DAY_IN_SECONDS ) );
 	$txnid = (string) ( $order['txnid'] ?? $data['txnid'] ?? '' );
+	$mode  = olkil_payu_is_live() ? 'live' : 'test';
 	$inv   = array(
 		'invoice_no'   => olkil_payu_next_invoice_no(),
 		'receipt_no'   => 'RCT-' . $txnid,
@@ -200,8 +203,8 @@ function olkil_payu_ensure_invoice( array $order, array $data ) {
 		'plan_name'    => isset( $plans[ $plan ] ) ? $plans[ $plan ]['name'] : 'OLKIL',
 		'tokens'       => isset( $plans[ $plan ] ) ? $plans[ $plan ]['tokens'] : '',
 		'amount'       => (string) ( $order['amount'] ?? $data['amount'] ?? '' ),
-		'mode'         => (string) ( $order['mode'] ?? 'test' ),
-		'payment_mode' => sanitize_text_field( (string) ( $data['mode'] ?? $data['PG_TYPE'] ?? 'PayU' ) ),
+		'mode'         => $mode,
+		'payment_mode' => sanitize_text_field( (string) ( $data['PG_TYPE'] ?? $data['bankcode'] ?? 'PayU' ) ),
 		'issued_on'    => $start,
 		'period_start' => $start,
 		'period_end'   => $end,

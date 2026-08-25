@@ -69,12 +69,21 @@ if ( $is_blog_page ) {
 	get_footer();
 	return;
 }
+$is_payu_flow = is_page( array( 'checkout', 'payment-success', 'payment-failed', 'invoice' ) );
 ?>
-<main id="content" class="olkil-section" style="padding-top:2.5rem;">
-	<div class="olkil-wrap" style="max-width:760px;">
+<main id="content" class="olkil-section" style="padding-top:<?php echo $is_payu_flow ? '1.25rem' : '2.5rem'; ?>;">
+	<div class="olkil-wrap" style="max-width:<?php echo $is_payu_flow ? '480px' : '760px'; ?>;">
 		<?php
 		while ( have_posts() ) :
 			the_post();
+			if ( $is_payu_flow ) :
+				?>
+			<div class="entry-content">
+				<?php the_content(); ?>
+			</div>
+				<?php
+				continue;
+			endif;
 			?>
 			<article <?php post_class( 'olkil-article' ); ?>>
 				<header class="olkil-article__header">

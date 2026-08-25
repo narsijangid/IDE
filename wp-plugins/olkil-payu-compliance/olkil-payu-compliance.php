@@ -2,7 +2,7 @@
 /**
  * Plugin Name: OLKIL PayU Compliance
  * Description: Creates/updates PayU-required legal pages, About/Contact, and footer policy links.
- * Version: 2.0.4
+ * Version: 2.1.0
  * Author: OLKIL
  */
 
@@ -10,17 +10,15 @@ if ( ! defined( 'ABSPATH' ) ) {
 	exit;
 }
 
-define( 'OLKIL_PAYU_VERSION', '2.0.4' );
+define( 'OLKIL_PAYU_VERSION', '2.1.0' );
 define( 'OLKIL_PAYU_DIR', plugin_dir_path( __FILE__ ) );
 
-/** Business details — update mobile/full address if GST docs differ. */
 function olkil_payu_biz() {
 	return array(
 		'legal_name'  => 'OLKIL',
 		'trade_name'  => 'OLKIL',
-		'address'     => 'Rajasthan, India - 341503',
-		'email'       => 'narsi@olkil.com',
-		// IMPORTANT: must match PayU / GST registered mobile. Update via WP option `olkil_business_mobile`.
+		'address'     => 'India',
+		'email'       => 'support@olkil.com',
 		'mobile'      => get_option( 'olkil_business_mobile', '' ),
 		'website'     => 'https://olkil.com',
 		'country'     => 'India',
@@ -61,20 +59,19 @@ function olkil_payu_pages_content() {
 	$t = esc_html( $b['trade_name'] );
 	$a = esc_html( $b['address'] );
 	$e = esc_html( $b['email'] );
-	$m_raw = trim( (string) $b['mobile'] );
-	$m     = $m_raw !== '' ? esc_html( $m_raw ) : 'Contact via email (mobile will be published once registered number is confirmed)';
-	$m_tel = $m_raw !== '' ? esc_attr( preg_replace( '/\s+/', '', $m_raw ) ) : '';
+	$m_raw  = trim( (string) $b['mobile'] );
+	$m      = $m_raw !== '' ? esc_html( $m_raw ) : '';
+	$m_tel  = $m_raw !== '' ? esc_attr( preg_replace( '/\s+/', '', $m_raw ) ) : '';
 	$m_html = $m_tel !== ''
 		? '<a href="tel:' . $m_tel . '">' . $m . '</a>'
-		: esc_html( $m );
+		: '';
 	$w = esc_url( $b['website'] );
 
 	$biz_block = "<ul>
 <li><strong>Brand:</strong> {$t}</li>
 <li><strong>Address:</strong> {$a}</li>
 <li><strong>Email:</strong> <a href=\"mailto:{$e}\">{$e}</a></li>
-<li><strong>Mobile:</strong> {$m_html}</li>
-<li><strong>Website:</strong> <a href=\"{$w}\">{$w}</a></li>
+" . ( $m_tel !== '' ? "<li><strong>Mobile:</strong> {$m_html}</li>\n" : '' ) . "<li><strong>Website:</strong> <a href=\"{$w}\">{$w}</a></li>
 </ul>";
 
 	$pages = array();
@@ -100,7 +97,6 @@ function olkil_payu_pages_content() {
 {$biz_block}
 <h2>Customer Support</h2>
 <p>Email: <a href=\"mailto:{$e}\">{$e}</a><br>
-Mobile: {$m_html}<br>
 Address: {$a}</p>
 <p>We typically respond within <strong>1–3 business days</strong>.</p>
 <h2>Policy Links</h2>
@@ -116,7 +112,7 @@ Address: {$a}</p>
 
 	$pages['privacy-policy'] = array(
 		'title'   => 'Privacy Policy',
-		'content' => "<p><strong>Effective Date:</strong> August 14, 2026<br><strong>Last Updated:</strong> August 14, 2026</p>
+		'content' => "<p><strong>Effective Date:</strong> August 14, 2026<br><strong>Last Updated:</strong> August 25, 2026</p>
 <p>This Privacy Policy explains how <strong>{$t}</strong> collects, uses, stores, and protects personal information when you use {$w} and the OLKIL software/services.</p>
 <h2>1. Business Information</h2>
 {$biz_block}
@@ -141,12 +137,12 @@ Address: {$a}</p>
 <h2>6. Your Rights</h2>
 <p>You may request access, correction, or deletion of your data by emailing <a href=\"mailto:{$e}\">{$e}</a>.</p>
 <h2>7. Contact</h2>
-<p>{$t}<br>{$a}<br>Email: <a href=\"mailto:{$e}\">{$e}</a><br>Mobile: {$m}</p>",
+<p>{$t}<br>{$a}<br>Email: <a href=\"mailto:{$e}\">{$e}</a>" . ( $m !== '' ? "<br>Mobile: {$m}" : '' ) . "</p>",
 	);
 
 	$pages['terms-and-conditions'] = array(
 		'title'   => 'Terms and Conditions',
-		'content' => "<p><strong>Effective Date:</strong> August 14, 2026<br><strong>Last Updated:</strong> August 14, 2026</p>
+		'content' => "<p><strong>Effective Date:</strong> August 14, 2026<br><strong>Last Updated:</strong> August 25, 2026</p>
 <p>By using {$w}, creating an account, downloading OLKIL, or purchasing a plan, you agree to these Terms for <strong>{$t}</strong>.</p>
 <h2>1. Operator / Trade Details</h2>
 {$biz_block}
@@ -170,14 +166,14 @@ OLKIL provides digital delivery only — access is activated online after succes
 <h2>9. Limitation of Liability</h2>
 <p>To the maximum extent permitted by law, {$t} is not liable for indirect or consequential damages. Total liability is limited to amounts paid by you in the 3 months before the claim.</p>
 <h2>10. Governing Law</h2>
-<p>These Terms are governed by the laws of India. Courts in Rajasthan, India shall have jurisdiction, subject to applicable consumer rights.</p>
+<p>These Terms are governed by the laws of India. Courts in India shall have jurisdiction, subject to applicable consumer rights.</p>
 <h2>11. Contact</h2>
-<p>{$t}<br>{$a}<br>Email: <a href=\"mailto:{$e}\">{$e}</a><br>Mobile: {$m}</p>",
+<p>{$t}<br>{$a}<br>Email: <a href=\"mailto:{$e}\">{$e}</a>" . ( $m !== '' ? "<br>Mobile: {$m}" : '' ) . "</p>",
 	);
 
 	$pages['refund-policy'] = array(
 		'title'   => 'Return and Refund Policy',
-		'content' => "<p><strong>Effective Date:</strong> August 14, 2026<br><strong>Last Updated:</strong> August 14, 2026</p>
+		'content' => "<p><strong>Effective Date:</strong> August 14, 2026<br><strong>Last Updated:</strong> August 25, 2026</p>
 <p><strong>{$t}</strong> sells <strong>digital software subscriptions</strong>. There is no physical product to return. This policy covers returns/refunds for digital purchases.</p>
 <h2>1. Business Details</h2>
 {$biz_block}
@@ -206,12 +202,12 @@ OLKIL provides digital delivery only — access is activated online after succes
 <p>Email <a href=\"mailto:{$e}\">{$e}</a>" . ( $m_tel !== '' ? " or call {$m_html}" : '' ) . " within 7 days with: full name, registered email, payment/order ID, plan name, and reason.</p>
 <p>We aim to respond within <strong>3–7 business days</strong>.</p>
 <h2>8. Contact</h2>
-<p>{$t}<br>{$a}<br>{$e} | {$m}</p>",
+<p>{$t}<br>{$a}<br><a href=\"mailto:{$e}\">{$e}</a>" . ( $m !== '' ? " | {$m}" : '' ) . "</p>",
 	);
 
 	$pages['cancellation-policy'] = array(
 		'title'   => 'Cancellation Policy',
-		'content' => "<p><strong>Effective Date:</strong> August 14, 2026<br><strong>Last Updated:</strong> August 14, 2026</p>
+		'content' => "<p><strong>Effective Date:</strong> August 14, 2026<br><strong>Last Updated:</strong> August 25, 2026</p>
 <h2>1. Business Details</h2>
 {$biz_block}
 <h2>2. How to Cancel</h2>
@@ -227,7 +223,7 @@ OLKIL provides digital delivery only — access is activated online after succes
 <h2>5. Free Plan</h2>
 <p>The free Dazzlone plan has no charge and needs no cancellation for billing.</p>
 <h2>6. Contact</h2>
-<p>{$t}<br>{$a}<br>{$e} | {$m}</p>",
+<p>{$t}<br>{$a}<br><a href=\"mailto:{$e}\">{$e}</a>" . ( $m !== '' ? " | {$m}" : '' ) . "</p>",
 	);
 
 	return $pages;

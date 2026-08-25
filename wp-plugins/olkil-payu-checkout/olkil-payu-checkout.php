@@ -2,7 +2,7 @@
 /**
  * Plugin Name: OLKIL PayU Checkout
  * Description: Professional PayU checkout — Firebase-held KEY/SALT, webhook, invoices, receipts, email.
- * Version: 2.6.0
+ * Version: 2.6.1
  * Author: OLKIL
  */
 
@@ -10,7 +10,7 @@ if ( ! defined( 'ABSPATH' ) ) {
 	exit;
 }
 
-define( 'OLKIL_PAYU_CHECKOUT_VERSION', '2.6.0' );
+define( 'OLKIL_PAYU_CHECKOUT_VERSION', '2.6.1' );
 define( 'OLKIL_PAYU_CHECKOUT_DIR', plugin_dir_path( __FILE__ ) );
 define( 'OLKIL_PAYU_CHECKOUT_URL', plugin_dir_url( __FILE__ ) );
 
@@ -31,6 +31,9 @@ add_filter(
 		if ( is_page( 'dashboard' ) ) {
 			$classes[] = 'olkil-dash-page';
 		}
+		if ( is_page( array( 'checkout', 'payment-success', 'payment-failed', 'invoice' ) ) ) {
+			$classes[] = 'olkil-payu-flow';
+		}
 		return $classes;
 	}
 );
@@ -40,8 +43,30 @@ add_action(
 		if ( is_page( 'dashboard' ) ) {
 			echo '<script>document.documentElement.classList.add("olkil-dash-page");</script>';
 		}
+		if ( is_page( array( 'checkout', 'payment-success', 'payment-failed', 'invoice' ) ) ) {
+			echo '<script>document.documentElement.classList.add("olkil-payu-flow");</script>';
+		}
 	},
 	0
+);
+add_action(
+	'wp_head',
+	static function () {
+		if ( ! is_page( array( 'checkout', 'payment-success', 'payment-failed', 'invoice' ) ) ) {
+			return;
+		}
+		echo '<style id="olkil-payu-flow-shell">'
+			. 'html.olkil-payu-flow .olkil-article__header,body.olkil-payu-flow .olkil-article__header{display:none!important}'
+			. 'html.olkil-payu-flow .olkil-article,body.olkil-payu-flow .olkil-article,'
+			. 'html.olkil-payu-flow .ast-article-single,body.olkil-payu-flow .ast-article-single,'
+			. 'html.olkil-payu-flow .ast-separate-container .ast-article-single,body.olkil-payu-flow .ast-separate-container .ast-article-single{'
+			. 'background:transparent!important;border:0!important;box-shadow:none!important;padding:0!important;border-radius:0!important}'
+			. 'html.olkil-payu-flow #content.olkil-section,body.olkil-payu-flow #content.olkil-section{padding-top:1.25rem!important;padding-bottom:2rem!important}'
+			. 'html.olkil-payu-flow #content .olkil-wrap,body.olkil-payu-flow #content .olkil-wrap{max-width:480px!important}'
+			. 'html.olkil-payu-flow .olkil-prose,body.olkil-payu-flow .olkil-prose{margin:0!important;padding:0!important}'
+			. '</style>';
+	},
+	99
 );
 
 /**
@@ -363,7 +388,7 @@ function olkil_payu_import_secrets_to_options() {
 	update_option( 'olkil_payu_merchant_key', (string) $s['key'], false );
 	update_option( 'olkil_payu_merchant_salt', (string) $s['salt'], false );
 	if ( ! get_option( 'olkil_payu_mode' ) ) {
-		update_option( 'olkil_payu_mode', (string) ( $s['mode'] ?? 'test' ), false );
+		update_option( 'olkil_payu_mode', (string) ( $s['mode'] ?? 'live' ), false );
 	}
 }
 
@@ -969,20 +994,20 @@ function olkil_payu_checkout_html() {
 	$creds  = olkil_payu_credentials();
 	$health = olkil_payu_backend_health();
 	$ready  = ( ! empty( $health['ok'] ) ) || ( '' !== $creds['key'] && '' !== $creds['salt'] );
-	$mode   = ! empty( $health['mode'] ) ? (string) $health['mode'] : $creds['mode'];
+	$mode   = $creds['mode'];
+	if ( ! empty( $health['ok'] ) && ! empty( $health['mode'] ) ) {
+		$mode = (string) $health['mode'];
+	}
 	$usd = olkil_payu_usd( $plan );
 
 	ob_start();
 	?>
 	<div class="olkil-payu">
-		<div class="olkil-payu__card">
-			<?php if ( 'test' === $mode ) : ?>
-				<p class="olkil-payu__badge">Test mode</p>
-			<?php endif; ?>
-			<p class="olkil-payu__eyebrow"><?php esc_html_e( 'OLKIL · Secure checkout', 'olkil' ); ?></p>
+		<div class="olkil-payu__panel">
+			<p class="olkil-payu__eyebrow"><?php esc_html_e( 'Secure checkout', 'olkil' ); ?></p>
 			<h1 class="olkil-payu__title"><?php echo esc_html( $plan['name'] ); ?></h1>
-			<p class="olkil-payu__price"><span>$</span><?php echo esc_html( $usd ); ?><small>/ mo</small></p>
-			<p class="olkil-payu__meta"><?php echo esc_html( $plan['tokens'] ); ?> · <?php esc_html_e( 'Digital delivery after payment', 'olkil' ); ?></p>
+			<p class="olkil-payu__price"><span>$</span><?php echo esc_html( $usd ); ?><small>/mo</small></p>
+			<p class="olkil-payu__meta"><?php echo esc_html( $plan['tokens'] ); ?> · <?php esc_html_e( 'Digital access after payment', 'olkil' ); ?></p>
 
 			<?php if ( $err ) : ?>
 				<p class="olkil-payu__error"><?php echo '2' === $err_code ? esc_html__( 'Secure payment session failed. Please refresh and try again.', 'olkil' ) : esc_html__( 'Please enter a valid name, email, and mobile number.', 'olkil' ); ?></p>
@@ -1021,7 +1046,7 @@ function olkil_payu_checkout_html() {
 					);
 					?>
 				</button>
-				<p class="olkil-payu__secure"><?php esc_html_e( 'Shown in USD. You are charged the equivalent in your local currency (India: INR). International cards, UPI, netbanking via PayU.', 'olkil' ); ?></p>
+				<p class="olkil-payu__secure"><?php esc_html_e( 'Shown in USD. Charged in your local currency (India: INR) via PayU.', 'olkil' ); ?></p>
 			</form>
 			<?php if ( 'test' === $mode ) : ?>
 				<details class="olkil-payu__test">
@@ -1036,14 +1061,14 @@ function olkil_payu_checkout_html() {
 			<?php endif; ?>
 			<?php endif; ?>
 
-			<div class="olkil-payu__plans">
+			<nav class="olkil-payu__plans" aria-label="<?php esc_attr_e( 'Choose a plan', 'olkil' ); ?>">
 				<?php foreach ( $plans as $slug => $p ) : ?>
 					<a class="<?php echo $slug === $plan_slug ? 'is-active' : ''; ?>" href="<?php echo esc_url( home_url( '/checkout/?plan=' . $slug ) ); ?>">
 						<?php echo esc_html( str_replace( 'OLKIL ', '', $p['name'] ) ); ?>
 						<span>$<?php echo esc_html( olkil_payu_usd( $p ) ); ?></span>
 					</a>
 				<?php endforeach; ?>
-			</div>
+			</nav>
 		</div>
 	</div>
 	<?php
@@ -1062,7 +1087,7 @@ function olkil_payu_success_html() {
 	ob_start();
 	?>
 	<div class="olkil-payu">
-		<div class="olkil-payu__card olkil-payu__card--result">
+		<div class="olkil-payu__panel olkil-payu__panel--result">
 			<div class="olkil-payu__icon olkil-payu__icon--ok" aria-hidden="true">✓</div>
 			<h1><?php esc_html_e( 'Payment successful', 'olkil' ); ?></h1>
 			<p><?php esc_html_e( 'Your plan is active. A tax invoice and payment receipt have been emailed to you.', 'olkil' ); ?></p>
@@ -1098,10 +1123,11 @@ function olkil_payu_success_html() {
 function olkil_payu_invoice_page_html() {
 	$txnid = isset( $_GET['txnid'] ) ? sanitize_text_field( wp_unslash( $_GET['txnid'] ) ) : ''; // phpcs:ignore
 	$order = $txnid ? olkil_payu_get_order( $txnid ) : null;
-	if ( ! $order || empty( $order['invoice_html'] ) ) {
-		return '<div class="olkil-payu"><div class="olkil-payu__card olkil-payu__card--result"><h1>' . esc_html__( 'Invoice not found', 'olkil' ) . '</h1><p>' . esc_html__( 'This invoice is not ready yet, or the transaction id is invalid.', 'olkil' ) . '</p><a class="olkil-payu__btn" href="' . esc_url( home_url( '/dashboard/' ) ) . '">Dashboard</a></div></div>';
+	$inv   = is_array( $order['invoice'] ?? null ) ? $order['invoice'] : null;
+	if ( ! $inv ) {
+		return '<div class="olkil-payu"><div class="olkil-payu__panel olkil-payu__panel--result"><h1>' . esc_html__( 'Invoice not found', 'olkil' ) . '</h1><p>' . esc_html__( 'This invoice is not ready yet, or the transaction id is invalid.', 'olkil' ) . '</p><a class="olkil-payu__btn" href="' . esc_url( home_url( '/dashboard/' ) ) . '">Dashboard</a></div></div>';
 	}
-	return (string) $order['invoice_html'] . (string) ( $order['receipt_html'] ?? '' );
+	return olkil_payu_invoice_screen_html( $inv, true );
 }
 
 function olkil_payu_failed_html() {
@@ -1109,7 +1135,7 @@ function olkil_payu_failed_html() {
 	ob_start();
 	?>
 	<div class="olkil-payu">
-		<div class="olkil-payu__card olkil-payu__card--result">
+		<div class="olkil-payu__panel olkil-payu__panel--result">
 			<div class="olkil-payu__icon olkil-payu__icon--fail" aria-hidden="true">!</div>
 			<h1><?php esc_html_e( 'Payment not completed', 'olkil' ); ?></h1>
 			<p><?php esc_html_e( 'No charge went through, or the payment was cancelled. You can try again anytime.', 'olkil' ); ?></p>
@@ -1411,14 +1437,12 @@ function olkil_payu_admin_page() {
 		return;
 	}
 	if ( isset( $_POST['olkil_payu_save'] ) && check_admin_referer( 'olkil_payu_admin' ) ) {
-		$mode = sanitize_text_field( wp_unslash( $_POST['mode'] ?? 'test' ) );
-		update_option( 'olkil_payu_mode', ( 'live' === $mode ) ? 'live' : 'test', false );
+		$mode = sanitize_text_field( wp_unslash( $_POST['mode'] ?? 'live' ) );
+		update_option( 'olkil_payu_mode', ( 'test' === $mode ) ? 'test' : 'live', false );
 		$fb = esc_url_raw( wp_unslash( $_POST['firebase_url'] ?? '' ) );
 		if ( $fb ) {
 			update_option( 'olkil_payu_firebase_url', untrailingslashit( $fb ), false );
 		}
-		$gstin = sanitize_text_field( wp_unslash( $_POST['gstin'] ?? '' ) );
-		update_option( 'olkil_payu_gstin', $gstin, false );
 		$secret = sanitize_text_field( wp_unslash( $_POST['internal_secret'] ?? '' ) );
 		if ( $secret ) {
 			update_option( 'olkil_payu_internal_secret', $secret, false );
@@ -1452,15 +1476,11 @@ function olkil_payu_admin_page() {
 					<td><input type="password" name="internal_secret" class="regular-text" value="" placeholder="Leave blank to keep" autocomplete="new-password" /></td>
 				</tr>
 				<tr>
-					<th>GSTIN (optional)</th>
-					<td><input type="text" name="gstin" class="regular-text" value="<?php echo esc_attr( (string) get_option( 'olkil_payu_gstin', '' ) ); ?>" /></td>
-				</tr>
-				<tr>
 					<th>Mode (local fallback)</th>
 					<td>
 						<select name="mode">
-							<option value="test" <?php selected( $creds['mode'], 'test' ); ?>>Test (test.payu.in)</option>
 							<option value="live" <?php selected( $creds['mode'], 'live' ); ?>>Live (secure.payu.in)</option>
+							<option value="test" <?php selected( $creds['mode'], 'test' ); ?>>Test (test.payu.in)</option>
 						</select>
 					</td>
 				</tr>
