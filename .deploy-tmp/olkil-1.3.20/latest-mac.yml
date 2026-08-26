@@ -1,11 +1,11 @@
 version: 1.3.20
 files:
-  - url: https://github.com/narsijangid/IDE/releases/download/v1.3.20/OLKIL-1.3.20-arm64.dmg
+  - url: OLKIL-1.3.20-arm64.dmg
     sha512: D1NwaaG1GNnpO8qBqlQkzoM4cqaFuQq7WCJ4CnE9TCeF+xJoHRxTqjDw2jHm0SBYmxZNEzUOhKfB0csg0a9mFw==
     size: 178670236
-  - url: https://github.com/narsijangid/IDE/releases/download/v1.3.20/OLKIL-1.3.20-x64.dmg
+  - url: OLKIL-1.3.20-x64.dmg
     sha512: KZJVUkoNhB+4ff6yVCMu9FJHLpEum0WjekL2CgogqLC2CUGJb2NOCp0ywYHvjOZxjcYIWNv8ilrcCIXJe2e+Jw==
     size: 183221686
-path: https://github.com/narsijangid/IDE/releases/download/v1.3.20/OLKIL-1.3.20-arm64.dmg
+path: OLKIL-1.3.20-arm64.dmg
 sha512: D1NwaaG1GNnpO8qBqlQkzoM4cqaFuQq7WCJ4CnE9TCeF+xJoHRxTqjDw2jHm0SBYmxZNEzUOhKfB0csg0a9mFw==
 releaseDate: '2026-08-25T21:21:14.790Z'
