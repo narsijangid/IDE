@@ -158,7 +158,17 @@ if (fs.existsSync(ollamaDir)) {
   extraResources.push({
     from: ollamaDir,
     to: 'ollama',
-    filter: ['**/*'],
+    // Never ship Ollama's app.ico / Inno leftover — electron-builder would
+    // pick them up from build/ and replace OLKIL's installer icon.
+    filter: [
+      '**/*',
+      '!**/*.ico',
+      '!**/*.lnk',
+      '!app.ico',
+      '!unins000.*',
+      '!**/OllamaSetup.exe',
+      '!**/ollama app.exe',
+    ],
   });
   console.log('[pack] Bundling local AI engine from', ollamaDir);
 } else {
@@ -238,6 +248,8 @@ electronBuilder
       extraResources,
       directories: {
         output: outputPath,
+        // Isolate icons from build/ollama so Ollama's app.ico cannot leak in.
+        buildResources: path.join(__dirname, 'icon'),
       },
       asar: true,
       asarUnpack: [

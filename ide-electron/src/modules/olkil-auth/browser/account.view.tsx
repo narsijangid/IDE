@@ -64,10 +64,58 @@ function initialLetter(user: OlkilAuthUser | null): string {
   return (raw[0] || 'O').toUpperCase();
 }
 
-async function loadSubscription(email: string | null | undefined): Promise<OlkilSubscription | null> {
+const SUB_CACHE_PREFIX = 'olkil.subscription.cache.';
+const subMemory = new Map<string, OlkilSubscription>();
+const subInflight = new Map<string, Promise<OlkilSubscription | null>>();
+
+function subEmailKey(email: string): string {
+  return email.trim().toLowerCase();
+}
+
+function subCacheKey(email: string): string {
+  return SUB_CACHE_PREFIX + subEmailKey(email);
+}
+
+function isUsableSubscription(value: unknown): value is OlkilSubscription {
+  return Boolean(value && typeof value === 'object' && typeof (value as OlkilSubscription).plan_name === 'string' && (value as OlkilSubscription).plan_name);
+}
+
+function readCachedSubscription(email: string | null | undefined): OlkilSubscription | null {
   if (!email) {
     return null;
   }
+  const key = subEmailKey(email);
+  const fromMemory = subMemory.get(key);
+  if (fromMemory) {
+    return fromMemory;
+  }
+  try {
+    const raw = window.localStorage.getItem(subCacheKey(email));
+    if (!raw) {
+      return null;
+    }
+    const parsed = JSON.parse(raw) as OlkilSubscription;
+    if (!isUsableSubscription(parsed)) {
+      return null;
+    }
+    subMemory.set(key, parsed);
+    return parsed;
+  } catch {
+    return null;
+  }
+}
+
+function writeCachedSubscription(email: string, sub: OlkilSubscription): void {
+  const key = subEmailKey(email);
+  subMemory.set(key, sub);
+  try {
+    window.localStorage.setItem(subCacheKey(email), JSON.stringify(sub));
+  } catch {
+    // ignore quota / private mode
+  }
+}
+
+async function fetchSubscription(email: string): Promise<OlkilSubscription | null> {
   try {
     const res = await fetch('https://olkil.com/wp-json/olkil-payu/v1/subscription', {
       method: 'POST',
@@ -83,10 +131,31 @@ async function loadSubscription(email: string | null | undefined): Promise<Olkil
     if (!res.ok) {
       return null;
     }
-    return (await res.json()) as OlkilSubscription;
+    const data = (await res.json()) as OlkilSubscription;
+    if (isUsableSubscription(data)) {
+      writeCachedSubscription(email, data);
+      return data;
+    }
+    return null;
   } catch {
     return null;
   }
+}
+
+async function loadSubscription(email: string | null | undefined): Promise<OlkilSubscription | null> {
+  if (!email) {
+    return null;
+  }
+  const key = subEmailKey(email);
+  const pending = subInflight.get(key);
+  if (pending) {
+    return pending;
+  }
+  const promise = fetchSubscription(email).finally(() => {
+    subInflight.delete(key);
+  });
+  subInflight.set(key, promise);
+  return promise;
 }
 
 function saveSection(id: SettingsSectionId) {
@@ -364,9 +433,9 @@ function AccountPane() {
   const auth = useInjectable<IOlkilAuthService>(IOlkilAuthService);
   const commands = useInjectable<CommandService>(CommandService);
   const [user, setUser] = useState<OlkilAuthUser | null>(auth.getUser());
-  const [sub, setSub] = useState<OlkilSubscription | null>(null);
   const [busy, setBusy] = useState(false);
   const [photoFailed, setPhotoFailed] = useState(false);
+  const { sub, loading: subLoading } = useOlkilSubscription(user?.email);
 
   useEffect(() => {
     setUser(auth.getUser());
@@ -377,8 +446,6 @@ function AccountPane() {
     });
     return () => subChange.dispose();
   }, [auth]);
-
-  useOlkilSubscription(user?.email, setSub);
 
   const onSignIn = async () => {
     setBusy(true);
@@ -425,7 +492,9 @@ function AccountPane() {
               <div className={styles.identity}>
                 <div className={styles.nameRow}>
                   <div className={styles.name}>{user.displayName || 'OLKIL user'}</div>
-                  <span className={styles.planBadge}>{sub?.plan_name || 'Dazzlone'}</span>
+                  <span className={styles.planBadge}>
+                    {sub?.plan_name || (subLoading ? 'Loading' : 'Dazzlone')}
+                  </span>
                 </div>
                 <div className={styles.email}>{user.email || 'No email on account'}</div>
               </div>
@@ -471,7 +540,7 @@ function AccountPane() {
 function PlanPane() {
   const auth = useInjectable<IOlkilAuthService>(IOlkilAuthService);
   const [user, setUser] = useState<OlkilAuthUser | null>(auth.getUser());
-  const [sub, setSub] = useState<OlkilSubscription | null>(null);
+  const { sub, loading: subLoading } = useOlkilSubscription(user?.email);
 
   useEffect(() => {
     setUser(auth.getUser());
@@ -479,9 +548,8 @@ function PlanPane() {
     return () => change.dispose();
   }, [auth]);
 
-  useOlkilSubscription(user?.email, setSub);
-
-  const pctLeft = sub?.percent_left ?? 100;
+  const waitingForPlan = Boolean(user) && !sub && subLoading;
+  const pctLeft = sub?.percent_left ?? (waitingForPlan ? 0 : 100);
 
   return (
     <div className={styles.pane}>
@@ -498,16 +566,22 @@ function PlanPane() {
             <div className={styles.planCardTop}>
               <span>Credits remaining</span>
               <strong>
-                {sub?.is_paid ? `${sub.percent_left_label || `${pctLeft}%`} left` : 'Local · unlimited'}
+                {waitingForPlan
+                  ? 'Loading…'
+                  : sub?.is_paid
+                    ? `${sub.percent_left_label || `${pctLeft}%`} left`
+                    : 'Local · unlimited'}
               </strong>
             </div>
-            <div className={styles.bar}>
+            <div className={`${styles.bar} ${waitingForPlan ? styles.barLoading : ''}`}>
               <span style={{ width: `${Math.max(0, Math.min(100, pctLeft))}%` }} />
             </div>
             <p className={styles.planHint}>
-              {sub?.is_paid
-                ? `${sub.tokens_left_label || '0'} remaining of ${sub.tokens_total_label || '0'} · ${sub.tokens_used_label || '0'} used`
-                : 'Free Dazzlone — local models, no cloud token cap'}
+              {waitingForPlan
+                ? 'Loading your plan…'
+                : sub?.is_paid
+                  ? `${sub.tokens_left_label || '0'} remaining of ${sub.tokens_total_label || '0'} · ${sub.tokens_used_label || '0'} used`
+                  : 'Free Dazzlone — local models, no cloud token cap'}
             </p>
             {sub?.is_paid && sub.drawing_plan && sub.drawing_plan !== sub.plan ? (
               <p className={styles.planHint}>
@@ -549,9 +623,11 @@ function PlanPane() {
             ) : null}
             <div className={styles.meta}>
               <div className={styles.metaLabel}>Plan</div>
-              <div className={styles.metaValue}>{sub?.plan_name || 'Dazzlone'}</div>
+              <div className={styles.metaValue}>{sub?.plan_name || (waitingForPlan ? 'Loading…' : 'Dazzlone')}</div>
               <div className={styles.metaLabel}>Expires</div>
-              <div className={styles.metaValue}>{sub?.expires_label || 'Never (free local)'}</div>
+              <div className={styles.metaValue}>
+                {sub?.expires_label || (waitingForPlan ? '—' : 'Never (free local)')}
+              </div>
             </div>
             <div className={styles.actions}>
               <a className={`${styles.btn} ${styles.btnGhost}`} href="https://olkil.com/pricing/" target="_blank" rel="noreferrer">
@@ -1102,6 +1178,23 @@ function PrivacyPane({
         <SettingRow title="Include dotfiles in context" desc="Allow the agent to read files like .env when they are in the workspace." control={<Switch on={settings.includeDotfiles} onChange={(includeDotfiles) => patch({ includeDotfiles })} />} />
         <SettingRow title="Share anonymous usage" desc="Off by default. OLKIL does not send extra product telemetry unless you enable this." control={<Switch on={settings.shareUsageData} onChange={(shareUsageData) => patch({ shareUsageData })} />} />
       </div>
+      <div className={styles.privacyLegal}>
+        <p>
+          We respect your privacy. Your project and account data are handled securely and used only to provide the
+          services you request. We do not sell your personal data or use your project data for unrelated purposes.
+        </p>
+        <h2>AI &amp; Technology</h2>
+        <p>
+          OLKIL combines advanced LLMs with our own AI orchestration, RAG, context optimization, and
+          project-understanding technology to provide fast, relevant coding assistance. We also use the OpenCode CLI as
+          part of our coding-agent infrastructure and appreciate its open-source contributors.
+        </p>
+        <h2>Payments</h2>
+        <p>
+          Payments are securely processed through our trusted payment gateway. OLKIL does not store your complete card
+          details.
+        </p>
+      </div>
     </div>
   );
 }
@@ -1148,24 +1241,47 @@ function AboutPane() {
   );
 }
 
-function useOlkilSubscription(email: string | null | undefined, setSub: (next: OlkilSubscription | null) => void) {
+function useOlkilSubscription(email: string | null | undefined): { sub: OlkilSubscription | null; loading: boolean } {
+  const [sub, setSub] = useState<OlkilSubscription | null>(() => readCachedSubscription(email));
+  const [loading, setLoading] = useState(() => Boolean(email) && !readCachedSubscription(email));
+
   useEffect(() => {
     let cancelled = false;
-    const load = async () => {
-      if (typeof document !== 'undefined' && document.hidden) {
-        return;
-      }
-      const next = await loadSubscription(email);
-      if (!cancelled) {
-        setSub(next);
-      }
-    };
-    void load();
     if (!email) {
+      setSub(null);
+      setLoading(false);
       return () => {
         cancelled = true;
       };
     }
+
+    const cached = readCachedSubscription(email);
+    if (cached) {
+      setSub(cached);
+      setLoading(false);
+    } else {
+      setSub(null);
+      setLoading(true);
+    }
+
+    const apply = (next: OlkilSubscription | null) => {
+      if (cancelled) {
+        return;
+      }
+      if (next) {
+        setSub(next);
+      }
+      setLoading(false);
+    };
+
+    const load = async () => {
+      if (typeof document !== 'undefined' && document.hidden) {
+        return;
+      }
+      apply(await loadSubscription(email));
+    };
+    void load();
+
     const timer = window.setInterval(() => {
       void load();
     }, 4000);
@@ -1173,11 +1289,7 @@ function useOlkilSubscription(email: string | null | undefined, setSub: (next: O
       void load();
     };
     const onWallet = () => {
-      void loadSubscription(email).then((next) => {
-        if (!cancelled) {
-          setSub(next);
-        }
-      });
+      void loadSubscription(email).then(apply);
     };
     window.addEventListener('focus', onShow);
     document.addEventListener('visibilitychange', onShow);
@@ -1189,5 +1301,7 @@ function useOlkilSubscription(email: string | null | undefined, setSub: (next: O
       document.removeEventListener('visibilitychange', onShow);
       window.removeEventListener('olkil-wallet-updated', onWallet);
     };
-  }, [email, setSub]);
+  }, [email]);
+
+  return { sub, loading };
 }
