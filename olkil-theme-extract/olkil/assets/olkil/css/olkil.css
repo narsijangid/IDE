@@ -1801,9 +1801,22 @@ body.olkil-theme .comments-title {
 @media (max-width: 860px) {
 	.olkil-menu-toggle {
 		display: inline-flex;
+		order: 3;
+		margin-left: auto;
+	}
+
+	.olkil-header__inner {
+		display: flex;
+		align-items: center;
+		gap: 0.75rem;
+	}
+
+	.olkil-logo {
+		order: 1;
 	}
 
 	.olkil-nav {
+		order: 4;
 		position: fixed;
 		inset: var(--olkil-header-h) 0 auto;
 		background: rgba(5, 5, 6, 0.96);
@@ -1823,7 +1836,59 @@ body.olkil-theme .comments-title {
 		gap: 0.85rem;
 	}
 
-	.olkil-header__actions .olkil-btn--ghost {
+	/* Top-right Download CTA → menu only on mobile */
+	.olkil-header__actions {
+		display: none;
+	}
+
+	.olkil-nav__account {
+		display: flex;
+		flex-direction: column;
+		gap: 0.35rem;
+		margin-top: 1rem;
+		padding-top: 1rem;
+		border-top: 1px solid var(--olkil-border);
+		width: 100%;
+	}
+
+	.olkil-nav__account-link {
+		display: flex;
+		align-items: center;
+		width: 100%;
+		padding: 0.7rem 0.85rem;
+		border-radius: 10px;
+		border: 1px solid var(--olkil-border);
+		background: rgba(255, 255, 255, 0.03);
+		color: var(--olkil-white) !important;
+		font-size: 0.95rem;
+		font-weight: 600;
+		text-decoration: none;
+		text-align: left;
+		cursor: pointer;
+	}
+
+	.olkil-nav__account-link--guest {
+		background: var(--olkil-accent, #fe019a);
+		border-color: transparent;
+		color: #fff !important;
+		justify-content: center;
+	}
+
+	button.olkil-nav__account-link {
+		font: inherit;
+	}
+
+	body.olkil-signed-in .olkil-nav__account-link--guest {
+		display: none !important;
+	}
+
+	body:not(.olkil-signed-in) .olkil-nav__account-link--authed {
+		display: none !important;
+	}
+}
+
+@media (min-width: 861px) {
+	.olkil-nav__account {
 		display: none;
 	}
 }
@@ -2232,4 +2297,5 @@ body:not(.olkil-signed-in) #olkil-account-authed {
 @media (max-width: 860px) {
 	.olkil-account__meta { display: none; }
 	.olkil-header__pricing { display: none; }
+	.olkil-header__download { display: none; }
 }

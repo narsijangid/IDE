@@ -1,0 +1,12 @@
+version: 1.3.21
+files:
+  - url: https://github.com/narsijangid/IDE/releases/download/v1.3.21/OLKIL-1.3.21-arm64.dmg
+    sha512: V/KNUqDSHuZ+UQsk8K2LosizU7K1xRdvWiJkmX1K8dxeTxEhEHEyLPGRbaMnnnkODTO0WyC4I49os/0GcRqATg==
+    size: 178699217
+  - url: https://github.com/narsijangid/IDE/releases/download/v1.3.21/OLKIL-1.3.21-x64.dmg
+    sha512: gProAic9TcwWvh4bMSmtOvA0hpfYQgvvQQY8X2VIco0yhWwskDpeX8FPFlUCHQJqdDVRlzMZ9N3W2oUvV4mf7w==
+    size: 183199508
+path: https://github.com/narsijangid/IDE/releases/download/v1.3.21/OLKIL-1.3.21-arm64.dmg
+sha512: V/KNUqDSHuZ+UQsk8K2LosizU7K1xRdvWiJkmX1K8dxeTxEhEHEyLPGRbaMnnnkODTO0WyC4I49os/0GcRqATg==
+releaseDate: '2026-08-26T09:46:54.945Z'
+

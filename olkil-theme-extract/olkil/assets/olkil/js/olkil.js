@@ -22,16 +22,24 @@
 		var nav = document.querySelector('.olkil-nav');
 		if (!toggle || !nav) return;
 
+		function closeMenu() {
+			nav.classList.remove('is-open');
+			toggle.setAttribute('aria-expanded', 'false');
+		}
+
 		toggle.addEventListener('click', function () {
 			var open = nav.classList.toggle('is-open');
 			toggle.setAttribute('aria-expanded', open ? 'true' : 'false');
 		});
 
-		nav.querySelectorAll('a').forEach(function (link) {
+		nav.querySelectorAll('a, button').forEach(function (link) {
 			link.addEventListener('click', function () {
-				nav.classList.remove('is-open');
-				toggle.setAttribute('aria-expanded', 'false');
+				closeMenu();
 			});
+		});
+
+		document.addEventListener('keydown', function (e) {
+			if (e.key === 'Escape') closeMenu();
 		});
 	}
 

@@ -2,7 +2,7 @@
 /**
  * Plugin Name: OLKIL PayU Checkout
  * Description: Professional PayU checkout — Firebase-held KEY/SALT, webhook, invoices, receipts, email.
- * Version: 2.6.1
+ * Version: 2.6.4
  * Author: OLKIL
  */
 
@@ -10,7 +10,7 @@ if ( ! defined( 'ABSPATH' ) ) {
 	exit;
 }
 
-define( 'OLKIL_PAYU_CHECKOUT_VERSION', '2.6.1' );
+define( 'OLKIL_PAYU_CHECKOUT_VERSION', '2.6.4' );
 define( 'OLKIL_PAYU_CHECKOUT_DIR', plugin_dir_path( __FILE__ ) );
 define( 'OLKIL_PAYU_CHECKOUT_URL', plugin_dir_url( __FILE__ ) );
 
@@ -536,9 +536,11 @@ function olkil_payu_register_routes() {
 			'methods'             => array( 'GET', 'POST' ),
 			'callback'            => 'olkil_payu_rest_subscription',
 			'permission_callback' => '__return_true',
+			// Do not mark email required here — WP validates args before JSON body
+			// is always available, which breaks browser POST {email} payloads.
 			'args'                => array(
 				'email' => array(
-					'required' => true,
+					'required' => false,
 					'type'     => 'string',
 				),
 			),
@@ -588,12 +590,20 @@ add_action( 'rest_api_init', 'olkil_payu_rest_cors', 15 );
 function olkil_payu_rest_subscription( WP_REST_Request $request ) {
 	$email = sanitize_email( (string) ( function_exists( 'olkil_payu_request_value' ) ? olkil_payu_request_value( $request, 'email' ) : $request->get_param( 'email' ) ) );
 	if ( ! $email ) {
+		// Also accept query string for GET/POST fallbacks.
+		$email = sanitize_email( (string) $request->get_param( 'email' ) );
+	}
+	if ( ! $email && isset( $_REQUEST['email'] ) ) { // phpcs:ignore WordPress.Security.NonceVerification.Recommended
+		$email = sanitize_email( wp_unslash( (string) $_REQUEST['email'] ) ); // phpcs:ignore
+	}
+	if ( ! $email ) {
 		return new WP_REST_Response( array( 'error' => 'email_required' ), 400 );
 	}
 	$response = new WP_REST_Response( olkil_payu_get_subscription( $email ), 200 );
 	$response->header( 'Cache-Control', 'no-store, no-cache, must-revalidate, max-age=0' );
 	$response->header( 'X-LiteSpeed-Cache-Control', 'no-cache' );
 	$response->header( 'Pragma', 'no-cache' );
+	$response->header( 'Content-Type', 'application/json; charset=UTF-8' );
 	return $response;
 }
 

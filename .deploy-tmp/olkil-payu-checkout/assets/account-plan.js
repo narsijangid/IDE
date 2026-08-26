@@ -25,8 +25,18 @@
 
   function fetchSub(email) {
     if (!email) return Promise.resolve(null);
-    var url = API + (API.indexOf('?') >= 0 ? '&' : '?') + 'email=' + encodeURIComponent(email);
-    return fetch(url, { credentials: 'omit' })
+    return fetch(API, {
+      method: 'POST',
+      credentials: 'omit',
+      cache: 'no-store',
+      headers: {
+        Accept: 'application/json',
+        'Content-Type': 'application/json',
+        'Cache-Control': 'no-cache',
+        Pragma: 'no-cache',
+      },
+      body: JSON.stringify({ email: email, _: Date.now() }),
+    })
       .then(function (r) {
         return r.ok ? r.json() : null;
       })
@@ -53,7 +63,10 @@
 
   function formatAmount(value) {
     var n = parseFloat(value, 10);
-    if (isNaN(n)) return value ? '₹' + value : '—';
+    if (isNaN(n)) return value ? String(value) : '—';
+    var usdMap = { 0: '0', 249: '3', 287: '3', 849: '10', 957: '10', 2499: '30', 4199: '49', 4692: '49' };
+    var mapped = usdMap[Math.round(n)];
+    if (mapped !== undefined) return '$' + mapped;
     return '₹' + n.toLocaleString('en-IN', { maximumFractionDigits: 0 });
   }
 
@@ -162,8 +175,10 @@
       note.textContent = sub.is_paid
         ? (sub.plan_name || 'Plan') +
           ' · ' +
-          (sub.percent_left || 0) +
-          '% remaining · resets ' +
+          (sub.tokens_used_label || '0') +
+          ' used · ' +
+          (sub.percent_left_label || Math.round(sub.percent_left || 0) + '%') +
+          ' remaining · resets ' +
           (sub.expires_on || '—')
         : 'Free Dazzlone — local models have no cloud token cap.';
     }
@@ -224,7 +239,7 @@
     var ex = $('#olkil-profile-plan-expiry');
     if (ex) ex.textContent = sub.expires_label || '—';
     var pct = $('#olkil-profile-credits-pct');
-    if (pct) pct.textContent = (sub.percent_left != null ? sub.percent_left : 100) + '% left';
+    if (pct) pct.textContent = sub.percent_left_label ? sub.percent_left_label + ' left' : (sub.percent_left != null ? sub.percent_left : 100) + '% left';
     var fill = $('#olkil-profile-bar-fill');
     if (fill) fill.style.width = Math.max(0, Math.min(100, sub.percent_left != null ? sub.percent_left : 100)) + '%';
     var tok = $('#olkil-profile-tokens');
@@ -317,7 +332,7 @@
       if (sub.is_paid && sub.drawing_plan && sub.drawing_plan !== sub.plan) {
         note.textContent = (sub.plan_name || 'Plan') + ' tokens used up · using held ' + (sub.drawing_plan_name || 'plan');
       } else if (sub.is_paid) {
-        note.textContent = 'Active · ' + (sub.tokens_total_label || '') + ' tokens / month';
+        note.textContent = 'Active · ' + (sub.tokens_total_compact || sub.tokens_total_label || '') + ' tokens / month';
       } else if (sub.is_expired) {
         note.textContent = 'Previous plan ended — you are on free Dazzlone';
       } else {
@@ -336,7 +351,7 @@
     }
     var left = $('#olkil-dash-credits-left');
     if (left) {
-      left.textContent = sub.is_paid ? (sub.percent_left || 0) + '% remaining' : 'Local · unlimited';
+      left.textContent = sub.is_paid ? (sub.percent_left_label || Math.round(sub.percent_left || 0) + '%') + ' remaining' : 'Local · unlimited';
     }
     var fill = $('#olkil-dash-bar-fill');
     if (fill) fill.style.width = (sub.is_paid ? sub.percent_left || 0 : 100) + '%';
@@ -401,15 +416,46 @@
     }
   }
 
+  function defaultSub() {
+    return {
+      plan: 'dazzlone',
+      plan_name: 'Dazzlone',
+      is_paid: false,
+      is_expired: false,
+      percent_left: 100,
+      percent_left_label: '100%',
+      tokens_left_label: 'Unlimited',
+      tokens_used_label: '0',
+      tokens_total_label: 'Local',
+      expires_label: 'Never on the free plan',
+      expires_on: '',
+      held_plans: [],
+    };
+  }
+
+  function paintLive(user, sub) {
+    // Always resolve dashboard chrome from auth — never leave guest UI stuck
+    // if subscription API is slow/fails (intermittent "Sign in to your dashboard").
+    if (!user) {
+      paintDashboard(null, null);
+      return;
+    }
+    var plan = sub || defaultSub();
+    paintProfile(plan);
+    paintHeader(plan);
+    paintDashboard(user, plan);
+    paintUsage(plan);
+  }
+
   function applyUser(user) {
     if (!user || !user.email) {
       paintDashboard(null, null);
       return;
     }
+    // Show signed-in shell immediately; fill plan details when API returns.
+    paintDashboard(user, defaultSub());
     fetchSub(user.email).then(function (sub) {
-      paintProfile(sub);
-      paintHeader(sub);
-      paintDashboard(user, sub);
+      paintLive(user, sub);
     });
     fetchInvoices(user.email).then(paintInvoices);
   }
@@ -417,38 +463,61 @@
   function bootFirebase() {
     tries += 1;
     if (typeof firebase === 'undefined') {
-      if (tries < 50) setTimeout(bootFirebase, 150);
+      if (tries < 80) setTimeout(bootFirebase, 120);
       return;
     }
     try {
       if (!firebase.apps.length) {
-        if (tries < 50) setTimeout(bootFirebase, 150);
+        if (tries < 80) setTimeout(bootFirebase, 120);
         return;
       }
     } catch (e) {
-      if (tries < 50) setTimeout(bootFirebase, 150);
+      if (tries < 80) setTimeout(bootFirebase, 120);
       return;
     }
 
-    firebase.auth().onAuthStateChanged(function (user) {
+    var auth = firebase.auth();
+    try {
+      auth.setPersistence(firebase.auth.Auth.Persistence.LOCAL);
+    } catch (e) {
+      /* ignore — persistence may already be set */
+    }
+
+    auth.onAuthStateChanged(function (user) {
       applyUser(user);
       startUsagePoll(user);
     });
+
+    // If session already restored before listener attached, paint now.
+    if (auth.currentUser) {
+      applyUser(auth.currentUser);
+      startUsagePoll(auth.currentUser);
+    }
   }
 
   var pollTimer = null;
+  var pollOnShow = null;
   function startUsagePoll(user) {
     if (pollTimer) {
       clearInterval(pollTimer);
       pollTimer = null;
     }
-    if (!user || !user.email || !$('#olkil-dash')) return;
-    pollTimer = setInterval(function () {
+    if (pollOnShow) {
+      document.removeEventListener('visibilitychange', pollOnShow);
+      window.removeEventListener('focus', pollOnShow);
+      pollOnShow = null;
+    }
+    if (!user || !user.email) return;
+    var tick = function () {
+      if (document.hidden) return;
       fetchSub(user.email).then(function (sub) {
-        paintProfile(sub);
-        paintDashboard(user, sub);
+        paintLive(user, sub);
       });
-    }, 20000);
+    };
+    pollOnShow = tick;
+    pollTimer = setInterval(tick, 4000);
+    document.addEventListener('visibilitychange', tick);
+    window.addEventListener('focus', tick);
   }
 
   if (document.readyState === 'loading') {

@@ -33,22 +33,39 @@ $profile_url = olkil_page_url( 'profile' );
 				)
 			);
 			?>
+			<div class="olkil-nav__account" aria-label="<?php esc_attr_e( 'Account', 'olkil' ); ?>">
+				<a class="olkil-nav__account-link olkil-nav__account-link--guest" data-olkil-signin href="<?php echo esc_url( $login_url ); ?>">
+					<?php esc_html_e( 'Sign in', 'olkil' ); ?>
+				</a>
+				<a class="olkil-nav__account-link olkil-nav__account-link--authed" href="<?php echo esc_url( olkil_page_url( 'dashboard' ) ); ?>">
+					<?php esc_html_e( 'Dashboard', 'olkil' ); ?>
+				</a>
+				<a class="olkil-nav__account-link olkil-nav__account-link--authed" href="<?php echo esc_url( $profile_url ); ?>">
+					<?php esc_html_e( 'Profile', 'olkil' ); ?>
+				</a>
+				<a class="olkil-nav__account-link" href="<?php echo esc_url( olkil_page_url( 'download' ) ); ?>">
+					<?php esc_html_e( 'Download', 'olkil' ); ?>
+				</a>
+				<button type="button" class="olkil-nav__account-link olkil-nav__account-link--authed olkil-nav__account-signout" data-olkil-signout>
+					<?php esc_html_e( 'Sign out', 'olkil' ); ?>
+				</button>
+			</div>
 		</nav>
 
 		<div class="olkil-header__actions">
 			<a class="olkil-btn olkil-btn--ghost olkil-header__pricing" href="<?php echo esc_url( olkil_page_url( 'pricing' ) ); ?>"><?php esc_html_e( 'Pricing', 'astra' ); ?></a>
-			<a class="olkil-btn olkil-btn--primary" data-olkil-download="auto" href="<?php echo esc_url( olkil_page_url( 'download' ) ); ?>">
+			<a class="olkil-btn olkil-btn--primary olkil-header__download" data-olkil-download="auto" href="<?php echo esc_url( olkil_page_url( 'download' ) ); ?>">
 				<span class="olkil-btn-label"><?php esc_html_e( 'Download', 'astra' ); ?></span>
 			</a>
 
-			<!-- Account: guest -->
+			<!-- Account: guest (desktop) -->
 			<div class="olkil-account" id="olkil-account-guest">
 				<a class="olkil-btn olkil-btn--ghost olkil-account__signin" data-olkil-signin href="<?php echo esc_url( $login_url ); ?>">
 					<?php esc_html_e( 'Sign in', 'olkil' ); ?>
 				</a>
 			</div>
 
-			<!-- Account: signed in (filled by olkil-account.js) -->
+			<!-- Account: signed in (desktop; filled by olkil-account.js) -->
 			<div class="olkil-account olkil-account--authed" id="olkil-account-authed" hidden>
 				<button type="button" class="olkil-account__toggle" id="olkil-account-toggle" aria-expanded="false" aria-haspopup="true" aria-controls="olkil-account-menu">
 					<span class="olkil-account__avatar" aria-hidden="true">
