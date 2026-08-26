@@ -297,12 +297,15 @@ electronBuilder
       },
       nsis: {
         // oneClick + per-user makes silent background updates reliable
-        // (electron-updater quitAndInstall /S works without wizard UI)
         oneClick: true,
         perMachine: false,
         allowToChangeInstallationDirectory: false,
         deleteAppDataOnUninstall: false,
         runAfterFinish: true,
+        // Keep shortcuts so the app stays findable after install / update
+        createDesktopShortcut: true,
+        createStartMenuShortcut: true,
+        shortcutName: 'OLKIL',
         // Required so electron-updater can patch installed builds
         differentialPackage: true,
       },
