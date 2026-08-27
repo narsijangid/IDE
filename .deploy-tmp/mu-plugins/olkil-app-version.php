@@ -17,7 +17,7 @@ add_filter( 'olkil_download_urls', function ( $urls ) {
 	$v  = '1.3.22';
 	$gh = 'https://github.com/narsijangid/IDE/releases/download/v' . $v;
 	return array(
-		'windows'        => $gh . '/OLKIL-' . $v . '.exe',
+		'windows'        => 'https://olkil.com/downloads/OLKIL-' . $v . '.exe',
 		'macos'          => $gh . '/OLKIL-' . $v . '-arm64.dmg',
 		'macos_intel'    => $gh . '/OLKIL-' . $v . '-x64.dmg',
 		'linux'          => $gh . '/OLKIL-' . $v . '.deb',
