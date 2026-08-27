@@ -12,7 +12,6 @@ import {
   LiveTestResult,
 } from '../common';
 import { CommandRunner, extractLocalUrls } from './command-runner';
-import { ensurePackagedAssets } from '../../../common/ensure-packaged-assets';
 
 type PlaywrightModule = typeof import('playwright');
 type Browser = import('playwright').Browser;
@@ -64,7 +63,7 @@ function truncate(s: string, n: number): string {
   return s.length > n ? `${s.slice(0, n)}…` : s;
 }
 
-/** Webpack wraps require(); Live Test loads Playwright extracted from playwright-modules.zip. */
+/** Webpack wraps require(); Live Test must load real Playwright from extraResources. */
 function nativeNodeRequire(id: string): any {
   const g = globalThis as { __non_webpack_require__?: NodeRequire };
   if (typeof g.__non_webpack_require__ === 'function') {
@@ -299,13 +298,6 @@ export class BrowserTestService {
   private loadPlaywright(): PlaywrightModule {
     if (this.pw) {
       return this.pw;
-    }
-    for (const root of resourceRoots()) {
-      try {
-        ensurePackagedAssets(root);
-      } catch {
-        // keep trying other roots
-      }
     }
     this.preparePlaywrightEnv();
     const errors: string[] = [];

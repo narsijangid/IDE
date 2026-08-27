@@ -5,7 +5,6 @@ const useNpmMirror = Boolean(process.env.USE_NPM_MIRROR);
 
 const fs = require('fs');
 const path = require('path');
-const { execFileSync } = require('child_process');
 const electronBuilder = require('electron-builder');
 const rootPackage = require('../package.json');
 const rimraf = require('rimraf');
@@ -42,63 +41,19 @@ function resolvePackAppDir(context) {
   );
 }
 
-function copyExtensionsIntoApp(appDir) {
-  const src = path.join(__dirname, '../extensions');
-  const dest = path.join(appDir, 'extensions');
-  if (!fs.existsSync(src)) {
-    throw new Error('[pack] extensions/ missing — run yarn download-extension');
+function copyPlaywrightIntoApp(appDir) {
+  const rootNm = path.join(__dirname, '../node_modules');
+  const appNm = path.join(appDir, 'node_modules');
+  fs.mkdirSync(appNm, { recursive: true });
+  for (const name of ['playwright-core', 'playwright']) {
+    const src = path.join(rootNm, name);
+    const dest = path.join(appNm, name);
+    if (!fs.existsSync(src)) {
+      throw new Error('[pack] missing ' + name);
+    }
+    fs.cpSync(src, dest, { recursive: true, dereference: true });
+    console.log('[pack] copied', name, 'into app for Live Test');
   }
-  fs.cpSync(src, dest, { recursive: true, dereference: true });
-  console.log('[pack] extensions packed into asar (installer copies 1 file instead of ~2000)');
-}
-
-function zipDirectory(srcDir, zipPath) {
-  fs.mkdirSync(path.dirname(zipPath), { recursive: true });
-  if (fs.existsSync(zipPath)) {
-    fs.unlinkSync(zipPath);
-  }
-  const absZip = path.resolve(zipPath);
-  try {
-    execFileSync('tar', ['-a', '-cf', absZip, '.'], { cwd: srcDir, stdio: 'inherit' });
-  } catch (err) {
-    const q = (p) => String(p).replace(/'/g, "''");
-    execFileSync(
-      'powershell.exe',
-      [
-        '-NoProfile',
-        '-NonInteractive',
-        '-Command',
-        `Compress-Archive -Path '${q(srcDir)}\\*' -DestinationPath '${q(absZip)}' -CompressionLevel Fastest -Force`,
-      ],
-      { stdio: 'inherit' },
-    );
-  }
-  const size = fs.statSync(absZip).size;
-  if (size < 1024) {
-    throw new Error('[pack] zip too small: ' + absZip);
-  }
-  console.log('[pack] zipped', path.basename(absZip), Math.round(size / 1024), 'KB');
-}
-
-function stageZippedResources(extraResources) {
-  const stageDir = path.join(__dirname, '.pack-stage');
-  fs.rmSync(stageDir, { recursive: true, force: true });
-  fs.mkdirSync(stageDir, { recursive: true });
-
-  const playwrightCoreDir = path.join(__dirname, '../node_modules/playwright-core');
-  const playwrightDir = path.join(__dirname, '../node_modules/playwright');
-  if (!fs.existsSync(playwrightCoreDir) || !fs.existsSync(playwrightDir)) {
-    throw new Error(
-      '[pack] playwright/playwright-core missing. Live Test would fail in production. Run yarn install in ide-electron.',
-    );
-  }
-  const pwRoot = path.join(stageDir, 'playwright-modules', 'node_modules');
-  fs.cpSync(playwrightDir, path.join(pwRoot, 'playwright'), { recursive: true, dereference: true });
-  fs.cpSync(playwrightCoreDir, path.join(pwRoot, 'playwright-core'), { recursive: true, dereference: true });
-  const pwZip = path.join(stageDir, 'playwright-modules.zip');
-  zipDirectory(path.join(stageDir, 'playwright-modules'), pwZip);
-  extraResources.push({ from: pwZip, to: 'playwright-modules.zip' });
-  console.log('[pack] Playwright shipped as zip (NSIS copies 1 file; Live Test extracts it)');
 }
 
 function copyNativeBuildsIntoApp(appDir) {
@@ -166,6 +121,11 @@ rimraf.sync(outputPath);
 const ollamaDir = path.join(__dirname, 'ollama');
 const extraResources = [
   {
+    from: path.join(__dirname, '../extensions'),
+    to: 'extensions',
+    filter: ['**/*'],
+  },
+  {
     from: path.join(__dirname, '../resources'),
     to: 'resources',
     filter: ['**/*'],
@@ -218,7 +178,18 @@ if (bundleOllama && fs.existsSync(ollamaDir)) {
   console.log('[pack] Ollama not staged — installer stays small.');
 }
 
-stageZippedResources(extraResources);
+const playwrightCoreDir = path.join(__dirname, '../node_modules/playwright-core');
+const playwrightDir = path.join(__dirname, '../node_modules/playwright');
+if (!fs.existsSync(playwrightCoreDir) || !fs.existsSync(playwrightDir)) {
+  throw new Error(
+    '[pack] playwright/playwright-core missing. Live Test would fail in production. Run yarn install in ide-electron.',
+  );
+}
+extraResources.push(
+  { from: playwrightCoreDir, to: 'playwright-modules/node_modules/playwright-core', filter: ['**/*'] },
+  { from: playwrightDir, to: 'playwright-modules/node_modules/playwright', filter: ['**/*'] },
+);
+console.log('[pack] Bundling Playwright driver for Live Test');
 
 const opencodeDir = path.join(__dirname, 'opencode');
 const opencodeBin = path.join(opencodeDir, process.platform === 'win32' ? 'opencode.exe' : 'opencode');
@@ -275,8 +246,6 @@ electronBuilder
         },
       ],
       extraResources,
-      // LZMA of thousands of tiny files is what made Setup feel stuck.
-      // Payload is now mostly a few large binaries + one Playwright zip.
       compression: 'normal',
       directories: {
         output: outputPath,
@@ -286,38 +255,22 @@ electronBuilder
       asar: true,
       asarUnpack: [
         'bin/**',
+        'node_modules/@opensumi/ripgrep/**',
+        'node_modules/@opensumi/vscode-ripgrep/**',
+        'node_modules/node-pty/**',
+        'node_modules/@parcel/watcher/**',
+        'node_modules/spdlog/**',
+        'node_modules/playwright/**',
+        'node_modules/playwright-core/**',
         '**/*.node',
-        'node_modules/node-pty/build/**',
-        'node_modules/@parcel/watcher/build/**',
-        'node_modules/spdlog/build/**',
-        'node_modules/nsfw/build/**',
-        'node_modules/keytar/build/**',
       ],
       // Native modules are rebuilt via `yarn rebuild-native` then copied in beforePack.
       npmRebuild: process.env.OLKIL_NPM_REBUILD === '1',
       beforePack: async (context) => {
         const appDir = resolvePackAppDir(context);
         copyNativeBuildsIntoApp(appDir);
-        copyExtensionsIntoApp(appDir);
+        copyPlaywrightIntoApp(appDir);
         assertWindowsConpty(appDir);
-      },
-      afterPack: async (context) => {
-        if (context.electronPlatformName !== 'win32') {
-          return;
-        }
-        const locales = path.join(context.appOutDir, 'locales');
-        if (!fs.existsSync(locales)) {
-          return;
-        }
-        let removed = 0;
-        for (const name of fs.readdirSync(locales)) {
-          if (name === 'en-US.pak') {
-            continue;
-          }
-          fs.unlinkSync(path.join(locales, name));
-          removed += 1;
-        }
-        console.log('[pack] stripped', removed, 'extra Electron locale packs');
       },
       publish: publishProviders,
       mac: {

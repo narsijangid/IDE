@@ -12,7 +12,6 @@ import { Injector } from '@opensumi/di';
 import { IMainStorageService } from 'common/types';
 import { MainStorageService } from './services/storage';
 import { Constants } from 'common/constants';
-import { ensurePackagedAssets } from '../common/ensure-packaged-assets';
 
 const getResourcesPath = () => {
   const appPath = app.getAppPath();
@@ -74,21 +73,7 @@ export interface ThemeData {
   statusBarBackground?: string;
 }
 
-const getExtensionDir = () => {
-  const asarExt = join(app.getAppPath(), 'extensions');
-  if (existsSync(asarExt)) {
-    return asarExt;
-  }
-  const packaged = join(getResourcesPath(), 'extensions');
-  if (existsSync(packaged)) {
-    return packaged;
-  }
-  const fromRepo = join(getResourcesPath(), '..', 'extensions');
-  if (existsSync(fromRepo)) {
-    return fromRepo;
-  }
-  return packaged;
-};
+const getExtensionDir = () => join(getResourcesPath(), 'extensions');
 const getUserExtensionDir = () => join(join(os.homedir(), Constants.DATA_FOLDER), 'extensions');
 
 const injector = new Injector([
@@ -126,18 +111,7 @@ async function init() {
     },
     overrideWebPreferences: {},
   });
-  await Promise.all(
-    [getExtensionDir(), getUserExtensionDir()]
-      .filter((dir) => dir && !dir.includes('app.asar'))
-      .map((dir) => ensureDir(dir)),
-  );
-  setImmediate(() => {
-    try {
-      ensurePackagedAssets(getResourcesPath());
-    } catch (err) {
-      console.warn('[olkil-assets]', err instanceof Error ? err.message : err);
-    }
-  });
+  await Promise.all([ensureDir(getExtensionDir()), ensureDir(getUserExtensionDir())]);
   return electronApp;
 }
 
