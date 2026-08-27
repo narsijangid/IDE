@@ -1,6 +1,6 @@
 {
   "name": "opensumi-desktop",
-  "version": "1.3.22",
+  "version": "1.3.23",
   "main": "main/index.js",
   "description": "OpenSumi Desktop",
   "author": "OLKIL <hello@olkil.com>",
