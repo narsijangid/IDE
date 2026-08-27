@@ -1,8 +1,8 @@
-version: 1.3.20
+version: 1.3.22
 files:
-  - url: https://github.com/narsijangid/IDE/releases/download/v1.3.20/OLKIL-1.3.20.exe
-    sha512: DYLfLqx/Aihnjc/Ocgw59GTT4lvgLIlzoZOupFLXdRB/Q8eGg6k45A2dhpqLfa5GFhpWSWf94N1G1eZ1b+J3fQ==
-    size: 151310121
-path: https://github.com/narsijangid/IDE/releases/download/v1.3.20/OLKIL-1.3.20.exe
-sha512: DYLfLqx/Aihnjc/Ocgw59GTT4lvgLIlzoZOupFLXdRB/Q8eGg6k45A2dhpqLfa5GFhpWSWf94N1G1eZ1b+J3fQ==
-releaseDate: '2026-08-25T21:23:28.430Z'
+  - url: https://olkil.com/downloads/OLKIL-1.3.22.exe
+    sha512: RIGwJFHpi6Tyw6Uu+DsqO7GKULtTixJA6eAG3uqknCxy6dshV4ju5vtmGgX62bAymLOEYKqkUING4xsxJv/uFg==
+    size: 109296259
+path: https://olkil.com/downloads/OLKIL-1.3.22.exe
+sha512: RIGwJFHpi6Tyw6Uu+DsqO7GKULtTixJA6eAG3uqknCxy6dshV4ju5vtmGgX62bAymLOEYKqkUING4xsxJv/uFg==
+releaseDate: '2026-08-27T04:21:53.315Z'

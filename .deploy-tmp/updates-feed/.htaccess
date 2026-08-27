@@ -1,8 +1,4 @@
 Options -Indexes
-<IfModule mod_mime.c>
-  AddType text/yaml .yml
-  AddType application/octet-stream .exe .blockmap .dmg .deb .AppImage .zip
-</IfModule>
 <IfModule mod_headers.c>
   Header set Cache-Control "no-cache, must-revalidate"
 </IfModule>
