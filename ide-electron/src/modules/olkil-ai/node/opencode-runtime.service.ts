@@ -19,6 +19,7 @@ import {
 import { assertOlkilWallet, chargeOlkilWallet, addApiUsage, parseProviderUsage, type OlkilApiUsage } from './olkil-wallet.service';
 import { opencodeAgentForMode, opencodeModelRef, toOpencodeMcp } from './opencode/config';
 import { OpencodeSidecar } from './opencode/sidecar';
+import { startOpencodeDownload } from './opencode/binary';
 import type { OpencodeMcpServer, OpencodeProviderSecrets } from './opencode/config';
 
 type ActivityKind = ClineEngineActivity['kind'];
@@ -948,7 +949,8 @@ export function getOlkilOpencodeRuntime(): OlkilOpencodeRuntimeHost {
   return host;
 }
 
-export function scheduleOpencodePrewarm(delayMs = 8_000): void {
+export function scheduleOpencodePrewarm(delayMs = 400): void {
+  startOpencodeDownload();
   setTimeout(() => {
     void getOlkilOpencodeRuntime().prewarm().catch(() => undefined);
   }, delayMs).unref?.();

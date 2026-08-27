@@ -154,7 +154,8 @@ if (fs.existsSync(olkilEnvFile)) {
   console.warn('[pack] build/olkil.env missing — cloud chat will 401 in this installer');
 }
 
-if (fs.existsSync(ollamaDir)) {
+const bundleOllama = process.env.OLKIL_BUNDLE_OLLAMA === '1';
+if (bundleOllama && fs.existsSync(ollamaDir)) {
   extraResources.push({
     from: ollamaDir,
     to: 'ollama',
@@ -171,11 +172,10 @@ if (fs.existsSync(ollamaDir)) {
     ],
   });
   console.log('[pack] Bundling local AI engine from', ollamaDir);
+} else if (fs.existsSync(ollamaDir)) {
+  console.log('[pack] Skipping Ollama bundle (faster installer). Set OLKIL_BUNDLE_OLLAMA=1 to include it.');
 } else {
-  console.warn(
-    '[pack] build/ollama not found — packaged app will fall back to a system Ollama install.\n' +
-      '       Run `node scripts/stage-ollama.js` to bundle it for zero-setup users.',
-  );
+  console.log('[pack] Ollama not staged — installer stays small.');
 }
 
 const playwrightCoreDir = path.join(__dirname, '../node_modules/playwright-core');
@@ -193,19 +193,19 @@ console.log('[pack] Bundling Playwright driver for Live Test');
 
 const opencodeDir = path.join(__dirname, 'opencode');
 const opencodeBin = path.join(opencodeDir, process.platform === 'win32' ? 'opencode.exe' : 'opencode');
-if (!fs.existsSync(opencodeBin)) {
-  throw new Error(
-    '[pack] OpenCode sidecar missing at ' +
-      opencodeBin +
-      '. Run `yarn stage-opencode` before packing — without it DeepSeek/agent chat cannot start.',
+const bundleOpencode = process.env.OLKIL_BUNDLE_OPENCODE === '1';
+if (bundleOpencode && fs.existsSync(opencodeBin)) {
+  extraResources.push({
+    from: opencodeDir,
+    to: 'opencode',
+    filter: ['**/*'],
+  });
+  console.log('[pack] Bundling OpenCode sidecar from', opencodeDir);
+} else {
+  console.log(
+    '[pack] OpenCode not bundled (~170MB) — first launch downloads it in the background. Set OLKIL_BUNDLE_OPENCODE=1 to embed.',
   );
 }
-extraResources.push({
-  from: opencodeDir,
-  to: 'opencode',
-  filter: ['**/*'],
-});
-console.log('[pack] Bundling OpenCode sidecar from', opencodeDir);
 
 // Auto-update publish targets:
 // - generic → Hostinger feed at updates.olkil.com (primary for installed apps)
@@ -246,6 +246,7 @@ electronBuilder
         },
       ],
       extraResources,
+      compression: 'normal',
       directories: {
         output: outputPath,
         // Isolate icons from build/ollama so Ollama's app.ico cannot leak in.
@@ -296,18 +297,28 @@ electronBuilder
         ...(process.env.WIN_PUBLISHER_NAME ? { publisherName: process.env.WIN_PUBLISHER_NAME } : {}),
       },
       nsis: {
-        // oneClick + per-user makes silent background updates reliable
-        oneClick: true,
+        // Assisted wizard (welcome + install + finish). Silent /S --updated
+        // still skips every page so electron-updater does not show UI.
+        oneClick: false,
         perMachine: false,
+        allowElevation: false,
+        packElevateHelper: false,
         allowToChangeInstallationDirectory: false,
         deleteAppDataOnUninstall: false,
         runAfterFinish: true,
-        // Keep shortcuts so the app stays findable after install / update
-        createDesktopShortcut: true,
+        createDesktopShortcut: 'always',
         createStartMenuShortcut: true,
         shortcutName: 'OLKIL',
-        // Required so electron-updater can patch installed builds
+        uninstallDisplayName: 'OLKIL',
+        displayLanguageSelector: false,
         differentialPackage: true,
+        warningsAsErrors: false,
+        installerIcon: 'build/icon/olkil.ico',
+        uninstallerIcon: 'build/icon/olkil.ico',
+        installerHeader: 'build/icon/installerHeader.bmp',
+        installerSidebar: 'build/icon/installerSidebar.bmp',
+        uninstallerSidebar: 'build/icon/installerSidebar.bmp',
+        include: 'build/icon/installer.nsh',
       },
       linux: {
         artifactName: '${productName}-${version}.${ext}',

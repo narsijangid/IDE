@@ -2,7 +2,7 @@
 /**
  * Plugin Name: OLKIL App Version Override
  * Description: Forces desktop download version to match latest GitHub release.
- * Version: 1.3.21
+ * Version: 1.3.22
  */
 
 if ( ! defined( 'ABSPATH' ) ) {
@@ -10,11 +10,11 @@ if ( ! defined( 'ABSPATH' ) ) {
 }
 
 add_filter( 'olkil_app_version', function () {
-	return '1.3.21';
+	return '1.3.22';
 }, 99 );
 
 add_filter( 'olkil_download_urls', function ( $urls ) {
-	$v  = '1.3.21';
+	$v  = '1.3.22';
 	$gh = 'https://github.com/narsijangid/IDE/releases/download/v' . $v;
 	return array(
 		'windows'        => $gh . '/OLKIL-' . $v . '.exe',

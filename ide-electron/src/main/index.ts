@@ -4,8 +4,17 @@ import { launch } from './launch';
 import minimist from 'minimist';
 import { existsSync } from 'fs-extra';
 import { startAutoUpdater } from './services/auto-update';
+import { startOpencodeDownload } from '../common/ensure-opencode';
 
 const PROTOCOL = 'olkil';
+const APP_USER_MODEL_ID = 'com.olkil.ide';
+
+// Required for Windows Search, taskbar pinning, and jumplists.
+try {
+  app.setAppUserModelId(APP_USER_MODEL_ID);
+} catch {
+  // ignore
+}
 
 /**
  * Absolute path to the Electron app root (folder with package.json).
@@ -127,6 +136,7 @@ app.whenReady().then(() => {
   // Re-register after ready (some Windows builds ignore pre-ready calls)
   registerProtocolClient();
   startAutoUpdater();
+  startOpencodeDownload();
   if (coldProtocol) {
     setTimeout(() => dispatchProtocolUrl(coldProtocol), 1000);
   }

@@ -4,7 +4,7 @@ import * as fs from 'fs';
 import * as http from 'http';
 import * as os from 'os';
 import * as path from 'path';
-import { resolveOpencodeBinary } from './binary';
+import { ensureOpencodeBinary, resolveOpencodeBinary } from './binary';
 import { buildOpencodeConfigContent, type OpencodeProviderSecrets } from './config';
 
 export interface OpencodeHttpOptions {
@@ -71,15 +71,19 @@ export class OpencodeSidecar {
   }
 
   private async start(): Promise<void> {
-    const binary = resolveOpencodeBinary();
+    let binary: string | undefined;
+    try {
+      binary = await ensureOpencodeBinary();
+    } catch (err) {
+      binary = resolveOpencodeBinary();
+      if (!binary) {
+        throw new Error(
+          `Preparing the AI engine failed (${err instanceof Error ? err.message : err}). Check your internet connection and try again.`,
+        );
+      }
+    }
     if (!binary) {
-      const packaged = typeof (process as { resourcesPath?: string }).resourcesPath === 'string'
-        || /app\.asar[/\\]/.test(__dirname);
-      throw new Error(
-        packaged
-          ? 'OpenCode sidecar is missing from this install. Reinstall OLKIL from olkil.com, or set OLKIL_OPENCODE_BIN.'
-          : 'OpenCode binary not found. Run `yarn stage-opencode` in ide-electron (or set OLKIL_OPENCODE_BIN).',
-      );
+      throw new Error('Preparing the AI engine… If this persists, check your internet connection and reopen OLKIL.');
     }
     this.homeDir = path.join(os.homedir(), '.olkil', 'opencode-home');
     fs.mkdirSync(this.homeDir, { recursive: true });

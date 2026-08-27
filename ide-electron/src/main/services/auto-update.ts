@@ -21,14 +21,14 @@ function isPackagedApp(): boolean {
 }
 
 /**
- * Zero-click updates — without tearing down the install on exit.
+ * Download updates in the background — never run NSIS on quit.
  *
- * Old path called quitAndInstall on startup + will-quit + idle force, which
- * could leave NSIS half-replaced when silent /S failed (AV / SmartScreen).
- * That looked like "app uninstalled itself after close."
+ * electron-updater's NSIS path uninstalls the current app first, then runs
+ * Setup.exe /S --updated. If that silent install is blocked (SmartScreen / AV)
+ * OLKIL disappears from Search and Apps. That looked like auto-uninstall.
  *
- * Safe path: download in background; install only via autoInstallOnAppQuit.
- * Never call quitAndInstall while the user is in-session.
+ * Safe path: download only. Apply from a later signed installer / website
+ * download. Never call quitAndInstall.
  */
 export function startAutoUpdater(): void {
   if (started) {
@@ -42,8 +42,7 @@ export function startAutoUpdater(): void {
   }
 
   autoUpdater.autoDownload = true;
-  // Single install path — do NOT also call quitAndInstall in will-quit.
-  autoUpdater.autoInstallOnAppQuit = true;
+  autoUpdater.autoInstallOnAppQuit = false;
   autoUpdater.allowDowngrade = false;
 
   try {
@@ -63,7 +62,7 @@ export function startAutoUpdater(): void {
 
   autoUpdater.on('update-available', (info) => {
     checking = false;
-    log('update available — downloading silently', info.version);
+    log('update available — downloading (will not auto-uninstall)', info.version);
   });
 
   autoUpdater.on('update-not-available', (info) => {
@@ -87,11 +86,7 @@ export function startAutoUpdater(): void {
     checking = false;
     updateDownloaded = true;
     downloadedInfo = info;
-    log(
-      'update ready',
-      info.version,
-      '— will apply on next clean quit (app stays installed until then)',
-    );
+    log('update downloaded', info.version, '— not applying automatically (keeps this install intact)');
   });
 
   const check = (force = false) => {
@@ -106,7 +101,7 @@ export function startAutoUpdater(): void {
     autoUpdater.checkForUpdates().catch((err) => log('check failed', err?.message || err));
   };
 
-  setTimeout(() => check(true), 2_500);
+  setTimeout(() => check(true), 8_000);
   setInterval(() => check(true), CHECK_INTERVAL_MS);
 
   app.on('browser-window-focus', () => {
