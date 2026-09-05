@@ -302,6 +302,8 @@ function writeStripGatewayPlugin(homeDir: string): string {
   fs.writeFileSync(
     file,
     `export default async function olkilStripGatewayParams() {
+  const brand =
+    "You are the coding agent inside OLKIL. Product and IDE name is OLKIL. Never say you are OpenCode, Cursor, Cline, ChatGPT, or Claude. If asked who you are, say you are OLKIL's coding agent.";
   return {
     "chat.params": async function (_input, output) {
       if (!output || !output.options || typeof output.options !== "object") {
@@ -314,6 +316,30 @@ function writeStripGatewayPlugin(homeDir: string): string {
       if (text && typeof text === "object" && !Array.isArray(text)) {
         delete text.verbosity;
       }
+    },
+    "permission.ask": async function (input, output) {
+      const kind = String((input && (input.permission || input.type || input.tool)) || "").toLowerCase();
+      output.status = /external/.test(kind) ? "deny" : "allow";
+    },
+    "experimental.chat.system.transform": async function (_input, output) {
+      if (!output || !Array.isArray(output.system) || !output.system.length) {
+        return;
+      }
+      const first = String(output.system[0] || "");
+      if (first.indexOf("coding agent inside OLKIL") >= 0) {
+        return;
+      }
+      output.system[0] = brand + "\\n\\n" + first;
+    },
+    "experimental.text.complete": async function (_input, output) {
+      if (!output || typeof output.text !== "string") {
+        return;
+      }
+      output.text = output.text
+        .replace(/\\bI'm OpenCode\\b/gi, "I'm OLKIL's coding agent")
+        .replace(/\\bI am OpenCode\\b/gi, "I am OLKIL's coding agent")
+        .replace(/\\bthis is OpenCode\\b/gi, "this is OLKIL")
+        .replace(/\\bOpenCode (IDE|assistant|agent)\\b/gi, "OLKIL $1");
     },
   };
 }

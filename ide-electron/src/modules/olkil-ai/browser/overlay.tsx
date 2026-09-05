@@ -229,8 +229,7 @@ export const OlkilAiOverlay = () => {
   const chromeBusy = busy || liveTesting;
   const busyStatusLabel = useLiveStatusLabel({
     active: chromeBusy,
-    status:
-      chromeBusy && (!liveStatus || /opening test browser/i.test(liveStatus)) ? 'Thinking' : liveStatus,
+    status: liveStatus,
     workspaceRoot,
   });
 
@@ -246,7 +245,7 @@ export const OlkilAiOverlay = () => {
   }, [chromeBusy, busyStatusLabel]);
 
   const statusLabel = chromeBusy
-    ? busyStatusLabel || 'Thinking'
+    ? busyStatusLabel || 'Planning next move'
     : pendingCount > 0
       ? `${pendingCount} to review`
       : 'Ready';

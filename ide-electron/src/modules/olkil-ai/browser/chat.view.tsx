@@ -20,7 +20,7 @@ import {
   basenamePath,
 } from '../common/virtual-office';
 import { MarkdownMessage } from './markdown';
-import { LiveStatusBar, ThinkingLoader, useLiveStatusLabel, useWorkspaceRoot } from './live-status-rotator';
+import { LiveStatusBar, ThinkingLoader, shouldShowLiveStatusBar, useLiveStatusLabel, useWorkspaceRoot } from './live-status-rotator';
 import { DeepSeekIcon, isDeepSeekProvider } from './deepseek-icon';
 import { CheckIcon, CopyIcon, RefreshIcon, SendIcon, ShieldStarIcon, StopIcon } from './icons';
 import styles from './chat.view.module.less';
@@ -971,10 +971,23 @@ export const OlkilAiChatView = ({ dormant = false }: OlkilAiChatViewProps) => {
       .find((m) => m.role === 'activity' && m.activity && !m.activity.done);
     return live?.activity?.label;
   }, [messages]);
-  const statusActive = busy || liveTesting;
+  const hasVisibleReply = useMemo(() => {
+    for (let i = messages.length - 1; i >= 0; i--) {
+      if (messages[i].role === 'assistant') {
+        return Boolean((messages[i].content || '').trim());
+      }
+    }
+    return false;
+  }, [messages]);
+  const statusActive = shouldShowLiveStatusBar({
+    active: busy || liveTesting,
+    status,
+    activityLabel: liveActivityLabel,
+    hasVisibleReply,
+  });
   const liveStatusLabel = useLiveStatusLabel({
     active: statusActive,
-    status: statusActive && (!status || /opening test browser/i.test(status)) ? 'Thinking' : status,
+    status,
     activityLabel: liveActivityLabel,
     workspaceRoot,
   });

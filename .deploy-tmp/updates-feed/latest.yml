@@ -1,8 +1,8 @@
-version: 1.3.25
+version: 1.3.26
 files:
-  - url: https://olkil.com/downloads/OLKIL-1.3.25.exe
-    sha512: 3T0bHfFfBwkP7Vc/TrYAv54pYgPdt7aXiDQkNuvyUI2PquTrS/3lW5RjqWRQzb3Ce1v12fp0QiTDekDwk7Ft2A==
-    size: 109308454
-path: https://olkil.com/downloads/OLKIL-1.3.25.exe
-sha512: 3T0bHfFfBwkP7Vc/TrYAv54pYgPdt7aXiDQkNuvyUI2PquTrS/3lW5RjqWRQzb3Ce1v12fp0QiTDekDwk7Ft2A==
-releaseDate: '2026-09-05T15:18:57.155Z'
+  - url: https://olkil.com/downloads/OLKIL-1.3.26.exe
+    sha512: zy6NkaxQBJf9Bzz2W44etLJzLHRxKP8W6MQXAU24BYB1EojZ1vrNdIAx1/P8bosT68HYnbO1vLevSKjKAWtUbw==
+    size: 109310431
+path: https://olkil.com/downloads/OLKIL-1.3.26.exe
+sha512: zy6NkaxQBJf9Bzz2W44etLJzLHRxKP8W6MQXAU24BYB1EojZ1vrNdIAx1/P8bosT68HYnbO1vLevSKjKAWtUbw==
+releaseDate: '2026-09-05T18:18:39.551Z'

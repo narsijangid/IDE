@@ -2,7 +2,7 @@
 /**
  * Plugin Name: OLKIL App Version Override
  * Description: Forces desktop download URLs to Hostinger /downloads/ (GitHub repo is private).
- * Version: 1.3.25
+ * Version: 1.3.26
  */
 
 if ( ! defined( 'ABSPATH' ) ) {
@@ -10,11 +10,11 @@ if ( ! defined( 'ABSPATH' ) ) {
 }
 
 add_filter( 'olkil_app_version', function () {
-	return '1.3.25';
+	return '1.3.26';
 }, 99 );
 
 add_filter( 'olkil_download_urls', function ( $urls ) {
-	$win = '1.3.25';
+	$win = '1.3.26';
 	$mac = '1.3.22';
 	return array(
 		'windows'        => 'https://olkil.com/downloads/OLKIL-' . $win . '.exe',

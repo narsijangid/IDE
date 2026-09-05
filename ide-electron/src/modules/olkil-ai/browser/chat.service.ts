@@ -88,14 +88,21 @@ const nextSessionId = () => `chat_${Date.now()}_${++msgSeq}`;
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 
 function olkilStatusLabel(raw: string): string {
-  return (raw || '')
+  const cleaned = (raw || '')
     .replace(/\bCline\b/gi, 'OLKIL')
     .replace(/\bcline\b/g, 'OLKIL')
-    .replace(/\bOLKIL agent starting…?/gi, 'Thinking')
-    .replace(/\bAgent thinking…?/gi, 'Thinking')
-    .replace(/\bWorking…?/gi, 'Thinking')
     .replace(/…+$/g, '')
     .trim();
+  if (!cleaned) {
+    return '';
+  }
+  if (/^(working|planning|thinking|replying|agent thinking|olkil agent starting)$/i.test(cleaned)) {
+    return 'Planning next move';
+  }
+  if (/^(done|stopped|writing)$/i.test(cleaned)) {
+    return '';
+  }
+  return cleaned;
 }
 
 interface ChangeSnapshot {
@@ -1362,7 +1369,7 @@ END with a short PASS/FAIL + issue list + evidence. Start now.`;
 
     const pendingId = nextId();
     this.messages.push({ id: pendingId, role: 'assistant', content: '', pending: true });
-    this.setStatus(isLiveTestRun ? 'Thinking' : this.chatMode === 'agent' ? 'Thinking' : 'Planning');
+    this.setStatus(isLiveTestRun ? 'Thinking' : 'Planning next move');
 
     // Live Test: Chromium must open on send — never wait for Cline (no browser tools there).
     if (isLiveTestRun && !this.liveTestBootPromise) {
@@ -1446,7 +1453,9 @@ END with a short PASS/FAIL + issue list + evidence. Start now.`;
         }
       }
       if (!finalText || this.looksLikeStallFallback(finalText)) {
-        finalText = this.friendlyCompletionMessage();
+        finalText = this.pendingChanges.length
+          ? this.fallbackSummary()
+          : this.friendlyCompletionMessage();
       } else {
         this.stallAutoRetries = 0;
       }
@@ -1714,6 +1723,7 @@ END with a short PASS/FAIL + issue list + evidence. Start now.`;
 
   /** Instant finalize — fake typing only slows perceived speed vs Cursor. */
   private async typeOut(pendingId: string, full: string) {
+    this.setStatus('');
     const text = this.sanitizeUserFacingReply(full || '');
     if (!text) {
       this.patchUi(pendingId, { content: this.friendlyCompletionMessage(), pending: false });
@@ -1744,6 +1754,7 @@ END with a short PASS/FAIL + issue list + evidence. Start now.`;
       t = stripLocalThinkTags(t);
     }
     if (!t) return '';
+    t = this.applyOlkilIdentity(t);
     if (this.looksLikeStallFallback(t)) return '';
     t = this.stripWorkspaceRecap(t);
     if (!t) return '';
@@ -1756,6 +1767,17 @@ END with a short PASS/FAIL + issue list + evidence. Start now.`;
       return '';
     }
     return this.formatAnswerForUi(t);
+  }
+
+  /** OpenCode is the engine; the product the user talks to is always OLKIL. */
+  private applyOlkilIdentity(text: string): string {
+    return (text || '')
+      .replace(/\bI'm OpenCode\b/gi, "I'm OLKIL's coding agent")
+      .replace(/\bI am OpenCode\b/gi, "I am OLKIL's coding agent")
+      .replace(/\bI'm an OpenCode\b/gi, "I'm OLKIL's")
+      .replace(/\bthis is OpenCode\b/gi, 'this is OLKIL')
+      .replace(/\bOpenCode (IDE|assistant|agent)\b/gi, 'OLKIL $1')
+      .replace(/\bpowered by OpenCode\b/gi, 'powered by OLKIL');
   }
 
   private looksLikeWorkspaceRecap(text: string): boolean {
@@ -1790,7 +1812,7 @@ END with a short PASS/FAIL + issue list + evidence. Start now.`;
     const label = String(a.label || '');
     const id = String(a.id || '');
     if (/^compact/i.test(id) || /compact/i.test(label)) return true;
-    if (/^(question|task)$/i.test(label.trim())) return true;
+    if (/^question$/i.test(label.trim())) return true;
     return false;
   }
 
@@ -1856,7 +1878,7 @@ END with a short PASS/FAIL + issue list + evidence. Start now.`;
       return false;
     }
     if (
-      /^(actually[,.]?\s|let me\b|the tool\b|i have the\b|i already\b|tooling caveat\b|wait[,.]|ok[,.] I|alright[,.])/i.test(
+      /^(actually[,.]?\s|let me try\b|the tool\b|i have the\b|i already\b|tooling caveat\b|wait[,.]|ok[,.] I|alright[,.])/i.test(
         p,
       )
     ) {
@@ -1906,7 +1928,7 @@ END with a short PASS/FAIL + issue list + evidence. Start now.`;
       .join('\n');
 
     // If still starts with process talk on first line, cut to first heading
-    if (/^(the tool|let me|actually|i have|i already)/i.test(t)) {
+    if (/^(the tool|let me try|actually|i have|i already)/i.test(t)) {
       const idx = t.search(/\n(?=#{1,3}\s+|What |Based |When )/i);
       if (idx > 0) t = t.slice(idx).trim();
     }
@@ -2819,7 +2841,7 @@ Read the highest-scoring evidence in trail order. For a bug, trace UI → handle
     const projectRules = this.getProjectRules();
     const saved = this.settings.get();
 
-    this.setStatus('Thinking');
+    this.setStatus('Planning next move');
     const runPromise = this.aiNode.clineRun({
       runId,
       prompt,
@@ -2889,16 +2911,35 @@ Read the highest-scoring evidence in trail order. For a bug, trace UI → handle
       }, 120);
     };
 
-    const applyState = async (st: Awaited<ReturnType<IOlkilAiNodeService['clineGetState']>>) => {
-      const status = olkilStatusLabel(st.status || '');
-      if (status) {
-        this.setStatus(status);
+    const completeOpenThinking = () => {
+      for (let i = this.messages.length - 1; i >= 0; i--) {
+        const m = this.messages[i];
+        if (m.role === 'activity' && m.activity?.kind === 'thinking' && !m.activity.done) {
+          m.activity = { ...m.activity, done: true, label: 'Thought' };
+          m.content = 'Thought';
+        }
       }
+    };
+
+    const applyState = async (st: Awaited<ReturnType<IOlkilAiNodeService['clineGetState']>>) => {
+      if (st.done) {
+        this.setStatus('');
+      } else {
+        const status = olkilStatusLabel(st.status || '');
+        if (status) {
+          this.setStatus(status);
+        }
+      }
+      const sawWork = (st.activities || []).some(
+        (a) => a.id !== 'thinking_live' && a.kind !== 'thinking' && !this.isHousekeepingActivity(a),
+      );
       if (st.reasoning && st.reasoning !== lastReasoning) {
         lastReasoning = st.reasoning;
-        if (!thinkingStarted) {
+        if (sawWork || st.text) {
+          completeOpenThinking();
+        } else if (!thinkingStarted) {
           thinkingStarted = true;
-          this.pushActivity(pendingId, 'thinking', 'Thinking', undefined, false, {
+          this.pushActivity(pendingId, 'thinking', 'Planning next move', undefined, false, {
             resultPreview: st.reasoning.slice(0, 800),
           });
           seenActivities.add('thinking_live');
@@ -2918,8 +2959,9 @@ Read the highest-scoring evidence in trail order. For a bug, trace UI → handle
       }
       if (st.text && st.text !== lastText) {
         lastText = st.text;
+        completeOpenThinking();
         if (!this.looksLikeGarbageToolDump(st.text) && !this.looksLikeWorkspaceRecap(st.text)) {
-          const painted = this.bubbleSafeContent(st.text);
+          const painted = this.applyOlkilIdentity(this.bubbleSafeContent(st.text));
           if (painted.trim().length > 0) {
             this.patchUi(pendingId, { content: painted, pending: true });
             fireUiThrottled();
@@ -2928,6 +2970,9 @@ Read the highest-scoring evidence in trail order. For a bug, trace UI → handle
       }
       for (const a of st.activities || []) {
         if (a.id === 'thinking_live') {
+          if (a.done) {
+            completeOpenThinking();
+          }
           continue;
         }
         if (this.isHousekeepingActivity(a)) {
@@ -2935,6 +2980,7 @@ Read the highest-scoring evidence in trail order. For a bug, trace UI → handle
         }
         if (!seenActivities.has(a.id)) {
           seenActivities.add(a.id);
+          completeOpenThinking();
           this.pushActivity(pendingId, a.kind, a.label, undefined, false, {
             filePath: a.filePath,
             command: a.command,
@@ -3006,6 +3052,7 @@ Read the highest-scoring evidence in trail order. For a bug, trace UI → handle
         const st = await this.aiNode.clineGetState(runId);
         await applyState(st);
         if (st.done) {
+          completeOpenThinking();
           notifyOlkilWalletUpdated();
           if (st.error && !st.text) {
             if (
@@ -3291,7 +3338,7 @@ Read the highest-scoring evidence in trail order. For a bug, trace UI → handle
         },
         ...lightHistory,
       ];
-      this.setStatus('Replying…');
+      this.setStatus('Planning next move');
       const result = await this.invokeCompletionResilient(pendingId, {
         messages: casualMessages,
         toolChoice: 'none',
@@ -5002,17 +5049,50 @@ Read the highest-scoring evidence in trail order. For a bug, trace UI → handle
     throw lastErr;
   }
 
-  /** Hi / thanks / ok — not a coding task. */
+  /** Hi / how are you / thanks — not a coding task. */
   private isCasualMessage(text: string): boolean {
-    const t = (text || '').trim().toLowerCase();
-    if (!t || t.length > 48) {
+    const raw = (text || '').trim();
+    if (!raw || raw.length > 120) {
       return false;
     }
-    if (this.isWorkRequest(t)) {
+    if (/[`{}]|https?:\/\/|\.(ts|tsx|js|jsx|mjs|cjs|py|go|rs|php|java|css|html|json|md)\b/i.test(raw)) {
       return false;
     }
-    return /^(hi|hii+|hello|hey|yo|sup|hola|namaste|thanks|thank you|thx|ok|okay|oky|hmm+|yes|yep|no|nope|cool|nice|great|bye|good morning|good evening|gm|gn)[\s!.?]*$/i.test(
-      t,
+    const n = raw
+      .toLowerCase()
+      .replace(/[^a-z0-9\s']/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim();
+    if (!n) {
+      return false;
+    }
+    if (this.hasCodingWorkSignal(n)) {
+      return false;
+    }
+    if (
+      /^(hi|hii+|hello|hey+|yo|sup|hola|namaste|thanks|thank you|thx|ty|bye+|goodbye|good morning|good evening|good night|gm|gn|nice|cool|great)(?:\s+(there|all|team|bro|bhai))?$/.test(
+        n,
+      )
+    ) {
+      return true;
+    }
+    if (
+      /^(how are you|how are you doing|how r you|hows it going|how's it going|whats up|what's up|what up|who are you|who r you|what are you|what can you do|which model|what model|what model are you)$/.test(
+        n,
+      )
+    ) {
+      return true;
+    }
+    // "hi how are you" / "hey there" without coding verbs
+    if (/^(hi|hii+|hello|hey+|yo)\b/.test(n) && n.length <= 80) {
+      return true;
+    }
+    return false;
+  }
+
+  private hasCodingWorkSignal(text: string): boolean {
+    return /\b(fix|edit|change|update|rename|create|add|remove|delete|seo|keyword|meta|title|refactor|bug|error|implement|build|make|write|patch|file|code|css|html|js|ts|react|project|folder|readme|feature|module|timeline|analyze|analyse|understand|inspect|investigate|architecture|performance|optimize)\b/i.test(
+      text,
     );
   }
 

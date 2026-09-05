@@ -2,8 +2,6 @@ import * as crypto from 'crypto';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
-import { pathToFileURL } from 'url';
-import { findModel, applyCustomModelEndpoints, customEndpointFor, DEFAULT_MODEL_ID, type AiProviderId, type CustomModelEndpoint } from '../common/models';
 import type {
   ClineEngineActivity,
   ClineEngineFileChange,
@@ -11,6 +9,7 @@ import type {
   ClineEngineRunState,
   FileChangeKind,
 } from '../common';
+import { findModel, applyCustomModelEndpoints, customEndpointFor, DEFAULT_MODEL_ID, type AiProviderId, type CustomModelEndpoint } from '../common/models';
 import {
   EMBEDDED_DEEPSEEK_API_KEY,
   EMBEDDED_ENV,
@@ -35,6 +34,7 @@ interface LiveRun {
   runId: string;
   sessionId: string;
   directory: string;
+  mode: 'agent' | 'plan' | 'ask';
   state: ClineEngineRunState;
   autoApprove: boolean;
   autoApproveEdits: boolean;
@@ -47,6 +47,7 @@ interface LiveRun {
   userMessageIds: Set<string>;
   fileBefore: Map<string, string | null>;
   lastDiffAt: number;
+  sawTool?: boolean;
   finish: (error?: string) => void;
 }
 
@@ -71,7 +72,7 @@ function isInsideWorkspace(directory: string, filePath: string): boolean {
 
 const MAX_FILE_SNAPSHOT_CHARS = 180_000;
 const MAX_LIVE_ACTIVITIES = 40;
-const SESSION_ROTATE_TURNS = 16;
+const SESSION_ROTATE_TURNS = 32;
 const SESSION_MAX_AGE_MS = 30 * 60 * 1000;
 const SIDECAR_IDLE_MS = 12 * 60 * 1000;
 
@@ -180,11 +181,14 @@ function toolKind(name: string): ActivityKind {
   if (/todo/.test(n)) {
     return 'todo';
   }
+  if (/task|explore|agent/.test(n)) {
+    return 'searching';
+  }
   return 'info';
 }
 
 function isInternalToolName(name: string): boolean {
-  return /^(question|task)$/i.test(String(name || '').trim());
+  return /^question$/i.test(String(name || '').trim());
 }
 
 function looksLikeSessionRecap(text: string): boolean {
@@ -212,13 +216,15 @@ function friendlyToolLabel(name: string, input: Record<string, unknown>): string
     case 'write':
       return base ? `Editing ${base}` : 'Editing file';
     case 'grep':
-      return query ? `Search “${truncate(query, 48)}”` : 'Searching';
     case 'glob':
-      return base ? `Find ${base}` : 'Finding files';
+    case 'list':
+    case 'semanticsearch':
+    case 'codesearch':
+      return query ? `Reading codebase · ${truncate(query, 40)}` : 'Reading codebase';
     case 'bash':
       return command ? truncate(command, 64) : 'Running command';
-    case 'list':
-      return base ? `List ${base}` : 'Listing files';
+    case 'task':
+      return String(input.description || input.prompt || input.subagent_type || 'Exploring codebase');
     default:
       return name;
   }
@@ -237,9 +243,12 @@ function sessionIdOf(event: any): string {
     event?.properties?.sessionID ||
       event?.properties?.part?.sessionID ||
       event?.properties?.info?.sessionID ||
-      event?.properties?.id ||
       '',
   );
+}
+
+function permissionIdOf(permission: any): string {
+  return String(permission?.id || permission?.permissionID || permission?.requestID || permission?.info?.id || '');
 }
 
 function errorMessage(error: any): string {
@@ -318,7 +327,7 @@ export class OlkilOpencodeRuntimeHost {
       reasoning: '',
       activities: [],
       fileChanges: [],
-      status: 'Thinking',
+      status: 'Planning next move',
     };
     this.states.set(runId, state);
 
@@ -365,6 +374,7 @@ export class OlkilOpencodeRuntimeHost {
           runId,
           sessionId: session.id,
           directory,
+          mode: request.mode,
           state,
           autoApprove,
           autoApproveEdits,
@@ -377,6 +387,7 @@ export class OlkilOpencodeRuntimeHost {
           userMessageIds: new Set<string>(),
           fileBefore: new Map<string, string | null>(),
           lastDiffAt: 0,
+          sawTool: false,
           finish: (error?: string) => {
             if (state.done) {
               resolve();
@@ -386,12 +397,14 @@ export class OlkilOpencodeRuntimeHost {
               state.error = error;
               state.status = 'Failed';
             } else {
-              state.status = error === 'Stopped' ? 'Stopped' : 'Done';
+              state.status = '';
             }
             state.done = true;
             this.lives.delete(runId);
-            if (this.runBySession.get(session.id) === runId) {
-              this.runBySession.delete(session.id);
+            for (const [sid, rid] of [...this.runBySession.entries()]) {
+              if (rid === runId) {
+                this.runBySession.delete(sid);
+              }
             }
             this.armIdleRecycle();
             resolve();
@@ -402,21 +415,9 @@ export class OlkilOpencodeRuntimeHost {
       });
 
       const parts: Array<Record<string, unknown>> = [];
-      if (
-        request.activeFile &&
-        fs.existsSync(request.activeFile) &&
-        isInsideWorkspace(directory, request.activeFile)
-      ) {
-        parts.push({
-          type: 'file',
-          mime: 'text/plain',
-          filename: path.basename(request.activeFile),
-          url: pathToFileURL(request.activeFile).href,
-        });
-      }
       parts.push({
         type: 'text',
-        text: this.wrapPrompt(request),
+        text: this.wrapPrompt(request, session.turns),
       });
 
       const tools =
@@ -451,6 +452,11 @@ export class OlkilOpencodeRuntimeHost {
       state.status = 'Failed';
       state.done = true;
       this.lives.delete(runId);
+      for (const [sid, rid] of [...this.runBySession.entries()]) {
+        if (rid === runId) {
+          this.runBySession.delete(sid);
+        }
+      }
       return state;
     } finally {
       setTimeout(() => {
@@ -462,21 +468,30 @@ export class OlkilOpencodeRuntimeHost {
     }
   }
 
-  private wrapPrompt(request: ClineEngineRunRequest): string {
-    const bits: string[] = [
-      `You are the coding agent inside OLKIL IDE. Product name: OLKIL.`,
-      `Workspace (hard boundary): ${request.workspaceRoot?.trim() || '(no folder open)'}.`,
-      `Stay inside that folder only. Never read, list, search, or edit parent directories, sibling folders, or other git repos — even if .git lives above the workspace.`,
-      `Do not cd .. . Grep, bash, and file tools must use the workspace as cwd.`,
-      `Prefer grep + small line-range reads over dumping whole files. Reply with a short exact result — not a status report.`,
-    ];
-    if (request.activeFile && isInsideWorkspace(this.sessionDirectory(request.workspaceRoot), request.activeFile)) {
-      bits.push(`Active file: ${request.activeFile}`);
+  private wrapPrompt(request: ClineEngineRunRequest, sessionTurns = 1): string {
+    const user = String(request.prompt || '').trim();
+    const active =
+      request.activeFile && isInsideWorkspace(this.sessionDirectory(request.workspaceRoot), request.activeFile)
+        ? `Active file: ${request.activeFile}`
+        : '';
+    if (sessionTurns > 1) {
+      return [active, user].filter(Boolean).join('\n\n');
+    }
+    const bits: string[] = [];
+    const root = request.workspaceRoot?.trim();
+    if (root) {
+      bits.push(`Workspace: ${root}. Stay inside this folder.`);
+    }
+    bits.push(
+      `You are OLKIL's coding agent. Product name is OLKIL. Never say you are OpenCode, Cursor, Cline, ChatGPT, or Claude.`,
+    );
+    if (active) {
+      bits.push(active);
     }
     if (request.rules?.trim()) {
       bits.push(`<project_rules>\n${request.rules.trim()}\n</project_rules>`);
     }
-    bits.push(`<user_input mode="${request.mode === 'agent' ? 'act' : request.mode}">${request.prompt}</user_input>`);
+    bits.push(user);
     return bits.join('\n\n');
   }
 
@@ -553,6 +568,19 @@ export class OlkilOpencodeRuntimeHost {
     return handle;
   }
 
+  private bindChildSession(event: any): void {
+    const info = event?.properties?.info || event?.properties;
+    const id = String(info?.id || event?.properties?.sessionID || '');
+    const parent = String(info?.parentID || info?.parentId || '');
+    if (!id || !parent) {
+      return;
+    }
+    const runId = this.runBySession.get(parent);
+    if (runId) {
+      this.runBySession.set(id, runId);
+    }
+  }
+
   private liveForEvent(event: any): LiveRun | undefined {
     const sid = sessionIdOf(event);
     if (sid) {
@@ -570,6 +598,9 @@ export class OlkilOpencodeRuntimeHost {
   private handleEvent(event: any): void {
     if (!event || typeof event !== 'object') {
       return;
+    }
+    if (event.type === 'session.created' || event.type === 'session.updated') {
+      this.bindChildSession(event);
     }
     const live = this.liveForEvent(event);
     if (!live) {
@@ -598,13 +629,26 @@ export class OlkilOpencodeRuntimeHost {
           }
           state.text = part.text;
           state.status = 'Writing';
+          const think = state.activities.find((a) => a.id === 'thinking_live' && !a.done);
+          if (think) {
+            think.done = true;
+            think.label = 'Thought';
+          }
         } else if (part.type === 'reasoning' && typeof part.text === 'string') {
           state.reasoning = part.text;
-          state.status = 'Thinking';
+          const think = state.activities.find((a) => a.id === 'thinking_live' && !a.done);
+          if (live.sawTool) {
+            if (think) {
+              think.done = true;
+              think.label = 'Thought';
+            }
+            break;
+          }
+          state.status = 'Planning next move';
           this.upsertActivity(state, {
             id: 'thinking_live',
             kind: 'thinking',
-            label: 'Thinking',
+            label: 'Planning next move',
             done: false,
             resultPreview: truncate(part.text, 800),
           });
@@ -628,19 +672,28 @@ export class OlkilOpencodeRuntimeHost {
         }
         break;
       }
-      case 'permission.asked':
-      case 'permission.updated': {
+      case 'permission.asked': {
         const permission = event.properties;
-        if (!permission?.id) {
-          return;
+        const id = permissionIdOf(permission);
+        if (!id) {
+          break;
         }
         const response = decidePermissionResponse(live, permission);
+        const sid = sessionIdOf(event) || live.sessionId;
         void this.sidecar
-          ?.request('POST', `/session/${live.sessionId}/permissions/${permission.id}`, {
+          ?.request('POST', `/session/${sid}/permissions/${id}`, {
             query: { directory: live.directory },
             body: { response },
           })
           .catch(() => undefined);
+        break;
+      }
+      case 'question.asked': {
+        const q = event.properties || {};
+        const header = String(q.questions?.[0]?.header || q.questions?.[0]?.question || q.text || '');
+        if (header) {
+          state.status = truncate(header, 72);
+        }
         break;
       }
       case 'file.edited': {
@@ -684,15 +737,29 @@ export class OlkilOpencodeRuntimeHost {
         break;
       }
       case 'session.error': {
+        const errSid = String(event.properties?.sessionID || '');
+        if (errSid && errSid !== live.sessionId) {
+          break;
+        }
         const msg = errorMessage(event.properties?.error);
         if (msg && !/abort/i.test(msg)) {
           live.finish(msg);
         }
         break;
       }
-      case 'session.idle':
+      case 'session.idle': {
+        const sid = String(event.properties?.sessionID || event.properties?.info?.id || '');
+        if (sid && sid !== live.sessionId) {
+          break;
+        }
+        const think = state.activities.find((a) => a.id === 'thinking_live' && !a.done);
+        if (think) {
+          think.done = true;
+          think.label = 'Thought';
+        }
         live.finish();
         break;
+      }
       default:
         break;
     }
@@ -712,6 +779,10 @@ export class OlkilOpencodeRuntimeHost {
     const id = String(part.callID || part.id);
     const input = inputFromPart(part);
     const meta = part.state?.metadata && typeof part.state.metadata === 'object' ? part.state.metadata : {};
+    const childSid = String(meta.sessionId || meta.sessionID || '');
+    if (childSid && /^task$/i.test(name)) {
+      this.runBySession.set(childSid, live.runId);
+    }
     const status = part.state?.status;
     const filePath = String(
       input.path ||
@@ -739,8 +810,16 @@ export class OlkilOpencodeRuntimeHost {
       argsPreview: truncate(JSON.stringify(input)),
       resultPreview: resultPreview || undefined,
     });
+    live.sawTool = true;
     if (!done) {
       state.status = friendlyToolLabel(name, input);
+    } else if (!state.text) {
+      const stillRunning = state.activities.some(
+        (a) => a.id !== 'thinking_live' && a.kind !== 'thinking' && !a.done,
+      );
+      if (!stillRunning) {
+        state.status = 'Planning next move';
+      }
     }
     const think = state.activities.find((a) => a.id === 'thinking_live' && !a.done);
     if (think) {
@@ -988,22 +1067,21 @@ function decidePermissionResponse(live: LiveRun, permission: any): 'always' | 'o
   ).toLowerCase();
   const command = permissionCommand(permission);
 
-  if (/(bash|shell|command|terminal|cmd)/.test(kind) || (!kind && command)) {
-    if (live.terminalAutoRun === 'always') {
-      return 'always';
-    }
-    if (live.terminalAutoRun === 'never') {
-      return 'reject';
-    }
-    return commandMatchesAllowlist(command, live.terminalAllowlist) ? 'once' : 'reject';
+  if (/(external.?directory|outside)/.test(kind)) {
+    return 'reject';
   }
-  if (/(web|fetch|http)/.test(kind)) {
-    return live.autoApproveWeb ? 'always' : 'reject';
+  // Agent mode: never silently reject — that freezes the UI on "Planning next move"
+  // while OpenCode waits. Plan/Ask still block writes.
+  if (live.mode === 'agent') {
+    return 'always';
+  }
+  if (/(bash|shell|command|terminal|cmd)/.test(kind) || (!kind && command)) {
+    return 'reject';
   }
   if (/(edit|write|patch|file)/.test(kind)) {
-    return live.autoApproveEdits ? 'always' : 'reject';
+    return 'reject';
   }
-  return live.autoApprove ? 'always' : 'reject';
+  return 'always';
 }
 
 function permissionCommand(permission: any): string {
@@ -1024,26 +1102,6 @@ function permissionCommand(permission: any): string {
     return String(permission.patterns[0]);
   }
   return '';
-}
-
-function commandMatchesAllowlist(command: string, allowlist: string[]): boolean {
-  const value = String(command || '')
-    .trim()
-    .toLowerCase()
-    .replace(/^sudo\s+/, '');
-  if (!value) {
-    return false;
-  }
-  return allowlist.some((prefix) => {
-    const item = String(prefix || '')
-      .trim()
-      .toLowerCase();
-    if (!item) {
-      return false;
-    }
-    const base = item.endsWith('*') ? item.slice(0, -1).trim() : item;
-    return value === base || value.startsWith(`${base} `) || value.startsWith(base);
-  });
 }
 
 function fingerprintMap(map?: Record<string, string>): string {
