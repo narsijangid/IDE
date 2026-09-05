@@ -889,13 +889,13 @@ export const OlkilAiChatView = ({ dormant = false }: OlkilAiChatViewProps) => {
 
   const runLiveTest = useCallback(() => {
     const goal = liveTestPrompt.trim();
-    if (!goal || busy) {
+    if (!goal || busy || liveTesting) {
       return;
     }
     setLiveTestOpen(false);
     setInput('');
     void chat.startLiveTest(goal);
-  }, [liveTestPrompt, busy, chat]);
+  }, [liveTestPrompt, busy, liveTesting, chat]);
 
   const renderModelLabel = (m?: { displayName?: string; badge?: string; label: string; provider?: string }) => {
     if (!m) {
@@ -904,7 +904,13 @@ export const OlkilAiChatView = ({ dormant = false }: OlkilAiChatViewProps) => {
     const name = m.displayName || m.label;
     const badge = m.badge;
     const badgeClass =
-      badge === 'FREE' ? styles.modelBadgeFree : badge === 'LOCAL' ? styles.modelBadgeLocal : styles.modelBadge;
+      badge === 'FREE'
+        ? styles.modelBadgeFree
+        : badge === 'LOCAL'
+          ? styles.modelBadgeLocal
+          : badge === 'CUSTOM'
+            ? styles.modelBadgeCustom
+            : styles.modelBadge;
     return (
       <>
         {isDeepSeekProvider(m.provider) ? <DeepSeekIcon className={styles.modelProviderIcon} /> : null}
@@ -965,9 +971,10 @@ export const OlkilAiChatView = ({ dormant = false }: OlkilAiChatViewProps) => {
       .find((m) => m.role === 'activity' && m.activity && !m.activity.done);
     return live?.activity?.label;
   }, [messages]);
+  const statusActive = busy || liveTesting;
   const liveStatusLabel = useLiveStatusLabel({
-    active: busy,
-    status,
+    active: statusActive,
+    status: statusActive && (!status || /opening test browser/i.test(status)) ? 'Thinking' : status,
     activityLabel: liveActivityLabel,
     workspaceRoot,
   });
@@ -1024,7 +1031,7 @@ export const OlkilAiChatView = ({ dormant = false }: OlkilAiChatViewProps) => {
           <button
             type="button"
             className={styles.liveTestBtn}
-            disabled={busy || ollamaBlocked}
+            disabled={busy || liveTesting || ollamaBlocked}
             title="Open live browser test — choose what to verify"
             onClick={openLiveTestModal}
           >
@@ -1099,6 +1106,17 @@ export const OlkilAiChatView = ({ dormant = false }: OlkilAiChatViewProps) => {
                     </div>
                   );
                 })}
+                <button
+                  type="button"
+                  className={styles.modelMenuAdd}
+                  onClick={() => {
+                    setModelMenuOpen(false);
+                    rememberOlkilSettingsSection('models');
+                    void commands.executeCommand(OLKIL_AUTH_OPEN_ACCOUNT.id, 'models');
+                  }}
+                >
+                  + Add custom model
+                </button>
               </div>
             ) : null}
           </div>
@@ -1509,7 +1527,7 @@ export const OlkilAiChatView = ({ dormant = false }: OlkilAiChatViewProps) => {
             </div>
           );
         })}
-        {busy ? <LiveStatusBar label={liveStatusLabel} /> : status ? (
+        {statusActive ? <LiveStatusBar label={liveStatusLabel} /> : status ? (
           <div className={styles.status}>{status}</div>
         ) : null}
       </div>
@@ -1783,7 +1801,7 @@ export const OlkilAiChatView = ({ dormant = false }: OlkilAiChatViewProps) => {
                   <button
                     type="button"
                     className={styles.liveTestStart}
-                    disabled={!liveTestPrompt.trim() || busy || ollamaBlocked}
+                    disabled={!liveTestPrompt.trim() || busy || liveTesting || ollamaBlocked}
                     onClick={runLiveTest}
                   >
                     Start Live Test

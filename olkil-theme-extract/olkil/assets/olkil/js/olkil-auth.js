@@ -46,7 +46,7 @@
   }
 
   function setBusy(busy) {
-    document.querySelectorAll('.olkil-auth-btn, #olkil-auth-email-form button').forEach(function (btn) {
+    document.querySelectorAll('.olkil-auth-btn').forEach(function (btn) {
       btn.disabled = !!busy;
     });
   }
@@ -54,8 +54,6 @@
   function hideActions() {
     var actions = document.getElementById('olkil-auth-actions');
     if (actions) actions.hidden = true;
-    var email = document.querySelector('.olkil-auth-email');
-    if (email) email.hidden = true;
   }
 
   function showSuccessStayOnPage() {
@@ -65,18 +63,25 @@
     hideActions();
 
     var lead = document.getElementById('olkil-auth-lead');
+    var isCli = qs('client') === 'olkil-cli';
     if (lead) {
-      lead.textContent = 'Authentication complete. Return to the OLKIL app — you can close this tab.';
+      lead.textContent = isCli
+        ? 'Return to your terminal — OLKIL CLI is signed in.'
+        : 'Authentication complete. Return to the OLKIL app — you can close this tab.';
     }
     var title = document.querySelector('.olkil-auth-card h1');
     if (title) {
-      title.textContent = "You're signed in";
+      title.textContent = isCli ? 'CLI connected' : "You're signed in";
     }
-    setStatus('Connected to OLKIL successfully.', false);
+    setStatus(isCli ? 'CLI login successful.' : 'Connected to OLKIL successfully.', false);
 
     var done = document.getElementById('olkil-auth-done');
     if (done) {
       done.hidden = false;
+      if (isCli) {
+        var openApp = done.querySelector('a[href^="olkil:"]');
+        if (openApp) openApp.hidden = true;
+      }
     } else if (!document.getElementById('olkil-auth-done-fallback')) {
       var card = document.querySelector('.olkil-auth-card');
       if (card) {
@@ -232,6 +237,14 @@
         lead.textContent = 'Authorize this browser session to unlock OLKIL on your desktop.';
       }
     }
+    if (client === 'olkil-cli') {
+      var cliLead = document.getElementById('olkil-auth-lead');
+      if (cliLead) {
+        cliLead.textContent = 'Authorize OLKIL CLI. After Google sign-in, return to your terminal.';
+      }
+      var cliTitle = document.querySelector('.olkil-auth-card h1');
+      if (cliTitle) cliTitle.textContent = 'Sign in to OLKIL CLI';
+    }
 
     var closeBtn = document.getElementById('olkil-auth-close');
     if (closeBtn) {
@@ -272,70 +285,6 @@
             }
             setBusy(false);
             setStatus((err && err.message) || 'Google sign-in failed', true);
-          });
-      });
-    }
-
-    var githubBtn = document.getElementById('olkil-auth-github');
-    if (githubBtn) {
-      githubBtn.addEventListener('click', function () {
-        setBusy(true);
-        setStatus('Redirecting to GitHub…');
-        var provider = new firebase.auth.GithubAuthProvider();
-        auth
-          .signInWithPopup(provider)
-          .then(function (cred) {
-            completeToIde(cred.user);
-          })
-          .catch(function (err) {
-            if (err && err.code === 'auth/popup-blocked') {
-              return auth.signInWithRedirect(provider);
-            }
-            setBusy(false);
-            setStatus((err && err.message) || 'GitHub sign-in failed', true);
-          });
-      });
-    }
-
-    var form = document.getElementById('olkil-auth-email-form');
-    if (form) {
-      form.addEventListener('submit', function (e) {
-        e.preventDefault();
-        var email = form.email.value.trim();
-        var password = form.password.value;
-        setBusy(true);
-        setStatus('Signing in…');
-        auth
-          .signInWithEmailAndPassword(email, password)
-          .then(function (cred) {
-            completeToIde(cred.user);
-          })
-          .catch(function (err) {
-            setBusy(false);
-            setStatus((err && err.message) || 'Email sign-in failed', true);
-          });
-      });
-    }
-
-    var signupBtn = document.getElementById('olkil-auth-signup');
-    if (signupBtn && form) {
-      signupBtn.addEventListener('click', function () {
-        var email = form.email.value.trim();
-        var password = form.password.value;
-        if (!email || !password) {
-          setStatus('Enter email and password first.', true);
-          return;
-        }
-        setBusy(true);
-        setStatus('Creating account…');
-        auth
-          .createUserWithEmailAndPassword(email, password)
-          .then(function (cred) {
-            completeToIde(cred.user);
-          })
-          .catch(function (err) {
-            setBusy(false);
-            setStatus((err && err.message) || 'Sign-up failed', true);
           });
       });
     }

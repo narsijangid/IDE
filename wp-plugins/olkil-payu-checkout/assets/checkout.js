@@ -67,13 +67,30 @@
 		return 'IN';
 	}
 
+	function refreshNonce(form, cfg) {
+		var url = (cfg && cfg.nonceUrl) || '/wp-json/olkil-payu/v1/checkout-nonce';
+		return fetch(url, { method: 'GET', credentials: 'same-origin', cache: 'no-store' })
+			.then(function (res) {
+				return res.json().then(function (data) {
+					if (!res.ok) throw new Error('nonce_unavailable');
+					return data;
+				});
+			})
+			.then(function (data) {
+				if (!data || !data.nonce) return;
+				var el = form.querySelector('[name="olkil_payu_nonce"]');
+				if (el) el.value = data.nonce;
+			})
+			.catch(function () {});
+	}
+
 	ready(function () {
 		var cfg = window.olkilPayuCheckout;
 		var form = document.querySelector('form.olkil-payu__form');
-		if (!cfg || !cfg.cryptoUrl || !form || !window.crypto || !crypto.subtle) return;
+		if (!form) return;
 
 		var btn = form.querySelector('button[type="submit"]');
-		var errBox = form.parentNode.querySelector('.olkil-payu__error--crypto');
+		var canEncrypt = !!(cfg && cfg.cryptoUrl && window.crypto && crypto.subtle);
 
 		form.addEventListener('submit', function (ev) {
 			if (form.getAttribute('data-olkil-enc') === '1') return;
@@ -88,52 +105,66 @@
 			if (countryField) countryField.value = country;
 
 			if (firstname.trim().length < 2 || email.indexOf('@') < 1 || phone.length < 8) {
-				form.submit();
+				refreshNonce(form, cfg).then(function () {
+					form.setAttribute('data-olkil-enc', '1');
+					form.submit();
+				});
 				return;
 			}
 
 			if (btn) {
 				btn.disabled = true;
 				btn.setAttribute('data-label', btn.textContent);
-				btn.textContent = 'Encrypting…';
+				btn.textContent = 'Preparing…';
 			}
 
-			fetch(cfg.cryptoUrl, { method: 'GET', credentials: 'omit', cache: 'no-store' })
-				.then(parseJson)
-				.then(function (pub) {
-					if (!pub || !pub.publicJwk) throw new Error('crypto_unavailable');
-					return encryptFields(pub.publicJwk, {
-						plan: plan,
-						firstname: firstname.trim(),
-						email: email.trim(),
-						phone: phone,
-						country: country,
-					});
-				})
-				.then(function (enc) {
-					var hidden = form.querySelector('[name="olkil_payu_enc"]');
-					if (!hidden) {
-						hidden = document.createElement('input');
-						hidden.type = 'hidden';
-						hidden.name = 'olkil_payu_enc';
-						form.appendChild(hidden);
-					}
-					hidden.value = JSON.stringify(enc);
-					['firstname', 'email', 'phone'].forEach(function (name) {
-						var el = form.querySelector('[name="' + name + '"]');
-						if (el) el.value = '';
-					});
+			var go = function () {
+				if (!canEncrypt) {
 					form.setAttribute('data-olkil-enc', '1');
-					if (btn) btn.textContent = 'Redirecting to PayU…';
 					form.submit();
-				})
-				.catch(function () {
-					if (btn) {
-						btn.disabled = false;
-						btn.textContent = btn.getAttribute('data-label') || 'Pay securely';
-					}
-					form.submit();
-				});
+					return;
+				}
+				if (btn) btn.textContent = 'Encrypting…';
+				fetch(cfg.cryptoUrl, { method: 'GET', credentials: 'omit', cache: 'no-store' })
+					.then(parseJson)
+					.then(function (pub) {
+						if (!pub || !pub.publicJwk) throw new Error('crypto_unavailable');
+						return encryptFields(pub.publicJwk, {
+							plan: plan,
+							firstname: firstname.trim(),
+							email: email.trim(),
+							phone: phone,
+							country: country,
+						});
+					})
+					.then(function (enc) {
+						var hidden = form.querySelector('[name="olkil_payu_enc"]');
+						if (!hidden) {
+							hidden = document.createElement('input');
+							hidden.type = 'hidden';
+							hidden.name = 'olkil_payu_enc';
+							form.appendChild(hidden);
+						}
+						hidden.value = JSON.stringify(enc);
+						['firstname', 'email', 'phone'].forEach(function (name) {
+							var el = form.querySelector('[name="' + name + '"]');
+							if (el) el.value = '';
+						});
+						form.setAttribute('data-olkil-enc', '1');
+						if (btn) btn.textContent = 'Redirecting to PayU…';
+						form.submit();
+					})
+					.catch(function () {
+						if (btn) {
+							btn.disabled = false;
+							btn.textContent = btn.getAttribute('data-label') || 'Pay securely';
+						}
+						form.setAttribute('data-olkil-enc', '1');
+						form.submit();
+					});
+			};
+
+			refreshNonce(form, cfg).then(go);
 		});
 	});
 })();

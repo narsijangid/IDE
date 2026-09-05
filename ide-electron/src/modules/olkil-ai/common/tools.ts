@@ -57,6 +57,7 @@ function buildLocalOllamaSystemPrompt(
   return [
     `You are the coding assistant inside OLKIL IDE. Local model: ${modelInfo.label}.`,
     `Workspace: ${workspaceRoot || '(none — open a folder first)'}`,
+    'Stay in that folder only. Do not read parent directories.',
     `Active file: ${activeFile || '(none)'}`,
     `Mode: ${mode}`,
     '',
@@ -81,6 +82,15 @@ function identityBlock(modelInfo?: { provider: string; model: string; label: str
     return `# Identity
 - Product / IDE: OLKIL. You are the coding agent inside OLKIL.
 - Never claim to be ChatGPT, GPT-4, Claude, Gemini, Cline, Laguna, Poolside, or any other external brand.`;
+  }
+
+  if (modelInfo.provider === 'custom') {
+    const name = modelInfo.label || modelInfo.model;
+    return `# Identity
+- Product / IDE name: OLKIL (always).
+- Selected AI model name: ${name} (user-configured custom model).
+- You are the OLKIL coding agent using the user's own API endpoint.
+- If asked which *model* you are → say ${name}. If asked which *IDE* this is → say OLKIL.`;
   }
 
   const matched =
@@ -570,7 +580,7 @@ export const AGENT_TOOLS: ToolDefinition[] = [
     function: {
       name: 'live_test',
       description:
-        'PRIMARY live-verify entry: detect/start the web app, open headed Chromium on the local URL, return accessibility snapshot + console/network evidence. File choosers auto-upload the newest matching file from Downloads/Desktop. Then use browser_click/browser_fill/browser_upload to exercise the goal, fix code, and retest.',
+        'Prepare live verify: start the app if needed and open ONE headed Chromium with DevTools (Console) on the right. If the Test Browser is already open, REUSE it — never launch a second window, never reload unless the URL is wrong. Then browser_snapshot + click/fill. File choosers auto-upload the newest matching Downloads/Desktop file.',
       parameters: {
         type: 'object',
         properties: {
@@ -599,7 +609,8 @@ export const AGENT_TOOLS: ToolDefinition[] = [
     type: 'function',
     function: {
       name: 'browser_launch',
-      description: 'Launch Chromium via Playwright. Prefer live_test for full prepare.',
+      description:
+        'Launch headed Chromium only if none is open. If a Test Browser already exists, this is a no-op reuse. Prefer live_test. Never force a second window.',
       parameters: {
         type: 'object',
         properties: {
@@ -613,7 +624,8 @@ export const AGENT_TOOLS: ToolDefinition[] = [
     type: 'function',
     function: {
       name: 'browser_goto',
-      description: 'Navigate the live browser to a URL.',
+      description:
+        'Navigate the existing Test Browser to a URL. Skips reload when already on that page. Never opens a new browser.',
       parameters: {
         type: 'object',
         properties: {
@@ -743,7 +755,8 @@ export const AGENT_TOOLS: ToolDefinition[] = [
     type: 'function',
     function: {
       name: 'browser_console',
-      description: 'Return captured console errors/warnings and failed network requests.',
+      description:
+        'Return captured console.log / warnings / errors plus failed network requests. The headed DevTools Console is already visible to the user.',
       parameters: { type: 'object', properties: {}, additionalProperties: false },
     },
   },
@@ -752,7 +765,7 @@ export const AGENT_TOOLS: ToolDefinition[] = [
     function: {
       name: 'browser_network',
       description:
-        'Return recent XHR/fetch API calls + failures (status/url/method). Prefer this to diagnose broken APIs without opening DevTools.',
+        'Return recent XHR/fetch API calls + failures (status/url/method). Also switch the visible DevTools to the Network panel so the user can watch requests.',
       parameters: { type: 'object', properties: {}, additionalProperties: false },
     },
   },
@@ -761,7 +774,7 @@ export const AGENT_TOOLS: ToolDefinition[] = [
     function: {
       name: 'browser_devtools',
       description:
-        'Open/close Chromium DevTools UI on demand (docked RIGHT, narrow ~320px). NOT open by default. Use when you need the visible Console or Network panel; otherwise prefer browser_console / browser_network. Close when done.',
+        'Show Chromium DevTools docked RIGHT so the user can watch Console (console.log) or Network like a QA. Live Test already opens Console. Use panel=network or panel=console to switch. Do not close during Live Test.',
       parameters: {
         type: 'object',
         properties: {
@@ -790,7 +803,8 @@ export const AGENT_TOOLS: ToolDefinition[] = [
     type: 'function',
     function: {
       name: 'browser_close',
-      description: 'Close the Playwright browser session.',
+      description:
+        'Close the Test Browser. During Live Test this is refused — keep one window open until the run finishes.',
       parameters: { type: 'object', properties: {}, additionalProperties: false },
     },
   },
@@ -883,7 +897,6 @@ const BROWSER_TOOL_NAMES = new Set([
   'browser_network',
   'browser_devtools',
   'browser_screenshot',
-  'browser_close',
 ]);
 
 /** Small Ollama models cannot bind the full tool catalog. */

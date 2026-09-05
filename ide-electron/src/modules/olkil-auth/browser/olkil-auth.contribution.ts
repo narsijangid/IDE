@@ -99,6 +99,10 @@ export class OlkilAuthContribution
   async onDidStart() {
     await this.settings.initialize();
     await this.auth.init();
+    void this.settings.syncCustomModelsCloud();
+    this.auth.onDidChangeSession(() => {
+      void this.settings.syncCustomModelsCloud();
+    });
 
     const handleUrl = async (url?: string) => {
       if (!url) {

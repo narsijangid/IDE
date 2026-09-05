@@ -53,30 +53,13 @@ if ( ! defined( 'ABSPATH' ) ) {
 				</div>
 			</div>
 
-			<div class="olkil-ide" aria-hidden="true">
-				<div class="olkil-ide__titlebar">
-					<div class="olkil-ide__dots"><i></i><i></i><i></i></div>
-					<span class="olkil-ide__path">olkil · agent · main.ts</span>
-				</div>
-				<div class="olkil-ide__body">
-					<div class="olkil-ide__rail">
-						<span class="is-active"></span>
-						<span></span>
-						<span></span>
-						<span></span>
-					</div>
-					<pre class="olkil-ide__code"><span class="c-muted">// OLKIL Agent</span>
-<span class="c-pink">async</span> <span class="c-white">function</span> <span class="c-pink">shipFeature</span>() {
-  <span class="c-white">const</span> plan = <span class="c-pink">await</span> agent.plan({
-    goal: <span class="c-pink">"build dashboard"</span>
-  });
-  <span class="c-pink">await</span> agent.run(plan);
-  <span class="c-muted">// done — review &amp; merge</span>
-  <span class="cursor-line"></span>
-}</pre>
-				</div>
-				<div class="olkil-ide__chat">
-					<strong>OLKIL</strong> — Built the dashboard, wired data, and opened a PR. Ready when you are.
+			<?php
+			$hero_webm = OLKIL_URI . 'assets/olkil/video/hero-agent.webm';
+			?>
+			<div class="olkil-hero-agent" aria-hidden="true">
+				<div class="olkil-hero-agent__stage" data-olkil-loop-video>
+					<video class="olkil-hero-agent__video is-active" src="<?php echo esc_url( $hero_webm ); ?>" muted autoplay loop playsinline webkit-playsinline preload="auto" disablePictureInPicture></video>
+					<video class="olkil-hero-agent__video" src="<?php echo esc_url( $hero_webm ); ?>" muted playsinline webkit-playsinline preload="auto" disablePictureInPicture></video>
 				</div>
 			</div>
 		</div>

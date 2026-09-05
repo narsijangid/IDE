@@ -10,9 +10,9 @@ if ( ! defined( 'ABSPATH' ) ) {
 	exit;
 }
 
-define( 'OLKIL_VERSION', '1.5.0' );
+define( 'OLKIL_VERSION', '1.5.8' );
 /** Desktop installer version (matches ide-electron/product.json). */
-define( 'OLKIL_APP_VERSION', '1.3.22' );
+define( 'OLKIL_APP_VERSION', '1.3.25' );
 define( 'OLKIL_DIR', trailingslashit( get_template_directory() ) );
 define( 'OLKIL_URI', trailingslashit( get_template_directory_uri() ) );
 
@@ -27,8 +27,7 @@ function olkil_app_version() {
 
 /**
  * Platform download URLs for Windows / macOS / Linux.
- * Binaries are published to GitHub Releases (see ide-electron/scripts/publish-update.js).
- * Windows also keeps a Hostinger /downloads/ mirror for the site CTA.
+ * Installers are served from Hostinger /downloads/ (GitHub repo is private).
  *
  * @return array{windows:string,macos:string,macos_intel:string,linux:string,linux_appimage:string}
  */
@@ -153,6 +152,378 @@ function olkil_page_url( $slug ) {
 }
 
 /**
+ * Product submenu: slug => nav label.
+ *
+ * @return array<string, string>
+ */
+function olkil_product_nav_items() {
+	return array(
+		'desktop'      => __( 'Desktop', 'olkil' ),
+		'community'    => __( 'OLKIL Community', 'olkil' ),
+		'cloud'        => __( 'Cloud', 'olkil' ),
+		'live-test'    => __( 'Live Test', 'olkil' ),
+		'cli'          => __( 'CLI', 'olkil' ),
+		'autocomplete' => __( 'Autocomplete', 'olkil' ),
+		'marketplace'  => __( 'Marketplace', 'olkil' ),
+	);
+}
+
+/**
+ * Product landing copy keyed by slug.
+ *
+ * @return array<string, array<string, mixed>>
+ */
+function olkil_product_catalog() {
+	$download = olkil_page_url( 'download' );
+	$pricing  = olkil_page_url( 'pricing' );
+	$cli      = olkil_page_url( 'cli' );
+
+	return array(
+		'desktop'      => array(
+			'eyebrow'  => __( 'Product · Desktop', 'olkil' ),
+			'title'    => __( 'The OLKIL IDE on your machine.', 'olkil' ),
+			'lead'     => __( 'A full editor — agents, autocomplete, terminal, Git, and debugging — free on Windows, macOS, and Linux. Same account as the CLI.', 'olkil' ),
+			'cta'      => array(
+				'label' => __( 'Download free', 'olkil' ),
+				'url'   => $download,
+			),
+			'cta2'     => array(
+				'label' => __( 'See plans', 'olkil' ),
+				'url'   => $pricing,
+			),
+			'points'   => array(
+				array(
+					'icon'  => '⬡',
+					'title' => __( 'Full IDE', 'olkil' ),
+					'desc'  => __( 'Extensions, terminal, Git, and debugging. A complete workspace, not a thin wrapper.', 'olkil' ),
+				),
+				array(
+					'icon'  => '⌘',
+					'title' => __( 'Agents in the editor', 'olkil' ),
+					'desc'  => __( 'Hand off multi-step tasks. OLKIL plans, edits, and iterates while you stay in control.', 'olkil' ),
+				),
+				array(
+					'icon'  => '∇',
+					'title' => __( 'Windows, macOS, Linux', 'olkil' ),
+					'desc'  => __( 'One free experience everywhere. We highlight the installer that matches your OS.', 'olkil' ),
+				),
+				array(
+					'icon'  => '◎',
+					'title' => __( 'Same account everywhere', 'olkil' ),
+					'desc'  => __( 'Sign in with Google. Desktop and CLI share your plan, quota, and workspace trust.', 'olkil' ),
+				),
+			),
+			'steps'    => array(
+				array( __( 'Download', 'olkil' ), __( 'Install the build for your OS. No account required to open the app.', 'olkil' ) ),
+				array( __( 'Sign in', 'olkil' ), __( 'Continue with Google. Dazzlone is free; Lite, Pro, and Ultra unlock cloud tokens.', 'olkil' ) ),
+				array( __( 'Ship', 'olkil' ), __( 'Open a folder, pick a model, and let the agent work beside you.', 'olkil' ) ),
+			),
+		),
+		'agents'       => array(
+			'eyebrow'  => __( 'Product · Agents', 'olkil' ),
+			'title'    => __( 'Agents that plan, edit, and iterate.', 'olkil' ),
+			'lead'     => __( 'Describe the outcome. OLKIL breaks it into steps, touches the right files, and keeps you in the loop — in the desktop app or the CLI.', 'olkil' ),
+			'cta'      => array(
+				'label' => __( 'Download free', 'olkil' ),
+				'url'   => $download,
+			),
+			'cta2'     => array(
+				'label' => __( 'Cloud plans', 'olkil' ),
+				'url'   => $pricing,
+			),
+			'points'   => array(
+				array(
+					'icon'  => '⌘',
+					'title' => __( 'Multi-step work', 'olkil' ),
+					'desc'  => __( 'Refactors, features, and fixes that span files — not one-shot completions.', 'olkil' ),
+				),
+				array(
+					'icon'  => '◈',
+					'title' => __( 'You stay in control', 'olkil' ),
+					'desc'  => __( 'Review diffs, steer the next step, or take over. The agent never replaces your judgment.', 'olkil' ),
+				),
+				array(
+					'icon'  => '✦',
+					'title' => __( 'Project context', 'olkil' ),
+					'desc'  => __( 'The agent reads the repo you trust — structure, conventions, and the files that matter.', 'olkil' ),
+				),
+				array(
+					'icon'  => '⬡',
+					'title' => __( 'Parallel on Ultra', 'olkil' ),
+					'desc'  => __( 'Ultra unlocks parallel agents and priority compute when you need more than one thread.', 'olkil' ),
+				),
+			),
+			'steps'    => array(
+				array( __( 'Trust a folder', 'olkil' ), __( 'Same workspace trust as the CLI. The agent only works where you allow it.', 'olkil' ) ),
+				array( __( 'Pick a model', 'olkil' ), __( 'Local models on Dazzlone. Cloud models on Lite, Pro, and Ultra.', 'olkil' ) ),
+				array( __( 'Hand off the task', 'olkil' ), __( 'Describe what you want shipped. Watch the plan, then the edits.', 'olkil' ) ),
+			),
+		),
+		'community'    => array(
+			'eyebrow'     => __( 'Product · Community', 'olkil' ),
+			'title'       => __( 'The official OLKIL Community.', 'olkil' ),
+			'lead'        => __( 'Ask questions, get help, share what you ship, request features, and follow announcements — discussions, support, and ideas in one place.', 'olkil' ),
+			'cta'         => array(
+				'label'    => __( 'Open OLKIL Community', 'olkil' ),
+				'url'      => 'https://forum.olkil.com/',
+				'external' => true,
+			),
+			'preview'     => array(
+				'src' => 'assets/olkil/img/community.png',
+				'alt' => __( 'OLKIL Community forum — discussions, announcements, help, and ideas', 'olkil' ),
+				'url' => 'https://forum.olkil.com/',
+			),
+			'points'      => array(
+				array(
+					'icon'  => '◆',
+					'title' => __( 'Discussions', 'olkil' ),
+					'desc'  => __( 'Talk through CLI, desktop, and workflow questions with other people using OLKIL.', 'olkil' ),
+				),
+				array(
+					'icon'  => '◎',
+					'title' => __( 'Help & Support', 'olkil' ),
+					'desc'  => __( 'Stuck on install, login, or a plan? Post it. The community and the team are there.', 'olkil' ),
+				),
+				array(
+					'icon'  => '✦',
+					'title' => __( 'Ideas', 'olkil' ),
+					'desc'  => __( 'Request features and vote on what should land next in the IDE and the CLI.', 'olkil' ),
+				),
+				array(
+					'icon'  => '⌘',
+					'title' => __( 'Announcements', 'olkil' ),
+					'desc'  => __( 'Product updates, CLI releases, and what is new — posted by the OLKIL team.', 'olkil' ),
+				),
+			),
+			'steps'       => array(
+				array( __( 'Open the forum', 'olkil' ), __( 'Join at forum.olkil.com. Sign up takes a moment.', 'olkil' ) ),
+				array( __( 'Pick a category', 'olkil' ), __( 'Discussions, Help & Support, Ideas, or Announcements.', 'olkil' ) ),
+				array( __( 'Start a thread', 'olkil' ), __( 'Ask, share a build, or request a feature. The community is public.', 'olkil' ) ),
+			),
+		),
+		'cloud'        => array(
+			'eyebrow'  => __( 'Product · Cloud', 'olkil' ),
+			'title'    => __( 'Cloud models. One quota. Desktop and CLI.', 'olkil' ),
+			'lead'     => __( 'Lite, Pro, and Ultra add cloud tokens on top of the free local Dazzlone plan. Sign in once — the same wallet follows you from the IDE to the terminal.', 'olkil' ),
+			'cta'      => array(
+				'label' => __( 'Compare plans', 'olkil' ),
+				'url'   => $pricing,
+			),
+			'cta2'     => array(
+				'label' => __( 'Download free', 'olkil' ),
+				'url'   => $download,
+			),
+			'points'   => array(
+				array(
+					'icon'  => '◈',
+					'title' => __( 'Shared quota', 'olkil' ),
+					'desc'  => __( 'Tokens are on your OLKIL account. Use them in the desktop agent or run olkil in a project folder.', 'olkil' ),
+				),
+				array(
+					'icon'  => '✦',
+					'title' => __( 'Clear plans', 'olkil' ),
+					'desc'  => __( 'Lite $3, Pro $10, Ultra $49 / month. Prices in USD. Cancel anytime.', 'olkil' ),
+				),
+				array(
+					'icon'  => '◎',
+					'title' => __( 'Dazzlone stays free', 'olkil' ),
+					'desc'  => __( 'Local models and unlimited browser testing do not require a paid plan.', 'olkil' ),
+				),
+				array(
+					'icon'  => '⌘',
+					'title' => __( 'Priority on Ultra', 'olkil' ),
+					'desc'  => __( 'Maximum context, parallel agents, and priority compute when you are shipping hard.', 'olkil' ),
+				),
+			),
+			'steps'    => array(
+				array( __( 'Start free', 'olkil' ), __( 'Download OLKIL and sign in. Dazzlone is enough to learn the workflow.', 'olkil' ) ),
+				array( __( 'Upgrade when you need tokens', 'olkil' ), __( 'Pick Lite, Pro, or Ultra from Pricing. Checkout is in USD.', 'olkil' ) ),
+				array( __( 'Use it anywhere', 'olkil' ), __( 'The same Google account powers the IDE and the CLI.', 'olkil' ) ),
+			),
+		),
+		'live-test'    => array(
+			'eyebrow'  => __( 'Product · Live Test', 'olkil' ),
+			'title'    => __( 'Test in a real browser, inside the IDE.', 'olkil' ),
+			'lead'     => __( 'Unlimited browser testing on every plan — including Dazzlone free. Click through flows, catch layout bugs, and keep shipping without leaving OLKIL.', 'olkil' ),
+			'cta'      => array(
+				'label' => __( 'Download free', 'olkil' ),
+				'url'   => $download,
+			),
+			'cta2'     => array(
+				'label' => __( 'See plans', 'olkil' ),
+				'url'   => $pricing,
+			),
+			'points'   => array(
+				array(
+					'icon'  => '◎',
+					'title' => __( 'Unlimited on every plan', 'olkil' ),
+					'desc'  => __( 'Live Test is not a paid extra. Free, Lite, Pro, and Ultra all include unlimited browser testing.', 'olkil' ),
+				),
+				array(
+					'icon'  => '⌘',
+					'title' => __( 'Beside the agent', 'olkil' ),
+					'desc'  => __( 'The agent can build the UI; you verify it in a live browser without switching tools.', 'olkil' ),
+				),
+				array(
+					'icon'  => '⬡',
+					'title' => __( 'Real pages, real clicks', 'olkil' ),
+					'desc'  => __( 'Exercise the flow you just shipped — not a screenshot of it.', 'olkil' ),
+				),
+				array(
+					'icon'  => '∇',
+					'title' => __( 'Stays on your machine', 'olkil' ),
+					'desc'  => __( 'Testing runs with the desktop app. You choose what leaves the workspace.', 'olkil' ),
+				),
+			),
+			'steps'    => array(
+				array( __( 'Install the desktop app', 'olkil' ), __( 'Live Test lives in the IDE. Download for your OS.', 'olkil' ) ),
+				array( __( 'Open your project', 'olkil' ), __( 'Trust the folder, start a local server or open a URL.', 'olkil' ) ),
+				array( __( 'Click through', 'olkil' ), __( 'Verify the UI, then send the next task back to the agent.', 'olkil' ) ),
+			),
+		),
+		'autocomplete' => array(
+			'eyebrow'  => __( 'Product · Autocomplete', 'olkil' ),
+			'title'    => __( 'Suggestions that feel native.', 'olkil' ),
+			'lead'     => __( 'Context-aware completions as you type. Basic on Dazzlone, unlimited on Lite, Pro, and Ultra — always inside the editor, never a separate chat window.', 'olkil' ),
+			'cta'      => array(
+				'label' => __( 'Download free', 'olkil' ),
+				'url'   => $download,
+			),
+			'cta2'     => array(
+				'label' => __( 'Compare plans', 'olkil' ),
+				'url'   => $pricing,
+			),
+			'points'   => array(
+				array(
+					'icon'  => '✦',
+					'title' => __( 'In the flow', 'olkil' ),
+					'desc'  => __( 'Gray-text suggestions where you are typing. Tab to accept, keep moving.', 'olkil' ),
+				),
+				array(
+					'icon'  => '◈',
+					'title' => __( 'Project-aware', 'olkil' ),
+					'desc'  => __( 'Uses nearby files and the patterns already in your repo — not generic snippets.', 'olkil' ),
+				),
+				array(
+					'icon'  => '⌘',
+					'title' => __( 'Pairs with agents', 'olkil' ),
+					'desc'  => __( 'Complete the line yourself, or hand the whole feature to an agent. Same IDE.', 'olkil' ),
+				),
+				array(
+					'icon'  => '⬡',
+					'title' => __( 'Unlimited on paid plans', 'olkil' ),
+					'desc'  => __( 'Dazzlone includes basic autocomplete. Lite, Pro, and Ultra remove the cap.', 'olkil' ),
+				),
+			),
+			'steps'    => array(
+				array( __( 'Install OLKIL', 'olkil' ), __( 'Autocomplete ships in the desktop IDE.', 'olkil' ) ),
+				array( __( 'Open a file', 'olkil' ), __( 'Start typing. Accept a suggestion, or keep writing.', 'olkil' ) ),
+				array( __( 'Upgrade if you outgrow free', 'olkil' ), __( 'Unlimited autocomplete starts at Lite.', 'olkil' ) ),
+			),
+		),
+		'marketplace'  => array(
+			'eyebrow'  => __( 'Product · Marketplace', 'olkil' ),
+			'title'    => __( 'A full IDE, including extensions.', 'olkil' ),
+			'lead'     => __( 'OLKIL is not a thin chat wrapper. Use the extension ecosystem you already know, plus OLKIL agents, autocomplete, and Live Test in the same window.', 'olkil' ),
+			'cta'      => array(
+				'label' => __( 'Download free', 'olkil' ),
+				'url'   => $download,
+			),
+			'cta2'     => array(
+				'label' => __( 'Browse features', 'olkil' ),
+				'url'   => olkil_page_url( 'features' ),
+			),
+			'points'   => array(
+				array(
+					'icon'  => '⬡',
+					'title' => __( 'Extensions', 'olkil' ),
+					'desc'  => __( 'Language tools, themes, linters, and the rest of a real editor — install what your stack needs.', 'olkil' ),
+				),
+				array(
+					'icon'  => '✦',
+					'title' => __( 'Themes and keybindings', 'olkil' ),
+					'desc'  => __( 'Make the IDE yours. OLKIL branding stays pink; your editor does not have to.', 'olkil' ),
+				),
+				array(
+					'icon'  => '⌘',
+					'title' => __( 'Agents on top', 'olkil' ),
+					'desc'  => __( 'Extensions handle languages. OLKIL handles the agent, autocomplete, and Live Test.', 'olkil' ),
+				),
+				array(
+					'icon'  => '∇',
+					'title' => __( 'Growing catalog', 'olkil' ),
+					'desc'  => __( 'More OLKIL-native extensions and listings as the product grows. The IDE is ready today.', 'olkil' ),
+				),
+			),
+			'steps'    => array(
+				array( __( 'Install the desktop app', 'olkil' ), __( 'Marketplace and extensions live in the IDE.', 'olkil' ) ),
+				array( __( 'Add what you need', 'olkil' ), __( 'Languages, formatters, themes — same workflow as a full editor.', 'olkil' ) ),
+				array( __( 'Keep OLKIL on', 'olkil' ), __( 'Agents and autocomplete stay available next to your extensions.', 'olkil' ) ),
+			),
+		),
+		'cli'          => array(
+			'eyebrow'  => __( 'Product · CLI', 'olkil' ),
+			'title'    => __( 'OLKIL in your terminal.', 'olkil' ),
+			'lead'     => __( 'Install once. Run olkil. Sign in with Google. Pick a model. The agent works in the folder you trust.', 'olkil' ),
+			'cta'      => array(
+				'label' => __( 'Install the CLI', 'olkil' ),
+				'url'   => $cli,
+			),
+			'cta2'     => array(
+				'label' => __( 'Download the IDE', 'olkil' ),
+				'url'   => $download,
+			),
+			'points'   => array(),
+			'steps'    => array(),
+		),
+	);
+}
+
+/**
+ * True when the current request is a Product landing page.
+ */
+function olkil_is_product_page() {
+	return is_page( array_keys( olkil_product_nav_items() ) );
+}
+
+/**
+ * Critical Product dropdown CSS — beats Astra list/button resets even if olkil.css is cached.
+ */
+function olkil_product_nav_inline_css() {
+	return <<<'CSS'
+body.olkil-theme header.olkil-header{overflow:visible!important;height:auto!important;min-height:var(--olkil-header-h,64px)!important;background:var(--olkil-header-bg,rgba(5,5,6,.72))!important}
+body.olkil-theme .olkil-header__inner{overflow:visible!important;align-items:center}
+body.olkil-theme .olkil-nav-list{list-style:none!important;margin:0!important;padding:0!important}
+body.olkil-theme .olkil-nav-item--has-sub{position:relative!important}
+body.olkil-theme header.olkil-header button.olkil-nav-trigger{-webkit-appearance:none!important;appearance:none!important;background:transparent!important;background-color:transparent!important;border:0!important;box-shadow:none!important;padding:0.35rem 0!important;min-height:0!important;color:var(--olkil-text-muted,#a1a1aa)!important;font:inherit!important;font-size:.9rem!important;font-weight:500!important;cursor:pointer!important;display:inline-flex!important;align-items:center!important;gap:.35rem}
+body.olkil-theme header.olkil-header button.olkil-nav-trigger:hover,
+body.olkil-theme .olkil-nav-item--has-sub.is-open>button.olkil-nav-trigger,
+body.olkil-theme .olkil-nav-item--has-sub:hover>button.olkil-nav-trigger{color:var(--olkil-heading,#fff)!important}
+body.olkil-theme .olkil-product-dropdown{position:absolute!important;top:calc(100% + 10px)!important;left:0!important;z-index:200!important;min-width:200px;margin:0!important;padding:.45rem!important;display:none!important;grid-template-columns:1fr;gap:.12rem;list-style:none!important;border-radius:12px;border:1px solid var(--olkil-border,rgba(255,255,255,.08));background:var(--olkil-bg-card,#111114)!important;box-shadow:0 16px 48px rgba(0,0,0,.45)}
+body.olkil-theme .olkil-product-dropdown::before{content:"";position:absolute;top:-12px;left:0;right:0;height:12px}
+body.olkil-theme .olkil-nav-item--has-sub:hover>.olkil-product-dropdown,
+body.olkil-theme .olkil-nav-item--has-sub:focus-within>.olkil-product-dropdown,
+body.olkil-theme .olkil-nav-item--has-sub.is-open>.olkil-product-dropdown{display:grid!important}
+body.olkil-theme .olkil-product-dropdown a{display:block!important;padding:.55rem .75rem!important;border-radius:8px;color:var(--olkil-text,#e4e4e7)!important;font-size:.88rem!important;font-weight:500!important;text-decoration:none!important;background:transparent!important}
+body.olkil-theme .olkil-product-dropdown a:hover{background:var(--olkil-bg-hover,#18181c)!important;color:var(--olkil-heading,#fff)!important}
+@media(max-width:860px){
+body.olkil-theme .olkil-product-dropdown{position:static!important;top:auto!important;min-width:0;box-shadow:none;border:0;background:transparent!important;padding:.35rem 0 0 .75rem!important;display:none!important}
+body.olkil-theme .olkil-nav-item--has-sub.is-open>.olkil-product-dropdown{display:grid!important}
+body.olkil-theme .olkil-nav-item--has-sub:hover>.olkil-product-dropdown{display:none!important}
+body.olkil-theme .olkil-nav-item--has-sub.is-open:hover>.olkil-product-dropdown{display:grid!important}
+}
+CSS;
+}
+
+/**
+ * Apply saved theme before paint to avoid a flash.
+ */
+function olkil_theme_boot_script() {
+	echo '<script>(function(){try{var k="olkil-theme";var p=localStorage.getItem(k)||"dark";var r=p;if(p==="system"){r=(window.matchMedia&&matchMedia("(prefers-color-scheme: light)").matches)?"light":"dark"}document.documentElement.setAttribute("data-olkil-theme",r);document.documentElement.setAttribute("data-olkil-theme-pref",p);}catch(e){document.documentElement.setAttribute("data-olkil-theme","dark");document.documentElement.setAttribute("data-olkil-theme-pref","dark");}})();</script>' . "\n";
+}
+add_action( 'wp_head', 'olkil_theme_boot_script', 0 );
+
+/**
  * Enqueue OLKIL fonts, CSS, JS.
  */
 function olkil_enqueue_assets() {
@@ -169,6 +540,7 @@ function olkil_enqueue_assets() {
 		array( 'astra-theme-css', 'olkil-fonts' ),
 		OLKIL_VERSION
 	);
+	wp_add_inline_style( 'olkil-main', olkil_product_nav_inline_css() );
 
 	wp_enqueue_script(
 		'olkil-main',
@@ -664,3 +1036,81 @@ function olkil_ensure_profile_page() {
 }
 add_action( 'admin_init', 'olkil_ensure_profile_page', 7 );
 add_action( 'init', 'olkil_ensure_profile_page', 26 );
+
+/**
+ * Ensure /cli/ page exists (Product → CLI).
+ */
+function olkil_ensure_cli_page() {
+	if ( get_option( 'olkil_setup_cli_v1' ) ) {
+		return;
+	}
+
+	$cli = get_page_by_path( 'cli' );
+	if ( ! $cli ) {
+		$cli_id = wp_insert_post(
+			array(
+				'post_title'   => 'CLI',
+				'post_name'    => 'cli',
+				'post_status'  => 'publish',
+				'post_type'    => 'page',
+				'post_content' => '',
+			),
+			true
+		);
+		if ( ! is_wp_error( $cli_id ) && $cli_id ) {
+			update_post_meta( $cli_id, '_wp_page_template', 'page-templates/template-cli.php' );
+		}
+	} else {
+		update_post_meta( $cli->ID, '_wp_page_template', 'page-templates/template-cli.php' );
+	}
+
+	update_option( 'olkil_setup_cli_v1', 1 );
+}
+add_action( 'admin_init', 'olkil_ensure_cli_page', 8 );
+add_action( 'init', 'olkil_ensure_cli_page', 27 );
+
+/**
+ * Ensure Product landing pages exist (Desktop, Community, Cloud, …).
+ */
+function olkil_ensure_product_pages() {
+	if ( get_option( 'olkil_setup_product_pages_v2' ) ) {
+		return;
+	}
+
+	foreach ( olkil_product_nav_items() as $slug => $title ) {
+		if ( 'cli' === $slug ) {
+			continue;
+		}
+		$existing = get_page_by_path( $slug );
+		$template = 'page-templates/template-product.php';
+		if ( $existing ) {
+			update_post_meta( $existing->ID, '_wp_page_template', $template );
+			if ( 'publish' !== $existing->post_status ) {
+				wp_update_post(
+					array(
+						'ID'          => $existing->ID,
+						'post_status' => 'publish',
+					)
+				);
+			}
+			continue;
+		}
+		$page_id = wp_insert_post(
+			array(
+				'post_title'   => $title,
+				'post_name'    => $slug,
+				'post_status'  => 'publish',
+				'post_type'    => 'page',
+				'post_content' => '',
+			),
+			true
+		);
+		if ( ! is_wp_error( $page_id ) && $page_id ) {
+			update_post_meta( $page_id, '_wp_page_template', $template );
+		}
+	}
+
+	update_option( 'olkil_setup_product_pages_v2', 1 );
+}
+add_action( 'admin_init', 'olkil_ensure_product_pages', 9 );
+add_action( 'init', 'olkil_ensure_product_pages', 28 );

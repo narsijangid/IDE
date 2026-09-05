@@ -6,6 +6,8 @@ import * as os from 'os';
 import * as path from 'path';
 import { ensureOpencodeBinary, resolveOpencodeBinary } from './binary';
 import { buildOpencodeConfigContent, type OpencodeProviderSecrets } from './config';
+import type { CustomModelEndpoint } from '../../common/models';
+import { opencodeCustomProviderId } from '../../common/models';
 
 export interface OpencodeHttpOptions {
   query?: Record<string, string | undefined>;
@@ -26,7 +28,7 @@ export class OpencodeSidecar {
 
   constructor(
     private readonly secrets: OpencodeProviderSecrets,
-    private readonly extras?: { mcp?: Record<string, unknown> },
+    private readonly extras?: { mcp?: Record<string, unknown>; customModels?: CustomModelEndpoint[] },
   ) {}
 
   async ensureStarted(): Promise<string> {
@@ -88,15 +90,25 @@ export class OpencodeSidecar {
     this.homeDir = path.join(os.homedir(), '.olkil', 'opencode-home');
     fs.mkdirSync(this.homeDir, { recursive: true });
     this.writeProviderAuth();
+    fs.mkdirSync(path.join(this.homeDir, 'config'), { recursive: true });
+    const plugin = writeStripGatewayPlugin(this.homeDir);
 
     const port = 20000 + Math.floor(Math.random() * 20000);
     const password = randomBytes(16).toString('hex');
     this.authHeader = `Basic ${Buffer.from(`olkil:${password}`).toString('base64')}`;
-    const args = ['serve', `--hostname=127.0.0.1`, `--port=${port}`, '--pure'];
-    const config = buildOpencodeConfigContent(this.secrets, this.extras);
+    // Do not pass --pure: that skips config plugins, including the verbosity stripper.
+    // Isolation is OPENCODE_DISABLE_PROJECT_CONFIG + a dedicated CONFIG_DIR.
+    const args = ['serve', `--hostname=127.0.0.1`, `--port=${port}`];
+    const config = buildOpencodeConfigContent(this.secrets, {
+      ...this.extras,
+      plugin: [plugin],
+    });
     const env: NodeJS.ProcessEnv = isolatedSidecarEnv({
       OPENCODE_HOME: this.homeDir,
+      OPENCODE_CONFIG_DIR: path.join(this.homeDir, 'config'),
       OPENCODE_CONFIG_CONTENT: JSON.stringify(config),
+      OPENCODE_DISABLE_PROJECT_CONFIG: '1',
+      OPENCODE_DISABLE_MODELS_FETCH: '1',
       OPENCODE_CALLER: 'olkil',
       OPENCODE_DISABLE_AUTOUPDATE: '1',
       OPENCODE_SERVER_USERNAME: 'olkil',
@@ -128,6 +140,11 @@ export class OpencodeSidecar {
     }
     if (this.secrets.poolsideKey) {
       auth.poolside = { type: 'api', key: this.secrets.poolsideKey };
+    }
+    for (const ep of this.extras?.customModels || []) {
+      if (ep.apiKey) {
+        auth[opencodeCustomProviderId(ep.id)] = { type: 'api', key: ep.apiKey };
+      }
     }
     fs.writeFileSync(path.join(this.homeDir, 'auth.json'), JSON.stringify(auth), 'utf8');
   }
@@ -265,8 +282,45 @@ function isolatedSidecarEnv(overrides: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
       delete env[key];
     }
   }
+  delete env.OPENCODE_PURE;
+  delete env.OPENCODE_CONFIG;
+  delete env.OPENCODE_CONFIG_DIR;
+  delete env.OPENCODE_CONFIG_CONTENT;
   Object.assign(env, overrides);
   return env;
+}
+
+/**
+ * OpenCode 1.18.21 injects textVerbosity for gpt-5.x on openai-compatible
+ * providers. Gateways then 400: verbosity is not supported by this profile.
+ * Strip it (and nested text.verbosity) before the request is sent.
+ */
+function writeStripGatewayPlugin(homeDir: string): string {
+  const dir = path.join(homeDir, 'plugin');
+  fs.mkdirSync(dir, { recursive: true });
+  const file = path.join(dir, 'olkil-strip-gateway-params.mjs');
+  fs.writeFileSync(
+    file,
+    `export default async function olkilStripGatewayParams() {
+  return {
+    "chat.params": async function (_input, output) {
+      if (!output || !output.options || typeof output.options !== "object") {
+        return;
+      }
+      delete output.options.textVerbosity;
+      delete output.options.verbosity;
+      delete output.options.reasoningSummary;
+      const text = output.options.text;
+      if (text && typeof text === "object" && !Array.isArray(text)) {
+        delete text.verbosity;
+      }
+    },
+  };
+}
+`,
+    'utf8',
+  );
+  return file;
 }
 
 function waitForListen(proc: ChildProcess, port: number, timeoutMs: number, authHeader: string): Promise<string> {

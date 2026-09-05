@@ -3,7 +3,7 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import { pathToFileURL } from 'url';
-import { findModel, type AiProviderId } from '../common/models';
+import { findModel, applyCustomModelEndpoints, customEndpointFor, DEFAULT_MODEL_ID, type AiProviderId, type CustomModelEndpoint } from '../common/models';
 import type {
   ClineEngineActivity,
   ClineEngineFileChange,
@@ -27,6 +27,8 @@ type ActivityKind = ClineEngineActivity['kind'];
 interface SessionHandle {
   id: string;
   directory: string;
+  turns: number;
+  createdAt: number;
 }
 
 interface LiveRun {
@@ -57,6 +59,22 @@ function isHiddenEngineWrap(text: string): boolean {
   );
 }
 
+function isInsideWorkspace(directory: string, filePath: string): boolean {
+  const abs = resolveWorkspacePath(directory, filePath);
+  if (!abs) {
+    return false;
+  }
+  const root = path.resolve(directory);
+  const rel = path.relative(root, abs);
+  return rel === '' || (!rel.startsWith('..') && !path.isAbsolute(rel));
+}
+
+const MAX_FILE_SNAPSHOT_CHARS = 180_000;
+const MAX_LIVE_ACTIVITIES = 40;
+const SESSION_ROTATE_TURNS = 16;
+const SESSION_MAX_AGE_MS = 30 * 60 * 1000;
+const SIDECAR_IDLE_MS = 12 * 60 * 1000;
+
 function resolveWorkspacePath(directory: string, filePath: string): string {
   const raw = String(filePath || '').trim();
   if (!raw) {
@@ -66,6 +84,16 @@ function resolveWorkspacePath(directory: string, filePath: string): string {
     return path.normalize(raw);
   }
   return path.resolve(directory, raw);
+}
+
+function clipSnapshot(text: string | null): string | null {
+  if (text == null) {
+    return null;
+  }
+  if (text.length <= MAX_FILE_SNAPSHOT_CHARS) {
+    return text;
+  }
+  return text.slice(0, MAX_FILE_SNAPSHOT_CHARS);
 }
 
 const DEFAULT_DEEPSEEK_BASE = 'https://api.deepseek.com';
@@ -239,6 +267,9 @@ export class OlkilOpencodeRuntimeHost {
   private eventsBound = false;
   private mcpKey = '';
   private lastMcpServers: OpencodeMcpServer[] | undefined;
+  private customKey = '';
+  private lastCustomModels: CustomModelEndpoint[] = [];
+  private idleTimer: ReturnType<typeof setTimeout> | null = null;
 
   async prewarm(): Promise<void> {
     await this.ensureSidecar();
@@ -292,7 +323,17 @@ export class OlkilOpencodeRuntimeHost {
     this.states.set(runId, state);
 
     try {
-      const option = findModel(request.modelId);
+      applyCustomModelEndpoints(request.customModels);
+      const option = findModel(request.modelId || DEFAULT_MODEL_ID);
+      if (option.provider === 'custom') {
+        const ep = customEndpointFor(option.id);
+        if (!ep?.baseUrl) {
+          throw new Error('This custom model has no API base URL. Open Settings → Models and edit it.');
+        }
+        if (!ep.apiKey) {
+          throw new Error('This custom model has no API key. Open Settings → Models and add one.');
+        }
+      }
       await assertOlkilWallet(option.provider);
       if (option.provider === 'deepseek' && !providerSecrets().deepseekKey) {
         throw new Error(
@@ -300,6 +341,7 @@ export class OlkilOpencodeRuntimeHost {
         );
       }
       this.syncMcp(this.mergeMcp(request));
+      this.syncCustomModels(request.customModels);
       const sidecar = await this.ensureSidecar();
       const directory = this.sessionDirectory(request.workspaceRoot);
       const conversationKey = `${directory}::${request.conversationId || runId}`;
@@ -351,6 +393,7 @@ export class OlkilOpencodeRuntimeHost {
             if (this.runBySession.get(session.id) === runId) {
               this.runBySession.delete(session.id);
             }
+            this.armIdleRecycle();
             resolve();
           },
         };
@@ -359,7 +402,11 @@ export class OlkilOpencodeRuntimeHost {
       });
 
       const parts: Array<Record<string, unknown>> = [];
-      if (request.activeFile && fs.existsSync(request.activeFile)) {
+      if (
+        request.activeFile &&
+        fs.existsSync(request.activeFile) &&
+        isInsideWorkspace(directory, request.activeFile)
+      ) {
         parts.push({
           type: 'file',
           mime: 'text/plain',
@@ -417,12 +464,13 @@ export class OlkilOpencodeRuntimeHost {
 
   private wrapPrompt(request: ClineEngineRunRequest): string {
     const bits: string[] = [
-      `You are the coding agent inside OLKIL IDE. Product name: OLKIL. Workspace: ${
-        request.workspaceRoot?.trim() || '(no folder open)'
-      }.`,
-      `Stay in the workspace. Do the requested work with tools. Reply with a short result — not a status report.`,
+      `You are the coding agent inside OLKIL IDE. Product name: OLKIL.`,
+      `Workspace (hard boundary): ${request.workspaceRoot?.trim() || '(no folder open)'}.`,
+      `Stay inside that folder only. Never read, list, search, or edit parent directories, sibling folders, or other git repos — even if .git lives above the workspace.`,
+      `Do not cd .. . Grep, bash, and file tools must use the workspace as cwd.`,
+      `Prefer grep + small line-range reads over dumping whole files. Reply with a short exact result — not a status report.`,
     ];
-    if (request.activeFile) {
+    if (request.activeFile && isInsideWorkspace(this.sessionDirectory(request.workspaceRoot), request.activeFile)) {
       bits.push(`Active file: ${request.activeFile}`);
     }
     if (request.rules?.trim()) {
@@ -444,14 +492,36 @@ export class OlkilOpencodeRuntimeHost {
 
   async ensureSidecar(): Promise<OpencodeSidecar> {
     if (!this.sidecar) {
-      this.sidecar = new OpencodeSidecar(providerSecrets(), { mcp: toOpencodeMcp(this.lastMcpServers) });
+      this.sidecar = new OpencodeSidecar(providerSecrets(), {
+        mcp: toOpencodeMcp(this.lastMcpServers),
+        customModels: this.lastCustomModels,
+      });
     }
     await this.sidecar.ensureStarted();
     if (!this.eventsBound) {
       this.eventsBound = true;
       this.sidecar.onEvent((event) => this.handleEvent(event));
     }
+    this.armIdleRecycle();
     return this.sidecar;
+  }
+
+  private armIdleRecycle(): void {
+    if (this.idleTimer) {
+      clearTimeout(this.idleTimer);
+    }
+    this.idleTimer = setTimeout(() => {
+      if (this.lives.size > 0) {
+        this.armIdleRecycle();
+        return;
+      }
+      this.sidecar?.close();
+      this.sidecar = null;
+      this.eventsBound = false;
+      this.sessions.clear();
+      this.idleTimer = null;
+    }, SIDECAR_IDLE_MS);
+    this.idleTimer.unref?.();
   }
 
   private async ensureSession(
@@ -460,8 +530,15 @@ export class OlkilOpencodeRuntimeHost {
     directory: string,
   ): Promise<SessionHandle> {
     const existing = this.sessions.get(key);
-    if (existing && existing.directory === directory) {
+    const stale =
+      existing &&
+      (existing.turns >= SESSION_ROTATE_TURNS || Date.now() - existing.createdAt > SESSION_MAX_AGE_MS);
+    if (existing && existing.directory === directory && !stale) {
+      existing.turns += 1;
       return existing;
+    }
+    if (existing && stale) {
+      this.sessions.delete(key);
     }
     const created = await sidecar.request<any>('POST', '/session', {
       query: { directory },
@@ -471,7 +548,7 @@ export class OlkilOpencodeRuntimeHost {
     if (!id) {
       throw new Error('OpenCode session.create returned no id');
     }
-    const handle = { id: String(id), directory };
+    const handle = { id: String(id), directory, turns: 1, createdAt: Date.now() };
     this.sessions.set(key, handle);
     return handle;
   }
@@ -683,20 +760,35 @@ export class OlkilOpencodeRuntimeHost {
   }
 
   private snapshotBefore(live: LiveRun, abs: string): void {
-    if (live.fileBefore.has(abs)) {
+    if (!isInsideWorkspace(live.directory, abs) || live.fileBefore.has(abs)) {
       return;
     }
     try {
-      live.fileBefore.set(abs, fs.readFileSync(abs, 'utf8'));
+      const stat = fs.statSync(abs);
+      if (stat.size > MAX_FILE_SNAPSHOT_CHARS) {
+        live.fileBefore.set(abs, null);
+        return;
+      }
+      const text = fs.readFileSync(abs, 'utf8');
+      live.fileBefore.set(abs, text.length > MAX_FILE_SNAPSHOT_CHARS ? text.slice(0, MAX_FILE_SNAPSHOT_CHARS) : text);
     } catch {
       live.fileBefore.set(abs, null);
     }
   }
 
   private recordDiskChange(live: LiveRun, abs: string): void {
+    if (!isInsideWorkspace(live.directory, abs)) {
+      return;
+    }
     let after: string | null = null;
     try {
-      after = fs.readFileSync(abs, 'utf8');
+      const stat = fs.statSync(abs);
+      if (stat.size <= MAX_FILE_SNAPSHOT_CHARS) {
+        after = fs.readFileSync(abs, 'utf8');
+        if (after.length > MAX_FILE_SNAPSHOT_CHARS) {
+          after = after.slice(0, MAX_FILE_SNAPSHOT_CHARS);
+        }
+      }
     } catch {
       after = null;
     }
@@ -719,11 +811,15 @@ export class OlkilOpencodeRuntimeHost {
       return;
     }
     state.activities.push(row);
+    if (state.activities.length > MAX_LIVE_ACTIVITIES) {
+      const keep = state.activities.filter((a) => a.id === 'thinking_live' || !a.done);
+      state.activities = keep.slice(-MAX_LIVE_ACTIVITIES);
+    }
   }
 
   private noteFileTouch(live: LiveRun, filePath: string): void {
     const abs = resolveWorkspacePath(live.directory, filePath);
-    if (!abs) {
+    if (!abs || !isInsideWorkspace(live.directory, abs)) {
       return;
     }
     this.recordDiskChange(live, abs);
@@ -762,13 +858,16 @@ export class OlkilOpencodeRuntimeHost {
         continue;
       }
       const abs = resolveWorkspacePath(directory, filePath);
+      if (!isInsideWorkspace(directory, abs)) {
+        continue;
+      }
       const kind: FileChangeKind = diff.before == null || diff.before === '' ? 'create' : 'edit';
       this.upsertFileChange(state, {
         id: `diff_${abs}`,
         kind,
         path: abs,
-        beforeContent: diff.before ?? null,
-        afterContent: diff.after ?? null,
+        beforeContent: clipSnapshot(diff.before ?? null),
+        afterContent: clipSnapshot(diff.after ?? null),
       });
     }
   }
@@ -851,6 +950,29 @@ export class OlkilOpencodeRuntimeHost {
       return;
     }
     this.mcpKey = key;
+    if (this.lives.size > 0) {
+      return;
+    }
+    this.sidecar?.close();
+    this.sidecar = null;
+    this.eventsBound = false;
+  }
+
+  private syncCustomModels(models?: CustomModelEndpoint[]) {
+    const enabled = (models || []).filter((m) => m?.id && m.model && m.baseUrl && m.apiKey);
+    const key = JSON.stringify(
+      enabled.map((m) => ({
+        id: m.id,
+        model: m.model,
+        baseUrl: m.baseUrl,
+        apiKey: m.apiKey,
+      })),
+    );
+    this.lastCustomModels = enabled;
+    if (key === this.customKey) {
+      return;
+    }
+    this.customKey = key;
     if (this.lives.size > 0) {
       return;
     }
@@ -949,7 +1071,8 @@ export function getOlkilOpencodeRuntime(): OlkilOpencodeRuntimeHost {
   return host;
 }
 
-export function scheduleOpencodePrewarm(delayMs = 400): void {
+/** Warm OpenCode after the window is usable. Binary download still starts immediately. */
+export function scheduleOpencodePrewarm(delayMs = 12_000): void {
   startOpencodeDownload();
   setTimeout(() => {
     void getOlkilOpencodeRuntime().prewarm().catch(() => undefined);

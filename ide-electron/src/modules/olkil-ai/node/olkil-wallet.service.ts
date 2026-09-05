@@ -533,7 +533,7 @@ export async function getDeepseekAccess(): Promise<DeepseekAccess> {
 }
 
 export async function assertOlkilWallet(provider: AiProviderId): Promise<void> {
-  if (isLocalProvider(provider) || provider === 'poolside') {
+  if (isLocalProvider(provider) || provider === 'poolside' || provider === 'custom') {
     return;
   }
 

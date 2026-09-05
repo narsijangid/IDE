@@ -18,11 +18,14 @@ import {
   ChatModeSetting,
   IOlkilSettingsService,
   OLKIL_SETTINGS_SECTION_KEY,
+  OlkilCustomModel,
   OlkilMcpServer,
   OlkilSettings,
   SETTINGS_NAV,
   SettingsSectionId,
+  customModelCatalogId,
   isModelEnabledInSettings,
+  newCustomModelId,
   newMcpServerId,
   toggleEnabledModelId,
 } from '../common/settings';
@@ -710,7 +713,7 @@ function ModelsPane({
     <div className={styles.pane}>
       <h1 className={styles.paneTitle}>Models</h1>
       <p className={styles.paneDesc}>
-        Toggle which models appear in the chat dropdown. At least one model must stay on.
+        Toggle which built-in models appear in the chat dropdown. At least one built-in model must stay on.
       </p>
       <div className={styles.card}>
         <div className={styles.modelList}>
@@ -757,6 +760,245 @@ function ModelsPane({
           })}
         </div>
       </div>
+      <CustomModelsSection settings={settings} patch={patch} />
+    </div>
+  );
+}
+
+function CustomModelsSection({
+  settings,
+  patch,
+}: {
+  settings: OlkilSettings;
+  patch: (partial: Partial<OlkilSettings>) => void;
+}) {
+  const auth = useInjectable<IOlkilAuthService>(IOlkilAuthService);
+  const aiNode = useInjectable<IOlkilAiNodeService>(OlkilAiNodeServicePath);
+  const [signedIn, setSignedIn] = useState(Boolean(auth.getUser()?.uid));
+  const [label, setLabel] = useState('');
+  const [baseUrl, setBaseUrl] = useState('');
+  const [model, setModel] = useState('');
+  const [apiKey, setApiKey] = useState('');
+  const [showKey, setShowKey] = useState(false);
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [probe, setProbe] = useState<{ status: 'idle' | 'testing' | 'ok' | 'error'; text: string }>({
+    status: 'idle',
+    text: '',
+  });
+
+  useEffect(() => {
+    const sub = auth.onDidChangeSession(() => setSignedIn(Boolean(auth.getUser()?.uid)));
+    return () => sub.dispose();
+  }, [auth]);
+
+  const resetForm = () => {
+    setLabel('');
+    setBaseUrl('');
+    setModel('');
+    setApiKey('');
+    setShowKey(false);
+    setEditingId(null);
+    setProbe({ status: 'idle', text: '' });
+  };
+
+  const startEdit = (item: OlkilCustomModel) => {
+    setEditingId(item.id);
+    setLabel(item.label);
+    setBaseUrl(item.baseUrl);
+    setModel(item.model);
+    setApiKey(item.apiKey);
+    setShowKey(false);
+    setProbe({ status: 'idle', text: '' });
+  };
+
+  const saveModel = () => {
+    const trimmedModel = model.trim();
+    const trimmedUrl = baseUrl.trim();
+    const trimmedKey = apiKey.trim();
+    const trimmedLabel = (label.trim() || trimmedModel).trim();
+    if (!trimmedUrl || !trimmedModel || !trimmedKey) {
+      setProbe({ status: 'error', text: 'Name is optional — base URL, model id, and API key are required.' });
+      return;
+    }
+    const next: OlkilCustomModel = {
+      id: editingId || newCustomModelId(),
+      label: trimmedLabel,
+      model: trimmedModel,
+      baseUrl: trimmedUrl,
+      apiKey: trimmedKey,
+      enabled: true,
+      updatedAt: Date.now(),
+    };
+    const list = settings.customModels || [];
+    const customModels = editingId
+      ? list.map((item) => (item.id === editingId ? { ...item, ...next, enabled: item.enabled } : item))
+      : [...list, next];
+    const catalogId = customModelCatalogId(next.id);
+    const enabledModelIds =
+      settings.enabledModelIds.length && !settings.enabledModelIds.includes(catalogId)
+        ? [...settings.enabledModelIds, catalogId]
+        : settings.enabledModelIds;
+    patch({ customModels, enabledModelIds });
+    resetForm();
+  };
+
+  const testConnection = async () => {
+    setProbe({ status: 'testing', text: 'Checking endpoint…' });
+    try {
+      const result = await aiNode.probeCustomModel({
+        baseUrl: baseUrl.trim(),
+        apiKey: apiKey.trim(),
+        model: model.trim(),
+      });
+      setProbe({
+        status: result.ok ? 'ok' : 'error',
+        text: result.ok ? result.hint || 'Connected.' : result.error || 'Could not connect.',
+      });
+    } catch (err: any) {
+      setProbe({ status: 'error', text: err?.message || 'Could not reach the endpoint.' });
+    }
+  };
+
+  const update = (id: string, partial: Partial<OlkilCustomModel>) => {
+    patch({
+      customModels: (settings.customModels || []).map((item) =>
+        item.id === id ? { ...item, ...partial, updatedAt: Date.now() } : item,
+      ),
+    });
+  };
+
+  const remove = (id: string) => {
+    const catalogId = customModelCatalogId(id);
+    patch({
+      customModels: (settings.customModels || []).filter((item) => item.id !== id),
+      enabledModelIds: settings.enabledModelIds.filter((item) => item !== catalogId),
+    });
+    if (editingId === id) {
+      resetForm();
+    }
+  };
+
+  const canSave = Boolean(baseUrl.trim() && model.trim() && apiKey.trim());
+
+  return (
+    <div className={styles.card} style={{ marginTop: 16 }}>
+      <div className={styles.block}>
+        <p className={styles.rowTitle}>Your models</p>
+        <p className={styles.rowDesc}>
+          Add any OpenAI-compatible API — OpenAI, OpenRouter, Groq, Together, Fireworks, or a local server. Uses your
+          own key and is not billed on your OLKIL plan.
+          {signedIn
+            ? ' Saved to your signed-in account so it follows you on other devices.'
+            : ' Saved on this device. Sign in to keep it with your account.'}
+        </p>
+      </div>
+      <div className={styles.formGrid}>
+        <div>
+          <label className={styles.label}>Display name</label>
+          <input
+            className={styles.input}
+            value={label}
+            placeholder="GPT-4o"
+            onChange={(e) => setLabel(e.target.value)}
+          />
+        </div>
+        <div>
+          <label className={styles.label}>Model id</label>
+          <input
+            className={styles.input}
+            value={model}
+            placeholder="gpt-4o"
+            onChange={(e) => setModel(e.target.value)}
+          />
+        </div>
+        <div className={styles.formGridFull}>
+          <label className={styles.label}>API base URL</label>
+          <input
+            className={styles.input}
+            value={baseUrl}
+            placeholder="https://api.openai.com/v1"
+            onChange={(e) => setBaseUrl(e.target.value)}
+          />
+        </div>
+        <div className={styles.formGridFull}>
+          <label className={styles.label}>API key</label>
+          <div className={styles.secretRow}>
+            <input
+              className={styles.input}
+              type={showKey ? 'text' : 'password'}
+              value={apiKey}
+              placeholder="sk-…"
+              autoComplete="off"
+              onChange={(e) => setApiKey(e.target.value)}
+            />
+            <button type="button" className={`${styles.btn} ${styles.btnGhost}`} onClick={() => setShowKey((v) => !v)}>
+              {showKey ? 'Hide' : 'Show'}
+            </button>
+          </div>
+        </div>
+        <div className={styles.formGridFull}>
+          <div className={styles.customActions}>
+            <button
+              type="button"
+              className={`${styles.btn} ${styles.btnPrimary}`}
+              disabled={!canSave}
+              onClick={saveModel}
+            >
+              {editingId ? 'Save model' : 'Add model'}
+            </button>
+            <button
+              type="button"
+              className={`${styles.btn} ${styles.btnGhost}`}
+              disabled={!canSave || probe.status === 'testing'}
+              onClick={() => void testConnection()}
+            >
+              {probe.status === 'testing' ? 'Testing…' : 'Test connection'}
+            </button>
+            {editingId ? (
+              <button type="button" className={`${styles.btn} ${styles.btnGhost}`} onClick={resetForm}>
+                Cancel
+              </button>
+            ) : null}
+          </div>
+          {probe.text ? (
+            <p className={probe.status === 'ok' ? styles.probeOk : styles.probeErr}>{probe.text}</p>
+          ) : (
+            <p className={styles.hint}>
+              Base URL is the provider host, not a chat page — usually it ends in <code>/v1</code>.
+            </p>
+          )}
+        </div>
+      </div>
+      {(settings.customModels || []).length === 0 ? (
+        <div className={styles.block}>
+          <p className={styles.rowDesc}>No custom models yet. Add one above and it appears in the chat dropdown.</p>
+        </div>
+      ) : (
+        <div className={styles.mcpList}>
+          {(settings.customModels || []).map((item) => (
+            <div key={item.id} className={styles.mcpItem}>
+              <div>
+                <div className={styles.mcpNameRow}>
+                  <span className={styles.mcpName}>{item.label || item.model}</span>
+                  <span className={styles.mcpBadge}>CUSTOM</span>
+                </div>
+                <div className={styles.mcpMeta}>
+                  {item.model} · {item.baseUrl}
+                </div>
+              </div>
+              <div className={styles.mcpActions}>
+                <Switch on={item.enabled !== false} onChange={(enabled) => update(item.id, { enabled })} />
+                <button type="button" className={`${styles.btn} ${styles.btnGhost}`} onClick={() => startEdit(item)}>
+                  Edit
+                </button>
+                <button type="button" className={`${styles.btn} ${styles.btnDanger}`} onClick={() => remove(item.id)}>
+                  Remove
+                </button>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   );
 }

@@ -17,8 +17,9 @@ import {
 } from '../common/virtual-office';
 import { IOlkilAiNodeService, OlkilAiNodeServicePath } from '../common';
 import { IOlkilSettingsService } from '../../olkil-auth/common/settings';
+import { customModelCatalogId } from '../common/models';
 
-const POLL_MS = 400;
+const POLL_MS = 500;
 const MAX_ACTIVITIES = 20;
 
 let taskSeq = 0;
@@ -261,6 +262,15 @@ export class OlkilVirtualOfficeService extends Disposable implements IOlkilVirtu
           terminalAllowlist: saved.terminalAllowlist,
           mcpServers: saved.mcpServers.filter((server) => server.enabled),
           mcpDiscoveredDisabled: saved.mcpDiscoveredDisabled,
+          customModels: (saved.customModels || [])
+            .filter((m) => m.enabled !== false)
+            .map((m) => ({
+              id: customModelCatalogId(m.id),
+              label: m.label || m.model,
+              model: m.model,
+              baseUrl: m.baseUrl,
+              apiKey: m.apiKey || '',
+            })),
           conversationId: `vo:${task.id}`,
         });
       } catch (err: any) {

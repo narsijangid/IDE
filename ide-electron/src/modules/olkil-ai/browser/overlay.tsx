@@ -88,6 +88,7 @@ export const OlkilAiOverlay = () => {
   const [expanded, setExpanded] = useState(ui.expanded);
   const [pinned, setPinned] = useState(ui.pinned);
   const [busy, setBusy] = useState(chat.busy);
+  const [liveTesting, setLiveTesting] = useState(chat.liveTesting);
   const [liveStatus, setLiveStatus] = useState(chat.status);
   const [pendingCount, setPendingCount] = useState(chat.pendingChanges.length);
   const [history, setHistory] = useState(chat.chatHistory || []);
@@ -115,6 +116,7 @@ export const OlkilAiOverlay = () => {
   useEffect(() => {
     const d = chat.onDidChange(() => {
       setBusy(chat.busy);
+      setLiveTesting(chat.liveTesting);
       setLiveStatus(chat.status);
       setPendingCount(chat.pendingChanges.length);
       setHistory(chat.chatHistory || []);
@@ -224,14 +226,16 @@ export const OlkilAiOverlay = () => {
   );
 
   const workspaceRoot = useWorkspaceRoot();
+  const chromeBusy = busy || liveTesting;
   const busyStatusLabel = useLiveStatusLabel({
-    active: busy,
-    status: liveStatus,
+    active: chromeBusy,
+    status:
+      chromeBusy && (!liveStatus || /opening test browser/i.test(liveStatus)) ? 'Thinking' : liveStatus,
     workspaceRoot,
   });
 
   useEffect(() => {
-    if (!busy || !busyStatusLabel || busyStatusLabel === liveLabelPrevRef.current) {
+    if (!chromeBusy || !busyStatusLabel || busyStatusLabel === liveLabelPrevRef.current) {
       liveLabelPrevRef.current = busyStatusLabel;
       return;
     }
@@ -239,9 +243,9 @@ export const OlkilAiOverlay = () => {
     setLiveLabelAnimating(true);
     const t = window.setTimeout(() => setLiveLabelAnimating(false), 480);
     return () => window.clearTimeout(t);
-  }, [busy, busyStatusLabel]);
+  }, [chromeBusy, busyStatusLabel]);
 
-  const statusLabel = busy
+  const statusLabel = chromeBusy
     ? busyStatusLabel || 'Thinking'
     : pendingCount > 0
       ? `${pendingCount} to review`
@@ -249,8 +253,8 @@ export const OlkilAiOverlay = () => {
 
   const liveTagClass = cx(
     styles.liveTag,
-    busy && styles.liveTagBusy,
-    busy && liveLabelAnimating && styles.liveTagSwap,
+    chromeBusy && styles.liveTagBusy,
+    chromeBusy && liveLabelAnimating && styles.liveTagSwap,
   );
 
   return (
@@ -264,7 +268,9 @@ export const OlkilAiOverlay = () => {
         tabIndex={state === 'closed' ? 0 : -1}
       >
         <AiSparkIcon size={18} className={styles.chipGlyph} />
-        {busy || pendingCount > 0 ? <span className={cx(styles.chipDot, busy && styles.chipDotBusy)} /> : null}
+        {busy || liveTesting || pendingCount > 0 ? (
+          <span className={cx(styles.chipDot, chromeBusy && styles.chipDotBusy)} />
+        ) : null}
       </button>
 
       <button
@@ -277,7 +283,7 @@ export const OlkilAiOverlay = () => {
       >
         <AiSparkIcon size={15} className={styles.chipGlyph} />
         <span className={styles.pillLabel}>{statusLabel}</span>
-        <span className={cx(styles.chipDot, styles.pillDot, busy && styles.chipDotBusy)} />
+        <span className={cx(styles.chipDot, styles.pillDot, chromeBusy && styles.chipDotBusy)} />
       </button>
 
       {mounted ? (
@@ -308,7 +314,7 @@ export const OlkilAiOverlay = () => {
               <span className={styles.brandSub}>Agent</span>
             </span>
 
-            <span key={busy ? statusLabel : 'idle'} className={liveTagClass}>
+            <span key={chromeBusy ? statusLabel : 'idle'} className={liveTagClass}>
               {statusLabel}
             </span>
 

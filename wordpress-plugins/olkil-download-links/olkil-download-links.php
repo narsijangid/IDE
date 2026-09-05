@@ -2,7 +2,7 @@
 /**
  * Plugin Name: OLKIL Download Links
  * Description: Sets Windows / macOS / Linux download URLs for OLKIL desktop installers. Mirrors installers into /downloads/.
- * Version: 1.3.4
+ * Version: 1.3.6
  * Author: OLKIL
  */
 
@@ -11,15 +11,15 @@ if ( ! defined( 'ABSPATH' ) ) {
 }
 
 function olkil_dl_app_version() {
+	return '1.3.25';
+}
+
+/**
+ * Last Hostinger-hosted Mac/Linux build. Windows is 1.3.25; Mac/Linux
+ * were not packed for 1.3.25. GitHub Releases are private.
+ */
+function olkil_dl_maclin_version() {
 	return '1.3.22';
-}
-
-function olkil_dl_release_tag() {
-	return 'v' . olkil_dl_app_version();
-}
-
-function olkil_dl_github_base() {
-	return 'https://github.com/narsijangid/IDE/releases/download/' . olkil_dl_release_tag();
 }
 
 /**
@@ -28,13 +28,15 @@ function olkil_dl_github_base() {
  * @return array<string,string> os => filename
  */
 function olkil_dl_filenames() {
-	$v = olkil_dl_app_version();
+	$win = olkil_dl_app_version();
+	$mac = olkil_dl_maclin_version();
 	return array(
-		'windows'        => 'OLKIL-' . $v . '.exe',
-		'macos'          => 'OLKIL-' . $v . '-arm64.dmg',
-		'macos_intel'    => 'OLKIL-' . $v . '-x64.dmg',
-		'linux'          => 'OLKIL-' . $v . '.deb',
-		'linux_appimage' => 'OLKIL-' . $v . '.AppImage',
+		'windows'        => 'OLKIL-' . $win . '.exe',
+		'macos'          => 'OLKIL-' . $mac . '-arm64.dmg',
+		'macos_intel'    => 'OLKIL-' . $mac . '-x64.dmg',
+		// Hostinger WAF 403s newer .deb files; AppImage is the public Linux build.
+		'linux'          => 'OLKIL-' . $mac . '.AppImage',
+		'linux_appimage' => 'OLKIL-' . $mac . '.AppImage',
 	);
 }
 
@@ -48,24 +50,15 @@ function olkil_dl_has_local( $filename ) {
 }
 
 /**
- * Platform → installer URL map.
- * Prefer Hostinger /downloads/ when present; else GitHub Release.
+ * Platform → installer URL map. Always Hostinger /downloads/.
  *
  * @return array<string,string>
  */
 function olkil_dl_urls() {
 	$files = olkil_dl_filenames();
-	$gh    = olkil_dl_github_base();
 	$out   = array();
 	foreach ( $files as $os => $name ) {
-		// Hostinger WAF 403s this .deb (OpenCode sidecar). Keep GitHub for .deb.
-		if ( $os === 'linux' ) {
-			$out[ $os ] = $gh . '/' . $name;
-			continue;
-		}
-		$out[ $os ] = olkil_dl_has_local( $name )
-			? home_url( '/downloads/' . $name )
-			: $gh . '/' . $name;
+		$out[ $os ] = home_url( '/downloads/' . $name );
 	}
 	return $out;
 }
@@ -97,80 +90,11 @@ function olkil_dl_mirror_installers() {
 	}
 }
 
-/**
- * Pull missing Mac/Linux installers from GitHub onto Hostinger /downloads/.
- * Runs once per version (cron/admin) so large MCP uploads are not required.
- */
-function olkil_dl_fetch_missing_from_github() {
-	if ( get_option( 'olkil_dl_fetched_v' ) === olkil_dl_app_version() ) {
-		return;
-	}
-	if ( ! function_exists( 'download_url' ) ) {
-		require_once ABSPATH . 'wp-admin/includes/file.php';
-	}
-	$dest_dir = trailingslashit( ABSPATH ) . 'downloads/';
-	if ( ! is_dir( $dest_dir ) ) {
-		wp_mkdir_p( $dest_dir );
-	}
-	$gh    = olkil_dl_github_base();
-	$files = olkil_dl_filenames();
-	$ok    = true;
-	foreach ( $files as $os => $name ) {
-		if ( $os === 'linux' ) {
-			continue;
-		}
-		if ( olkil_dl_has_local( $name ) ) {
-			continue;
-		}
-		$url = $gh . '/' . $name;
-		$tmp = download_url( $url, 600 );
-		if ( is_wp_error( $tmp ) ) {
-			$ok = false;
-			continue;
-		}
-		$target = $dest_dir . $name;
-		// phpcs:ignore WordPress.WP.AlternativeFunctions.rename_rename
-		if ( ! @rename( $tmp, $target ) ) {
-			copy( $tmp, $target );
-			@unlink( $tmp );
-		}
-		if ( ! olkil_dl_has_local( $name ) ) {
-			$ok = false;
-		}
-	}
-	if ( $ok ) {
-		update_option( 'olkil_dl_fetched_v', olkil_dl_app_version(), false );
-	}
-}
+register_activation_hook( __FILE__, 'olkil_dl_mirror_installers' );
 
-register_activation_hook( __FILE__, function () {
-	olkil_dl_mirror_installers();
-	olkil_dl_fetch_missing_from_github();
-} );
+add_action( 'admin_init', 'olkil_dl_mirror_installers' );
 
-add_action( 'admin_init', function () {
-	olkil_dl_mirror_installers();
-	olkil_dl_fetch_missing_from_github();
-} );
-
-add_action( 'init', function () {
-	olkil_dl_mirror_installers();
-	// Avoid blocking every front-page request with huge downloads.
-	if ( is_admin() || wp_doing_cron() ) {
-		olkil_dl_fetch_missing_from_github();
-	}
-}, 20 );
-
-// One background fetch shortly after deploy (non-admin visitors won't wait).
-add_action( 'wp_loaded', function () {
-	if ( get_option( 'olkil_dl_fetched_v' ) === olkil_dl_app_version() ) {
-		return;
-	}
-	if ( ! wp_next_scheduled( 'olkil_dl_fetch_event' ) ) {
-		wp_schedule_single_event( time() + 30, 'olkil_dl_fetch_event' );
-	}
-} );
-add_action( 'olkil_dl_fetch_event', 'olkil_dl_fetch_missing_from_github' );
+add_action( 'init', 'olkil_dl_mirror_installers', 20 );
 
 add_filter( 'olkil_download_urls', function ( $urls ) {
 	return array_merge( is_array( $urls ) ? $urls : array(), olkil_dl_urls() );

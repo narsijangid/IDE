@@ -2,7 +2,7 @@
 /**
  * Plugin Name: OLKIL Auth Fix
  * Description: Patches IDE auth success UI (loopback callback) until theme deploy catches up.
- * Version: 1.0.3
+ * Version: 1.0.7
  * Author: OLKIL
  */
 
@@ -10,7 +10,7 @@ if ( ! defined( 'ABSPATH' ) ) {
 	exit;
 }
 
-define( 'OLKIL_AUTH_FIX_VERSION', '1.0.3' );
+define( 'OLKIL_AUTH_FIX_VERSION', '1.0.7' );
 define( 'OLKIL_AUTH_FIX_URL', plugin_dir_url( __FILE__ ) );
 
 add_action( 'wp_enqueue_scripts', function () {
@@ -45,9 +45,14 @@ add_action( 'wp_footer', function () {
 		.olkil-auth-done{display:grid;gap:.75rem;margin:0 0 1.25rem}
 		.olkil-auth-done[hidden]{display:none!important}
 		.olkil-auth-done .olkil-btn{width:100%;justify-content:center}
+		.olkil-auth-email,#olkil-auth-github,#olkil-auth-email-form{display:none!important}
 	</style>
 	<script>
 	(function(){
+	  var email=document.querySelector('.olkil-auth-email');
+	  if(email) email.remove();
+	  var gh=document.getElementById('olkil-auth-github');
+	  if(gh) gh.remove();
 	  if(document.getElementById('olkil-auth-done')) return;
 	  var card=document.querySelector('.olkil-auth-card');
 	  if(!card) return;

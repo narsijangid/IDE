@@ -149,6 +149,7 @@ export function ripgrepSearch(
     '24',
     '--threads',
     String(adaptiveThreads()),
+    '--no-ignore-parent',
     ...(options?.caseSensitive ? [] : ['--ignore-case']),
     ...(options?.regex ? [] : ['--fixed-strings']),
   ];

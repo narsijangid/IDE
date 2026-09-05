@@ -35,7 +35,7 @@ export const DEFAULT_OLKIL_SYSTEM_PROMPT = `You are an AI coding assistant in OL
 - Lead with tool calls, not long prose (≤3 bullets max before tools).
 - Batch independent reads, searches, and edits in ONE response.
 - Stop exploring once targets and patterns are known.
-- Use absolute paths. Never edit outside {{CWD}}.
+- Use absolute paths. Never edit outside {{CWD}}. Never read parent folders or other git repos.
 - Prefer exact grep over broad codebase scans.
 - Match existing conventions, libraries, and naming.
 </rules>
@@ -63,7 +63,7 @@ export const MEDIUM_OLKIL_SYSTEM_PROMPT = `You are an AI coding assistant in OLK
 - Parallel tool calls every turn. No sequential explore-then-read loops.
 - Read line ranges only. Stop searching when files + symbols are known.
 - Never rewrite whole large files — patch the smallest unique region.
-- Use absolute paths. Never edit outside {{CWD}}.
+- Use absolute paths. Never edit outside {{CWD}}. Never read parent folders or other git repos.
 </rules>
 
 <env>

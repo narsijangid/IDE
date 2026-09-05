@@ -45,6 +45,14 @@ export interface ChatCompletionRequest {
   modelId?: string;
   /** Override default max_tokens (helps avoid provider 500s on huge replies). */
   maxTokens?: number;
+  /** User-added OpenAI-compatible models for this request (BYOK). */
+  customModels?: Array<{
+    id: string;
+    label: string;
+    model: string;
+    baseUrl: string;
+    apiKey: string;
+  }>;
 }
 
 /** Files/folders attached via @mention or drag-drop for agent context. */
@@ -317,6 +325,8 @@ export interface BrowserActionResult {
   snapshot: string;
   screenshotPath?: string;
   consoleErrors: BrowserConsoleEntry[];
+  /** console.log / info — user can also see these in the headed DevTools Console. */
+  consoleLogs?: BrowserConsoleEntry[];
   networkFailures: BrowserNetworkFailure[];
   /** Recent XHR/fetch (+ errors) for accurate API diagnosis without DevTools UI. */
   networkRequests?: BrowserNetworkRequest[];
@@ -444,6 +454,12 @@ export interface IOlkilAiNodeService {
   clineCancel(runId: string): Promise<boolean>;
   /** MCP servers discovered from Cursor/VS Code/extension mcp.json files (no secrets). */
   listDiscoveredMcpServers(workspaceRoot?: string): Promise<DiscoveredMcpServer[]>;
+  /** Probe an OpenAI-compatible custom endpoint before saving. */
+  probeCustomModel(input: {
+    baseUrl: string;
+    apiKey: string;
+    model: string;
+  }): Promise<{ ok: boolean; error?: string; hint?: string }>;
 }
 
 export interface DiscoveredMcpServer {
@@ -486,6 +502,14 @@ export interface ClineEngineRunRequest {
   }>;
   /** Discovered MCP ids the user turned off in OLKIL Settings. */
   mcpDiscoveredDisabled?: string[];
+  /** User-added OpenAI-compatible models (own key + base URL). */
+  customModels?: Array<{
+    id: string;
+    label: string;
+    model: string;
+    baseUrl: string;
+    apiKey: string;
+  }>;
   /** Stable Olkil chat id — OpenCode reuses this session so large repos are not re-explored every turn. */
   conversationId?: string;
 }

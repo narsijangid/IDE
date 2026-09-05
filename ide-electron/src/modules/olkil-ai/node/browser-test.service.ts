@@ -46,10 +46,10 @@ type DevToolsPanel = 'console' | 'network' | 'elements' | 'sources' | 'applicati
 
 const OLKIL_PINK_RGB = '254,1,154';
 /** Narrow right-dock width — “thoda sa”, not half the window. */
-const DEVTOOLS_DOCK_PX = 320;
-const WINDOW_W = 1180;
-const WINDOW_H = 780;
-const VIEWPORT_W = 1080;
+const DEVTOOLS_DOCK_PX = 360;
+const WINDOW_W = 1420;
+const WINDOW_H = 860;
+const VIEWPORT_W = 1100;
 const VIEWPORT_H = 720;
 
 function sleep(ms: number) {
@@ -124,6 +124,35 @@ function isApiLike(resourceType: string, url: string): boolean {
   }
   // Common API paths even if classified as document/other
   return /\/(api|graphql|rest|v\d+)\b/i.test(url);
+}
+
+function isNoiseNetwork(url: string, resourceType?: string, status?: number): boolean {
+  if (/\/favicon\.ico(\?|$)/i.test(url)) {
+    return true;
+  }
+  if (/hot-update|webpack-hmr|\/@vite\/client|\/__webpack|sockjs-node|\/_next\/webpack/i.test(url)) {
+    return true;
+  }
+  if ((resourceType === 'image' || resourceType === 'font') && status === 404) {
+    return true;
+  }
+  return false;
+}
+
+function isNoiseConsole(text: string): boolean {
+  return /Download the React DevTools|\[HMR\]|\[vite\] connected|webpack compiled/i.test(text || '');
+}
+
+function sameAppUrl(a: string, b: string): boolean {
+  try {
+    const ua = new URL(a);
+    const ub = new URL(b);
+    const pathA = ua.pathname.replace(/\/+$/, '') || '/';
+    const pathB = ub.pathname.replace(/\/+$/, '') || '/';
+    return ua.origin === ub.origin && pathA === pathB;
+  } catch {
+    return (a || '').replace(/\/+$/, '') === (b || '').replace(/\/+$/, '');
+  }
 }
 
 async function waitForHttp(url: string, timeoutMs: number): Promise<{ ok: boolean; status?: number; error?: string }> {
@@ -290,6 +319,7 @@ export class BrowserTestService {
   private lastRevealAt = 0;
   /** Coalesce concurrent launch() calls so Live Test never double-opens. */
   private launchInFlight: Promise<BrowserActionResult> | null = null;
+  private devtoolsEnsure: Promise<void> | null = null;
 
   constructor(commands: CommandRunner) {
     this.commands = commands;
@@ -441,15 +471,17 @@ export class BrowserTestService {
   private attachPageListeners(page: Page) {
     page.on('console', (msg) => {
       const type = msg.type();
-      if (type === 'error' || type === 'warning') {
-        this.consoleLog.push({
-          type,
-          text: truncate(msg.text(), 800),
-          timestamp: Date.now(),
-        });
-        if (this.consoleLog.length > 120) {
-          this.consoleLog.shift();
-        }
+      const text = truncate(msg.text(), 800);
+      if (!text || isNoiseConsole(text)) {
+        return;
+      }
+      this.consoleLog.push({
+        type,
+        text,
+        timestamp: Date.now(),
+      });
+      if (this.consoleLog.length > 200) {
+        this.consoleLog.shift();
       }
     });
     page.on('pageerror', (err) => {
@@ -458,7 +490,7 @@ export class BrowserTestService {
         text: truncate(err?.message || String(err), 800),
         timestamp: Date.now(),
       });
-      if (this.consoleLog.length > 120) {
+      if (this.consoleLog.length > 200) {
         this.consoleLog.shift();
       }
     });
@@ -472,6 +504,9 @@ export class BrowserTestService {
       const resourceType = req.resourceType();
       const url = truncate(res.url(), 300);
       const method = req.method();
+      if (isNoiseNetwork(url, resourceType, status)) {
+        return;
+      }
       const entry: NetworkRequestEntry = {
         url,
         method,
@@ -502,6 +537,9 @@ export class BrowserTestService {
       const method = req.method();
       const error = truncate(req.failure()?.errorText || 'requestfailed', 200);
       const resourceType = req.resourceType();
+      if (isNoiseNetwork(url, resourceType)) {
+        return;
+      }
       this.networkFailures.push({
         url,
         method,
@@ -744,13 +782,15 @@ export class BrowserTestService {
 
   async launch(headed = true, forceNew = false): Promise<BrowserActionResult> {
     if (!forceNew && this.isAlive()) {
+      void this.ensureDevToolsOpen('console').catch(() => undefined);
       return {
         ok: true,
         action: 'launch',
-        message: 'Browser already open — reused (DevTools preserved).',
+        message: 'Browser already open — reused the same window (DevTools kept).',
         url: this.page?.url() || this.lastUrl,
         snapshot: '',
-        consoleErrors: this.recentConsole(),
+        consoleErrors: this.recentErrors(),
+        consoleLogs: this.recentLogs(),
         networkFailures: this.recentNetwork(),
         networkRequests: this.recentApiRequests(),
         devtoolsOpen: this.devtoolsOpen,
@@ -775,13 +815,15 @@ export class BrowserTestService {
     const pw = this.loadPlaywright();
 
     if (!forceNew && this.isAlive()) {
+      void this.ensureDevToolsOpen('console').catch(() => undefined);
       return {
         ok: true,
         action: 'launch',
-        message: 'Browser already open — reused (DevTools preserved).',
+        message: 'Browser already open — reused the same window (DevTools kept).',
         url: this.page?.url() || this.lastUrl,
         snapshot: '',
-        consoleErrors: this.recentConsole(),
+        consoleErrors: this.recentErrors(),
+        consoleLogs: this.recentLogs(),
         networkFailures: this.recentNetwork(),
         networkRequests: this.recentApiRequests(),
         devtoolsOpen: this.devtoolsOpen,
@@ -839,15 +881,18 @@ export class BrowserTestService {
       }
 
       this.attachPageListeners(this.page);
-      // Non-blocking: window already visible; wire CDP / bounds in background.
+      // Non-blocking: window already visible; wire CDP / bounds / DevTools in background.
       void this.attachCdp(this.page).catch(() => undefined);
       void this.positionWindowFast().catch(() => undefined);
+      if (headed) {
+        void this.ensureDevToolsOpen('console').catch(() => undefined);
+      }
 
       return {
         ok: true,
         action: 'launch',
         message: headed
-          ? 'Test Browser launched. DevTools closed by default — use browser_devtools when needed.'
+          ? 'Test Browser launched. DevTools Console is opening on the right so you can watch console.log / errors.'
           : 'Test Browser launched (headless).',
         url: '',
         snapshot: '',
@@ -914,8 +959,18 @@ export class BrowserTestService {
     return this.page;
   }
 
-  private recentConsole(limit = 30): ConsoleEntry[] {
+  private recentConsole(limit = 40): ConsoleEntry[] {
     return this.consoleLog.slice(-limit);
+  }
+
+  private recentErrors(limit = 30): ConsoleEntry[] {
+    return this.consoleLog
+      .filter((e) => e.type === 'error' || e.type === 'warning' || e.type === 'pageerror')
+      .slice(-limit);
+  }
+
+  private recentLogs(limit = 40): ConsoleEntry[] {
+    return this.consoleLog.filter((e) => e.type === 'log' || e.type === 'info' || e.type === 'debug').slice(-limit);
   }
 
   private recentNetwork(limit = 20): NetworkFailure[] {
@@ -1021,7 +1076,8 @@ export class BrowserTestService {
       title: page && !page.isClosed() ? await page.title().catch(() => '') : '',
       snapshot,
       screenshotPath,
-      consoleErrors: this.recentConsole(),
+      consoleErrors: this.recentErrors(),
+      consoleLogs: this.recentLogs(),
       networkFailures: this.recentNetwork(),
       networkRequests: this.recentApiRequests(),
       devtoolsOpen: this.devtoolsOpen,
@@ -1070,7 +1126,7 @@ export class BrowserTestService {
 
   /**
    * Open / close / toggle Chromium DevTools.
-   * Default: closed. Opens docked RIGHT (~320px) only when agent asks.
+   * Live Test opens Console on the right so the user can watch console.log.
    */
   async devtools(req: BrowserDevToolsRequest = {}): Promise<BrowserActionResult> {
     const page = this.requirePage();
@@ -1151,11 +1207,44 @@ export class BrowserTestService {
     }
   }
 
+  /** Keep DevTools visible for QA — Console by default, switchable to Network. */
+  private async ensureDevToolsOpen(panel: DevToolsPanel = 'console'): Promise<void> {
+    if (!this.page || this.page.isClosed()) {
+      return;
+    }
+    if (this.devtoolsOpen && this.activePanel === panel) {
+      return;
+    }
+    if (this.devtoolsEnsure) {
+      await this.devtoolsEnsure;
+      if (this.devtoolsOpen && this.activePanel === panel) {
+        return;
+      }
+    }
+    this.devtoolsEnsure = (async () => {
+      await sleep(280);
+      if (!this.page || this.page.isClosed()) {
+        return;
+      }
+      await this.devtools({ action: 'open', panel }).catch(() => undefined);
+    })().finally(() => {
+      this.devtoolsEnsure = null;
+    });
+    await this.devtoolsEnsure;
+  }
+
   async goto(url: string): Promise<BrowserActionResult> {
     const page = this.requirePage();
     const target = url.trim();
     if (!/^https?:\/\//i.test(target)) {
       throw new Error(`Invalid URL: ${url}`);
+    }
+    const current = page.url() || '';
+    if (current && current !== 'about:blank' && sameAppUrl(current, target)) {
+      this.lastUrl = target;
+      return this.baseResult('goto', `Already on ${target} — reused the same page (no reload).`, {
+        screenshot: false,
+      });
     }
     this.lastUrl = target;
     try {
@@ -1354,36 +1443,41 @@ export class BrowserTestService {
 
   async consoleDump(): Promise<BrowserActionResult> {
     this.requirePage();
-    const errors = this.recentConsole(50);
+    await this.ensureDevToolsOpen('console').catch(() => undefined);
+    const errors = this.recentErrors(50);
+    const logs = this.recentLogs(40);
     const nets = this.recentNetwork(30);
     return {
       ok: true,
       action: 'console',
       message: `${errors.filter((e) => e.type === 'error' || e.type === 'pageerror').length} error(s), ${
-        nets.length
-      } network failure(s).`,
+        logs.length
+      } console.log, ${nets.length} network failure(s). DevTools Console is visible in the Test Browser.`,
       url: this.page?.url() || this.lastUrl,
       snapshot: '',
       consoleErrors: errors,
+      consoleLogs: logs,
       networkFailures: nets,
       networkRequests: this.recentApiRequests(40),
       devtoolsOpen: this.devtoolsOpen,
     };
   }
 
-  /** Structured XHR/fetch + failed requests — prefer this over opening DevTools for API diagnosis. */
+  /** Structured XHR/fetch + failed requests — also shows Network in the headed DevTools. */
   async networkDump(): Promise<BrowserActionResult> {
     this.requirePage();
+    await this.ensureDevToolsOpen('network').catch(() => undefined);
     const apis = this.recentApiRequests(50);
     const fails = this.recentNetwork(30);
     const bad = apis.filter((r) => (r.status != null && r.status >= 400) || r.error);
     return {
       ok: true,
       action: 'network',
-      message: `${apis.length} API/XHR request(s), ${bad.length} failing, ${fails.length} failure event(s).`,
+      message: `${apis.length} API/XHR request(s), ${bad.length} failing, ${fails.length} failure event(s). Network panel is open in the Test Browser.`,
       url: this.page?.url() || this.lastUrl,
       snapshot: '',
-      consoleErrors: this.recentConsole(20),
+      consoleErrors: this.recentErrors(20),
+      consoleLogs: this.recentLogs(20),
       networkFailures: fails,
       networkRequests: apis,
       devtoolsOpen: this.devtoolsOpen,
@@ -1391,6 +1485,9 @@ export class BrowserTestService {
   }
 
   async close(): Promise<BrowserActionResult> {
+    if (this.launchInFlight) {
+      await this.launchInFlight.catch(() => undefined);
+    }
     try {
       await this.cdp?.detach().catch(() => undefined);
       this.cdp = null;
@@ -1425,6 +1522,37 @@ export class BrowserTestService {
   async liveTest(request: LiveTestRequest): Promise<LiveTestResult> {
     const headed = request.headed !== false;
     const startApp = request.startApp !== false;
+    const notes: string[] = [];
+
+    // ONE WINDOW: if Chromium is already up, never launch or reload unless the URL is wrong.
+    if (this.isAlive()) {
+      await this.ensureDevToolsOpen('console').catch(() => undefined);
+      const current = this.page?.url() || this.lastUrl || '';
+      const want = (request.url || '').trim();
+      let result: BrowserActionResult;
+      if (want && (!current || current === 'about:blank' || !sameAppUrl(current, want))) {
+        result = await this.goto(want);
+      } else if (!current || current === 'about:blank') {
+        result = await this.snapshot();
+        notes.push('Browser was open on a blank page — call browser_goto if a URL is known.');
+      } else {
+        result = await this.snapshot();
+      }
+      notes.push('Reused the same Test Browser — did not relaunch.');
+      notes.push('DevTools Console is open on the right (console.log / errors). Switch to Network with browser_devtools panel=network.');
+      if (request.goal) {
+        notes.push(`Goal: ${request.goal}`);
+      }
+      const url = this.page?.url() || want || current;
+      return {
+        ok: result.ok,
+        url,
+        detect: this.commands.detectDevServer(path.resolve(request.workspaceRoot || process.cwd())),
+        notes,
+        result,
+        error: result.error,
+      };
+    }
 
     // CRITICAL: start the visible window on the first tick — before filesystem detect.
     const launchPromise = this.launch(headed, false);
@@ -1435,7 +1563,6 @@ export class BrowserTestService {
     let commandId: string | undefined;
     let command: string | undefined;
     let urls: string[] = [];
-    const notes: string[] = [];
 
     const startServer = async () => {
       if (!startApp) {
@@ -1528,6 +1655,8 @@ export class BrowserTestService {
     }
 
     const nav = await this.goto(target);
+    this.devtoolsOpen = false;
+    await this.ensureDevToolsOpen('console').catch(() => undefined);
     if (request.goal) {
       notes.push(`Goal: ${request.goal}`);
     }
@@ -1535,7 +1664,7 @@ export class BrowserTestService {
       'File uploads: File Manager opens with the latest matching file selected (Downloads/Desktop), plus an on-page OLKIL banner — so you can see what is uploading.',
     );
     notes.push(
-      'Next: browser_snapshot → click/fill (fast). Prefer browser_console / browser_network for evidence. browser_devtools only if needed.',
+      'ONE browser only. DevTools Console is open on the right — user can see console.log. Use browser_devtools panel=network to show Network. Do not relaunch. Snapshot → click/fill. Report each bug in 2 lines then keep testing.',
     );
 
     return {

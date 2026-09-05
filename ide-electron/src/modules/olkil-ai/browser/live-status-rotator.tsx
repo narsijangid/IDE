@@ -9,6 +9,7 @@ import styles from './chat.view.module.less';
 import loaderUrl from './multi-color-loader.svg';
 
 const ROTATE_MS = 5000;
+const FIRST_SWAP_MS = 550;
 const READING_FILES_MS = 10000;
 const READING_FILES_LABEL = 'Reading files…';
 
@@ -33,7 +34,15 @@ const EXISTING_PHRASES = [
   'Identifying relevant files…',
 ] as const;
 
-const GENERIC_LABELS = new Set(['thinking', 'planning', 'working', 'agent thinking', '']);
+const GENERIC_LABELS = new Set([
+  'thinking',
+  'planning',
+  'working',
+  'agent thinking',
+  'testing',
+  'live test',
+  '',
+]);
 
 const PROJECT_MARKERS = [
   'package.json',
@@ -58,7 +67,12 @@ function normalizeLabel(label: string): string {
 
 /** True when the backend is only showing a generic idle-thinking label. */
 export function isGenericStatusLabel(label: string): boolean {
-  return GENERIC_LABELS.has(normalizeLabel(label));
+  const n = normalizeLabel(label);
+  if (GENERIC_LABELS.has(n)) {
+    return true;
+  }
+  // Live Test boot text must not freeze the shimmer/swap status bar.
+  return /^(opening (test browser|chromium)|test browser (open|launched)|live test)\b/.test(n);
 }
 
 export function detectProjectContext(workspaceRoot: string): 'scratch' | 'existing' {
@@ -104,7 +118,10 @@ function pickRandomPhrase(phrases: readonly string[], avoid: string): string {
   return next;
 }
 
-function phraseDuration(label: string): number {
+function phraseDuration(label: string, first: boolean): number {
+  if (first) {
+    return FIRST_SWAP_MS;
+  }
   return label === READING_FILES_LABEL ? READING_FILES_MS : ROTATE_MS;
 }
 
@@ -176,11 +193,14 @@ export function useLiveStatusLabel(opts: {
     setDecorativeLabel(current);
     let cancelled = false;
     let timer = 0;
+    let first = true;
 
     const schedule = () => {
       if (cancelled) {
         return;
       }
+      const wait = phraseDuration(current, first);
+      first = false;
       timer = window.setTimeout(() => {
         if (cancelled) {
           return;
@@ -188,7 +208,7 @@ export function useLiveStatusLabel(opts: {
         current = pickRandomPhrase(phrases, current);
         setDecorativeLabel(current);
         schedule();
-      }, phraseDuration(current));
+      }, wait);
     };
 
     schedule();
@@ -208,7 +228,7 @@ export function useLiveStatusLabel(opts: {
 }
 
 export function LiveStatusBar({ label }: { label: string }) {
-  const prevRef = useRef(label);
+  const prevRef = useRef('');
   const [animating, setAnimating] = useState(false);
 
   useEffect(() => {

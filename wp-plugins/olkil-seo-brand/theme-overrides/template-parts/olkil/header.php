@@ -22,17 +22,31 @@ $profile_url = olkil_page_url( 'profile' );
 		</button>
 
 		<nav class="olkil-nav" id="olkil-primary-nav" aria-label="<?php esc_attr_e( 'Primary', 'astra' ); ?>">
-			<?php
-			wp_nav_menu(
-				array(
-					'theme_location' => 'olkil-primary',
-					'container'      => false,
-					'menu_class'     => 'olkil-nav-list',
-					'fallback_cb'    => 'olkil_fallback_menu',
-					'depth'          => 1,
-				)
-			);
-			?>
+			<ul class="olkil-nav-list">
+				<li class="olkil-nav-item olkil-nav-item--has-sub<?php echo olkil_is_product_page() ? ' current-menu-item' : ''; ?>">
+					<button type="button" class="olkil-nav-trigger" aria-expanded="false" aria-haspopup="true" aria-controls="olkil-product-menu">
+						<?php esc_html_e( 'Product', 'olkil' ); ?>
+						<span class="olkil-nav-caret" aria-hidden="true"></span>
+					</button>
+					<div class="olkil-product-dropdown" id="olkil-product-menu" role="menu">
+						<?php foreach ( olkil_product_nav_items() as $item_slug => $label ) : ?>
+							<a role="menuitem" href="<?php echo esc_url( olkil_page_url( $item_slug ) ); ?>"><?php echo esc_html( $label ); ?></a>
+						<?php endforeach; ?>
+					</div>
+				</li>
+				<li class="<?php echo is_page( 'features' ) ? 'current-menu-item' : ''; ?>">
+					<a href="<?php echo esc_url( olkil_page_url( 'features' ) ); ?>"><?php esc_html_e( 'Features', 'olkil' ); ?></a>
+				</li>
+				<li class="<?php echo is_page( 'pricing' ) ? 'current-menu-item' : ''; ?>">
+					<a href="<?php echo esc_url( olkil_page_url( 'pricing' ) ); ?>"><?php esc_html_e( 'Pricing', 'olkil' ); ?></a>
+				</li>
+				<li class="<?php echo ( is_home() || is_singular( 'post' ) || is_page( 'blog' ) ) ? 'current-menu-item' : ''; ?>">
+					<a href="<?php echo esc_url( olkil_blog_url() ); ?>"><?php esc_html_e( 'Blog', 'olkil' ); ?></a>
+				</li>
+				<li class="<?php echo is_page( 'download' ) ? 'current-menu-item' : ''; ?>">
+					<a href="<?php echo esc_url( olkil_page_url( 'download' ) ); ?>"><?php esc_html_e( 'Download', 'olkil' ); ?></a>
+				</li>
+			</ul>
 		</nav>
 
 		<div class="olkil-header__actions">

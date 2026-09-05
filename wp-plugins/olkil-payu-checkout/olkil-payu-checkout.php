@@ -2,7 +2,7 @@
 /**
  * Plugin Name: OLKIL PayU Checkout
  * Description: Professional PayU checkout — Firebase-held KEY/SALT, webhook, invoices, receipts, email.
- * Version: 2.6.4
+ * Version: 2.6.5
  * Author: OLKIL
  */
 
@@ -10,7 +10,7 @@ if ( ! defined( 'ABSPATH' ) ) {
 	exit;
 }
 
-define( 'OLKIL_PAYU_CHECKOUT_VERSION', '2.6.4' );
+define( 'OLKIL_PAYU_CHECKOUT_VERSION', '2.6.5' );
 define( 'OLKIL_PAYU_CHECKOUT_DIR', plugin_dir_path( __FILE__ ) );
 define( 'OLKIL_PAYU_CHECKOUT_URL', plugin_dir_url( __FILE__ ) );
 
@@ -564,8 +564,91 @@ function olkil_payu_register_routes() {
 			'permission_callback' => '__return_true',
 		)
 	);
+	register_rest_route(
+		'olkil-payu/v1',
+		'/checkout-nonce',
+		array(
+			'methods'             => 'GET',
+			'callback'            => 'olkil_payu_rest_checkout_nonce',
+			'permission_callback' => '__return_true',
+		)
+	);
 }
 add_action( 'rest_api_init', 'olkil_payu_register_routes' );
+
+/**
+ * Fresh checkout nonce — never cache. LiteSpeed HTML cache was serving
+ * 12–24h-old wp_nonce values, which WordPress then dies on with
+ * "The link you followed has expired."
+ */
+function olkil_payu_rest_checkout_nonce() {
+	$response = new WP_REST_Response(
+		array(
+			'nonce' => wp_create_nonce( 'olkil_payu_checkout' ),
+		),
+		200
+	);
+	$response->header( 'Cache-Control', 'no-store, no-cache, must-revalidate, max-age=0' );
+	$response->header( 'X-LiteSpeed-Cache-Control', 'no-cache' );
+	$response->header( 'Pragma', 'no-cache' );
+	return $response;
+}
+
+/**
+ * Pay / result pages must never be LiteSpeed-cached: they embed WP nonces.
+ */
+function olkil_payu_request_is_pay_flow() {
+	$uri = isset( $_SERVER['REQUEST_URI'] ) ? (string) $_SERVER['REQUEST_URI'] : '';
+	if ( $uri ) {
+		$path = strtolower( (string) wp_parse_url( $uri, PHP_URL_PATH ) );
+		$path = untrailingslashit( $path );
+		foreach ( array( '/checkout', '/payment-success', '/payment-failed', '/invoice', '/dashboard' ) as $needle ) {
+			if ( $path === $needle || str_ends_with( $path, $needle ) ) {
+				return true;
+			}
+		}
+	}
+	if ( did_action( 'wp' ) && function_exists( 'is_page' ) ) {
+		return (bool) is_page( array( 'checkout', 'payment-success', 'payment-failed', 'invoice', 'dashboard' ) );
+	}
+	return false;
+}
+
+function olkil_payu_never_cache_pay_pages() {
+	if ( is_admin() ) {
+		return;
+	}
+	if ( defined( 'REST_REQUEST' ) && REST_REQUEST ) {
+		return;
+	}
+	if ( ! olkil_payu_request_is_pay_flow() ) {
+		return;
+	}
+	if ( ! defined( 'DONOTCACHEPAGE' ) ) {
+		define( 'DONOTCACHEPAGE', true );
+	}
+	if ( ! defined( 'LSCACHE_NO_CACHE' ) ) {
+		define( 'LSCACHE_NO_CACHE', true );
+	}
+	if ( ! headers_sent() ) {
+		nocache_headers();
+		header( 'Cache-Control: private, no-store, no-cache, must-revalidate, max-age=0' );
+		header( 'Pragma: no-cache' );
+		header( 'X-LiteSpeed-Cache-Control: no-cache' );
+	}
+	do_action( 'litespeed_control_set_nocache', 'olkil payu checkout' );
+}
+add_action( 'litespeed_init', 'olkil_payu_never_cache_pay_pages', 0 );
+add_action( 'init', 'olkil_payu_never_cache_pay_pages', 0 );
+add_action( 'send_headers', 'olkil_payu_never_cache_pay_pages', 0 );
+add_action( 'template_redirect', 'olkil_payu_never_cache_pay_pages', 0 );
+
+add_filter(
+	'litespeed_cache_is_cacheable',
+	static function ( $cacheable ) {
+		return olkil_payu_request_is_pay_flow() ? false : $cacheable;
+	}
+);
 
 /**
  * CORS for IDE / website subscription lookups.
@@ -803,11 +886,21 @@ function olkil_payu_maybe_start_payment() {
 	if ( empty( $_POST['olkil_payu_action'] ) || 'pay' !== $_POST['olkil_payu_action'] ) { // phpcs:ignore
 		return;
 	}
-	if ( ! is_page( 'checkout' ) ) {
-		return;
-	}
 
-	check_admin_referer( 'olkil_payu_checkout', 'olkil_payu_nonce' );
+	$plan_for_err = sanitize_key( wp_unslash( $_POST['plan'] ?? 'pro' ) ); // phpcs:ignore
+	$nonce        = isset( $_POST['olkil_payu_nonce'] ) ? sanitize_text_field( wp_unslash( $_POST['olkil_payu_nonce'] ) ) : ''; // phpcs:ignore
+	if ( ! $nonce || ! wp_verify_nonce( $nonce, 'olkil_payu_checkout' ) ) {
+		wp_safe_redirect(
+			add_query_arg(
+				array(
+					'plan' => $plan_for_err ? $plan_for_err : 'pro',
+					'err'  => 'expired',
+				),
+				home_url( '/checkout/' )
+			)
+		);
+		exit;
+	}
 
 	$plan_slug = sanitize_key( wp_unslash( $_POST['plan'] ?? '' ) );
 	$plans     = olkil_payu_plans();
@@ -1020,7 +1113,15 @@ function olkil_payu_checkout_html() {
 			<p class="olkil-payu__meta"><?php echo esc_html( $plan['tokens'] ); ?> · <?php esc_html_e( 'Digital access after payment', 'olkil' ); ?></p>
 
 			<?php if ( $err ) : ?>
-				<p class="olkil-payu__error"><?php echo '2' === $err_code ? esc_html__( 'Secure payment session failed. Please refresh and try again.', 'olkil' ) : esc_html__( 'Please enter a valid name, email, and mobile number.', 'olkil' ); ?></p>
+				<p class="olkil-payu__error"><?php
+				if ( 'expired' === $err_code ) {
+					esc_html_e( 'Checkout session expired. Please try paying again.', 'olkil' );
+				} elseif ( '2' === $err_code ) {
+					esc_html_e( 'Secure payment session failed. Please refresh and try again.', 'olkil' );
+				} else {
+					esc_html_e( 'Please enter a valid name, email, and mobile number.', 'olkil' );
+				}
+				?></p>
 			<?php endif; ?>
 			<p class="olkil-payu__error olkil-payu__error--crypto" hidden></p>
 
@@ -1396,6 +1497,7 @@ function olkil_payu_enqueue_assets() {
 			'olkilPayuCheckout',
 			array(
 				'cryptoUrl' => olkil_payu_firebase_url() . '/v1/crypto/public',
+				'nonceUrl'  => rest_url( 'olkil-payu/v1/checkout-nonce' ),
 			)
 		);
 	}

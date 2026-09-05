@@ -13,5 +13,5 @@ export function getOlkilAgentRuntime(): OlkilAgentRuntime {
 
 /** Warm the OpenCode sidecar after the extension host is listening. */
 export function scheduleAgentEnginePrewarm(): void {
-  scheduleOpencodePrewarm();
+  scheduleOpencodePrewarm(12_000);
 }

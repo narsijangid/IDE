@@ -152,5 +152,20 @@ renderApp({
     // Setting terminal.type forces the legacy path that DOES apply shellArgs.windows.
     'terminal.type': 'powershell',
     'terminal.integrated.shellArgs.windows': ['-NoLogo'],
+    // vscode.git otherwise walks up to the parent git root and watches that tree.
+    'git.autoRepositoryDetection': false,
+    'git.autorefresh': true,
+    'git.autofetch': false,
+    'search.followSymlinks': false,
+    'files.watcherExclude': {
+      '**/.git/objects/**': true,
+      '**/.git/subtree-cache/**': true,
+      '**/node_modules/**': true,
+      '**/.next/**': true,
+      '**/dist/**': true,
+      '**/out/**': true,
+      '**/coverage/**': true,
+      '**/.cache/**': true,
+    },
   },
 });

@@ -2,7 +2,7 @@
 /**
  * Plugin Name: OLKIL SEO Brand
  * Description: Advanced OLKIL SEO + syncs Dazzlone pricing UI into the OLKIL theme.
- * Version: 1.4.7
+ * Version: 1.5.8
  * Author: OLKIL
  */
 
@@ -11,7 +11,7 @@ if ( ! defined( 'ABSPATH' ) ) {
 }
 
 define( 'OLKIL_SEO_BRAND_NAME', 'OLKIL' );
-define( 'OLKIL_SEO_BRAND_VERSION', '1.4.7' );
+define( 'OLKIL_SEO_BRAND_VERSION', '1.5.8' );
 define( 'OLKIL_SEO_BRAND_DIR', plugin_dir_path( __FILE__ ) );
 define( 'OLKIL_SEO_BRAND_URL', plugin_dir_url( __FILE__ ) );
 
@@ -34,9 +34,13 @@ function olkil_seo_brand_sync_theme_files() {
 		'theme-overrides/front-page.php'                            => 'front-page.php',
 		'theme-overrides/page.php'                                  => 'page.php',
 		'theme-overrides/home.php'                                  => 'home.php',
+		'theme-overrides/page-templates/template-profile.php'       => 'page-templates/template-profile.php',
 		'theme-overrides/assets/olkil/js/olkil-account.js'          => 'assets/olkil/js/olkil-account.js',
 		'theme-overrides/assets/olkil/js/olkil.js'                  => 'assets/olkil/js/olkil.js',
 		'theme-overrides/assets/olkil/video/IDEdemo.mp4'            => 'assets/olkil/video/IDEdemo.mp4',
+		'theme-overrides/assets/olkil/video/hero-agent.webm'        => 'assets/olkil/video/hero-agent.webm',
+		'theme-overrides/assets/olkil/video/hero-agent.mp4'         => 'assets/olkil/video/hero-agent.mp4',
+		'theme-overrides/assets/olkil/video/.htaccess'              => 'assets/olkil/video/.htaccess',
 		'theme-overrides/template-parts/olkil/header.php'           => 'template-parts/olkil/header.php',
 		'theme-overrides/template-parts/olkil/sections/blog.php'  => 'template-parts/olkil/sections/blog.php',
 		'theme-overrides/template-parts/olkil/posts-loop.php'     => 'template-parts/olkil/posts-loop.php',
@@ -44,7 +48,13 @@ function olkil_seo_brand_sync_theme_files() {
 		'theme-overrides/template-parts/olkil/sections/cta.php'     => 'template-parts/olkil/sections/cta.php',
 		'theme-overrides/template-parts/olkil/footer.php'           => 'template-parts/olkil/footer.php',
 		'theme-overrides/page-templates/template-pricing.php'       => 'page-templates/template-pricing.php',
+		'theme-overrides/page-templates/template-auth-ide.php'      => 'page-templates/template-auth-ide.php',
+		'theme-overrides/page-templates/template-cli.php'           => 'page-templates/template-cli.php',
+		'theme-overrides/page-templates/template-product.php'       => 'page-templates/template-product.php',
+		'theme-overrides/assets/olkil/js/olkil-auth.js'             => 'assets/olkil/js/olkil-auth.js',
 		'theme-overrides/assets/olkil/css/olkil.css'                => 'assets/olkil/css/olkil.css',
+		'theme-overrides/assets/olkil/img/community.png'            => 'assets/olkil/img/community.png',
+		'theme-overrides/assets/olkil/img/cli-preview.png'          => 'assets/olkil/img/cli-preview.png',
 		'theme-overrides/inc/olkil/olkil-branding.php'              => 'inc/olkil/olkil-branding.php',
 	);
 

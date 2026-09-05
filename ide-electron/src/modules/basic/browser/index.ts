@@ -7,6 +7,7 @@ import { LocalThemeContribution } from './theme.contribution';
 import { OlkilBrandingContribution } from './olkil-branding.contribution';
 import { OlkilFileMenuContribution } from './olkil-file-menu.contribution';
 import { OlkilTerminalContribution } from './terminal.contribution';
+import { OlkilWorkspaceScopeContribution } from './olkil-workspace-scope.contribution';
 
 @Injectable()
 export class LocalBasicModule extends ElectronBasicModule {
@@ -16,6 +17,7 @@ export class LocalBasicModule extends ElectronBasicModule {
     OlkilBrandingContribution,
     OlkilFileMenuContribution,
     OlkilTerminalContribution,
+    OlkilWorkspaceScopeContribution,
     {
       token: IMainStorageService,
       useValue: createElectronMainApi(IMainStorageService),

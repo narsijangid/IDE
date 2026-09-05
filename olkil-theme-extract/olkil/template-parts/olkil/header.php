@@ -22,50 +22,47 @@ $profile_url = olkil_page_url( 'profile' );
 		</button>
 
 		<nav class="olkil-nav" id="olkil-primary-nav" aria-label="<?php esc_attr_e( 'Primary', 'astra' ); ?>">
-			<?php
-			wp_nav_menu(
-				array(
-					'theme_location' => 'olkil-primary',
-					'container'      => false,
-					'menu_class'     => 'olkil-nav-list',
-					'fallback_cb'    => 'olkil_fallback_menu',
-					'depth'          => 1,
-				)
-			);
-			?>
-			<div class="olkil-nav__account" aria-label="<?php esc_attr_e( 'Account', 'olkil' ); ?>">
-				<a class="olkil-nav__account-link olkil-nav__account-link--guest" data-olkil-signin href="<?php echo esc_url( $login_url ); ?>">
-					<?php esc_html_e( 'Sign in', 'olkil' ); ?>
-				</a>
-				<a class="olkil-nav__account-link olkil-nav__account-link--authed" href="<?php echo esc_url( olkil_page_url( 'dashboard' ) ); ?>">
-					<?php esc_html_e( 'Dashboard', 'olkil' ); ?>
-				</a>
-				<a class="olkil-nav__account-link olkil-nav__account-link--authed" href="<?php echo esc_url( $profile_url ); ?>">
-					<?php esc_html_e( 'Profile', 'olkil' ); ?>
-				</a>
-				<a class="olkil-nav__account-link" href="<?php echo esc_url( olkil_page_url( 'download' ) ); ?>">
-					<?php esc_html_e( 'Download', 'olkil' ); ?>
-				</a>
-				<button type="button" class="olkil-nav__account-link olkil-nav__account-link--authed olkil-nav__account-signout" data-olkil-signout>
-					<?php esc_html_e( 'Sign out', 'olkil' ); ?>
-				</button>
-			</div>
+			<ul class="olkil-nav-list">
+				<li class="olkil-nav-item olkil-nav-item--has-sub<?php echo olkil_is_product_page() ? ' current-menu-item' : ''; ?>">
+					<button type="button" class="olkil-nav-trigger" aria-expanded="false" aria-haspopup="true" aria-controls="olkil-product-menu">
+						<?php esc_html_e( 'Product', 'olkil' ); ?>
+						<span class="olkil-nav-caret" aria-hidden="true"></span>
+					</button>
+					<div class="olkil-product-dropdown" id="olkil-product-menu" role="menu">
+						<?php foreach ( olkil_product_nav_items() as $item_slug => $label ) : ?>
+							<a role="menuitem" href="<?php echo esc_url( olkil_page_url( $item_slug ) ); ?>"><?php echo esc_html( $label ); ?></a>
+						<?php endforeach; ?>
+					</div>
+				</li>
+				<li class="<?php echo is_page( 'features' ) ? 'current-menu-item' : ''; ?>">
+					<a href="<?php echo esc_url( olkil_page_url( 'features' ) ); ?>"><?php esc_html_e( 'Features', 'olkil' ); ?></a>
+				</li>
+				<li class="<?php echo is_page( 'pricing' ) ? 'current-menu-item' : ''; ?>">
+					<a href="<?php echo esc_url( olkil_page_url( 'pricing' ) ); ?>"><?php esc_html_e( 'Pricing', 'olkil' ); ?></a>
+				</li>
+				<li class="<?php echo ( is_home() || is_singular( 'post' ) || is_page( 'blog' ) ) ? 'current-menu-item' : ''; ?>">
+					<a href="<?php echo esc_url( olkil_blog_url() ); ?>"><?php esc_html_e( 'Blog', 'olkil' ); ?></a>
+				</li>
+				<li class="<?php echo is_page( 'download' ) ? 'current-menu-item' : ''; ?>">
+					<a href="<?php echo esc_url( olkil_page_url( 'download' ) ); ?>"><?php esc_html_e( 'Download', 'olkil' ); ?></a>
+				</li>
+			</ul>
 		</nav>
 
 		<div class="olkil-header__actions">
 			<a class="olkil-btn olkil-btn--ghost olkil-header__pricing" href="<?php echo esc_url( olkil_page_url( 'pricing' ) ); ?>"><?php esc_html_e( 'Pricing', 'astra' ); ?></a>
-			<a class="olkil-btn olkil-btn--primary olkil-header__download" data-olkil-download="auto" href="<?php echo esc_url( olkil_page_url( 'download' ) ); ?>">
+			<a class="olkil-btn olkil-btn--primary" data-olkil-download="auto" href="<?php echo esc_url( olkil_page_url( 'download' ) ); ?>">
 				<span class="olkil-btn-label"><?php esc_html_e( 'Download', 'astra' ); ?></span>
 			</a>
 
-			<!-- Account: guest (desktop) -->
+			<!-- Account: guest -->
 			<div class="olkil-account" id="olkil-account-guest">
 				<a class="olkil-btn olkil-btn--ghost olkil-account__signin" data-olkil-signin href="<?php echo esc_url( $login_url ); ?>">
 					<?php esc_html_e( 'Sign in', 'olkil' ); ?>
 				</a>
 			</div>
 
-			<!-- Account: signed in (desktop; filled by olkil-account.js) -->
+			<!-- Account: signed in (filled by olkil-account.js) -->
 			<div class="olkil-account olkil-account--authed" id="olkil-account-authed" hidden>
 				<button type="button" class="olkil-account__toggle" id="olkil-account-toggle" aria-expanded="false" aria-haspopup="true" aria-controls="olkil-account-menu">
 					<span class="olkil-account__avatar" aria-hidden="true">

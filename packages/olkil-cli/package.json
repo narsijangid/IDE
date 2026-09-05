@@ -1,0 +1,12 @@
+{
+  "name": "olkil",
+  "version": "1.0.14",
+  "description": "OLKIL CLI — Google login, then the OLKIL coding agent in your project folder",
+  "bin": {
+    "olkil": "./olkil.cjs"
+  },
+  "license": "UNLICENSED",
+  "engines": {
+    "node": ">=18"
+  }
+}

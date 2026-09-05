@@ -28,7 +28,7 @@ import {
   RepositorySymbolResult,
   DiscoveredMcpServer,
 } from '../common';
-import { AI_MODELS, DEFAULT_MODEL_ID, findModel, AiProviderId } from '../common/models';
+import { AI_MODELS, DEFAULT_MODEL_ID, findModel, applyCustomModelEndpoints, customEndpointFor, normalizeOpenAiBaseUrl, AiProviderId } from '../common/models';
 import { AGENT_TOOLS, selectAgentTools, stripLocalThinkTags } from '../common/tools';
 import { getSharedRepositoryIndex } from './repository-index.service';
 import { ripgrepSearch } from './ripgrep';
@@ -55,6 +55,23 @@ const DEFAULT_OLLAMA_BASE = 'http://127.0.0.1:11434';
 
 /** Known tool names for collapsing duplicated stream fragments. */
 const KNOWN_TOOL_NAMES: string[] = (AGENT_TOOLS || []).map((t) => t.function.name).filter(Boolean);
+
+/** OpenAI-only fields that openai-compatible gateways reject (e.g. "verbosity"). */
+function stripUnsupportedGatewayFields(body: Record<string, unknown>): Record<string, unknown> {
+  const next = { ...body };
+  delete next.verbosity;
+  delete next.textVerbosity;
+  delete next.reasoningSummary;
+  if (next.text && typeof next.text === 'object' && !Array.isArray(next.text)) {
+    const text = { ...(next.text as Record<string, unknown>) };
+    delete text.verbosity;
+    next.text = Object.keys(text).length ? text : undefined;
+    if (next.text === undefined) {
+      delete next.text;
+    }
+  }
+  return next;
+}
 
 /**
  * Merge streamed tool-name deltas without doubling.
@@ -273,6 +290,9 @@ function providerLabel(provider: AiProviderId): string {
   if (provider === 'deepseek') {
     return 'DeepSeek';
   }
+  if (provider === 'custom') {
+    return 'Custom model';
+  }
   return 'Dazzlone';
 }
 
@@ -484,8 +504,87 @@ export class OlkilAiNodeService implements IOlkilAiNodeService {
     return Promise.resolve(discoverMcpServers(workspaceRoot));
   }
 
-  private getKey(provider: AiProviderId): string {
+  async probeCustomModel(input: {
+    baseUrl: string;
+    apiKey: string;
+    model: string;
+  }): Promise<{ ok: boolean; error?: string; hint?: string }> {
+    const base = normalizeOpenAiBaseUrl(input.baseUrl);
+    const apiKey = String(input.apiKey || '').trim();
+    const model = String(input.model || '').trim();
+    if (!base) {
+      return { ok: false, error: 'Enter a valid API base URL, e.g. https://api.openai.com/v1' };
+    }
+    if (!apiKey) {
+      return { ok: false, error: 'Enter an API key for this endpoint.' };
+    }
+    if (!model) {
+      return { ok: false, error: 'Enter the model id the API expects, e.g. gpt-4o' };
+    }
+    const headers = {
+      Authorization: `Bearer ${apiKey}`,
+      'Content-Type': 'application/json',
+    };
+    try {
+      const listed = await fetch(`${base}/models`, { method: 'GET', headers });
+      if (listed.ok) {
+        const json = (await listed.json().catch(() => null)) as { data?: Array<{ id?: string }> } | null;
+        const ids = Array.isArray(json?.data) ? json!.data.map((m) => String(m?.id || '')).filter(Boolean) : [];
+        if (ids.length && !ids.includes(model)) {
+          return {
+            ok: true,
+            hint: `Connected. This endpoint lists ${ids.length} models; “${model}” is not in that list — it may still work if the id is correct.`,
+          };
+        }
+        return { ok: true, hint: 'Connected. This endpoint accepted your API key.' };
+      }
+      if (listed.status === 401 || listed.status === 403) {
+        return { ok: false, error: 'API key rejected by this endpoint (401/403).' };
+      }
+    } catch {
+      // Fall through to a tiny chat completion probe.
+    }
+    try {
+      const res = await fetch(`${base}/chat/completions`, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({
+          model,
+          messages: [{ role: 'user', content: 'ping' }],
+          max_tokens: 1,
+          stream: false,
+        }),
+      });
+      if (res.ok || res.status === 400) {
+        return { ok: true, hint: 'Connected. Chat completions are reachable.' };
+      }
+      const raw = await res.text().catch(() => '');
+      if (res.status === 401 || res.status === 403) {
+        return { ok: false, error: 'API key rejected by this endpoint.' };
+      }
+      if (res.status === 404) {
+        return {
+          ok: false,
+          error: `Model “${model}” was not found on this endpoint. Check the model id.`,
+        };
+      }
+      return {
+        ok: false,
+        error: `Endpoint returned ${res.status}${raw ? `: ${raw.slice(0, 180)}` : ''}`,
+      };
+    } catch (err: any) {
+      return {
+        ok: false,
+        error: `Could not reach ${base}. ${err?.message || 'Check the base URL and your network.'}`,
+      };
+    }
+  }
+
+  private getKey(provider: AiProviderId, modelId?: string): string {
     this.refreshEnv();
+    if (provider === 'custom') {
+      return customEndpointFor(modelId || '')?.apiKey || '';
+    }
     if (provider === 'ollama') {
       return process.env.OLLAMA_API_KEY || this.env.OLLAMA_API_KEY || 'ollama';
     }
@@ -519,7 +618,11 @@ export class OlkilAiNodeService implements IOlkilAiNodeService {
     return raw.replace(/\/$/, '');
   }
 
-  private chatCompletionsUrl(provider: AiProviderId): string {
+  private chatCompletionsUrl(provider: AiProviderId, modelId?: string): string {
+    if (provider === 'custom') {
+      const base = customEndpointFor(modelId || '')?.baseUrl || '';
+      return base ? `${base}/chat/completions` : '';
+    }
     if (provider === 'ollama') {
       return `${this.ollamaBase}/v1/chat/completions`;
     }
@@ -981,6 +1084,9 @@ export class OlkilAiNodeService implements IOlkilAiNodeService {
     if (provider === 'ollama') {
       return this.isOllamaReachable();
     }
+    if (provider === 'custom') {
+      return true;
+    }
     if (provider === 'poolside') {
       return Boolean(this.getKey('poolside'));
     }
@@ -1004,9 +1110,10 @@ export class OlkilAiNodeService implements IOlkilAiNodeService {
   }
 
   async chatCompletion(request: ChatCompletionRequest): Promise<ChatCompletionResult> {
+    applyCustomModelEndpoints(request.customModels);
     const option = findModel(request.modelId || DEFAULT_MODEL_ID);
     await assertOlkilWallet(option.provider);
-    const apiKey = this.getKey(option.provider);
+    const apiKey = this.getKey(option.provider, option.id);
 
     if (option.provider === 'ollama') {
       if (!(await this.isOllamaReachable())) {
@@ -1024,6 +1131,11 @@ export class OlkilAiNodeService implements IOlkilAiNodeService {
         );
       }
     } else if (!apiKey) {
+      if (option.provider === 'custom') {
+        throw new Error(
+          'This custom model has no API key. Open Settings → Models and add one.',
+        );
+      }
       throw new Error(
         `${providerLabel(option.provider)} is not configured. Add ${
           option.provider === 'deepseek' ? 'DEEPSEEK_API_KEY' : 'POOLSIDE_API_KEY'
@@ -1108,7 +1220,10 @@ export class OlkilAiNodeService implements IOlkilAiNodeService {
       body.tool_choice = 'none';
     }
 
-    const url = this.chatCompletionsUrl(option.provider);
+    const url = this.chatCompletionsUrl(option.provider, option.id);
+    if (!url) {
+      throw new Error('This custom model has no API base URL. Open Settings → Models and edit it.');
+    }
 
     const headers: Record<string, string> = {
       'Content-Type': 'application/json',
@@ -1125,7 +1240,7 @@ export class OlkilAiNodeService implements IOlkilAiNodeService {
       const res = await fetch(url, {
         method: 'POST',
         headers,
-        body: JSON.stringify(body),
+        body: JSON.stringify(stripUnsupportedGatewayFields(body)),
       });
 
       if (!res.ok) {

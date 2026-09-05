@@ -26,7 +26,7 @@ import { invalidateRipgrepCache, ripgrepSearch } from './ripgrep';
 const INDEX_VERSION = 7;
 const MAX_FILE_BYTES = 1_200_000;
 const MAX_INDEX_CHARS = 320_000;
-const MAX_FILES = 120_000;
+const MAX_FILES = 40_000;
 const MAX_TERMS_PER_FILE = 1800;
 const CACHE_DIR = path.join(os.homedir(), '.olkil', 'repository-index');
 

@@ -1,9 +1,9 @@
 version: 1.3.22
 files:
-  - url: https://github.com/narsijangid/IDE/releases/download/v1.3.22/OLKIL-1.3.22.AppImage
+  - url: https://olkil.com/downloads/OLKIL-1.3.22.AppImage
     sha512: Wi+ehdt00ijMFlwEgM+uBXUFFcWhKqiUs/oaEPIFjzzWJg7yzOoExRrqbfUc8rEL1m2scuA/7uEUUbPD2R+47w==
     size: 148166544
     blockMapSize: 153508
-path: https://github.com/narsijangid/IDE/releases/download/v1.3.22/OLKIL-1.3.22.AppImage
+path: https://olkil.com/downloads/OLKIL-1.3.22.AppImage
 sha512: Wi+ehdt00ijMFlwEgM+uBXUFFcWhKqiUs/oaEPIFjzzWJg7yzOoExRrqbfUc8rEL1m2scuA/7uEUUbPD2R+47w==
 releaseDate: '2026-08-27T06:40:01.967Z'

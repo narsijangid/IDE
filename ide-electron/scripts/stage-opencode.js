@@ -3,7 +3,7 @@
  * spawn it as an isolated sidecar (not bundled into Electron/webpack).
  *
  * Usage: node scripts/stage-opencode.js
- * Override: OPENCODE_VERSION=v1.18.21 OPENCODE_SRC=C:\\path\\to\\opencode.exe
+ * Override: OPENCODE_VERSION=v1.18.22 OPENCODE_SRC=C:\\path\\to\\opencode.exe
  */
 const fs = require('fs');
 const https = require('https');
@@ -12,7 +12,7 @@ const os = require('os');
 const path = require('path');
 const { execSync } = require('child_process');
 
-const VERSION = process.env.OPENCODE_VERSION || 'v1.18.21';
+const VERSION = process.env.OPENCODE_VERSION || 'v1.18.22';
 const destDir = path.join(__dirname, '..', 'build', 'opencode');
 const exeName = process.platform === 'win32' ? 'opencode.exe' : 'opencode';
 
@@ -135,12 +135,13 @@ async function main() {
     } else {
       fs.copyFileSync(src, destBin);
     }
+    writeStagedVersion(destDir);
     console.log('[stage-opencode] Copied', destBin);
     return;
   }
 
-  if (fs.existsSync(destBin)) {
-    console.log('[stage-opencode] Already staged:', destBin);
+  if (fs.existsSync(destBin) && readStagedVersion(destDir) === VERSION) {
+    console.log('[stage-opencode] Already staged:', destBin, VERSION);
     return;
   }
 
@@ -171,7 +172,24 @@ async function main() {
       // ignore
     }
   }
-  console.log('[stage-opencode] Staged', destBin);
+  writeStagedVersion(destDir);
+  console.log('[stage-opencode] Staged', destBin, VERSION);
+}
+
+function stagedVersionFile(dir) {
+  return path.join(dir, '.opencode-version');
+}
+
+function readStagedVersion(dir) {
+  try {
+    return fs.readFileSync(stagedVersionFile(dir), 'utf8').trim();
+  } catch {
+    return '';
+  }
+}
+
+function writeStagedVersion(dir) {
+  fs.writeFileSync(stagedVersionFile(dir), VERSION, 'utf8');
 }
 
 main().catch((err) => {

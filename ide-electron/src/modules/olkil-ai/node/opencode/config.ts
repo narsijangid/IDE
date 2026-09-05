@@ -1,5 +1,5 @@
-import type { AiModelOption, AiProviderId } from '../../common/models';
-import { AI_MODELS } from '../../common/models';
+import type { AiModelOption, AiProviderId, CustomModelEndpoint } from '../../common/models';
+import { AI_MODELS, customEndpointFor, opencodeCustomProviderId } from '../../common/models';
 
 const POOLSIDE_URL = 'https://inference.poolside.ai/v1';
 const DEFAULT_DEEPSEEK_BASE = 'https://api.deepseek.com';
@@ -19,6 +19,9 @@ export function opencodeModelRef(option: AiModelOption): { providerID: string; m
   if (option.provider === 'ollama') {
     return { providerID: 'ollama', modelID: option.model };
   }
+  if (option.provider === 'custom') {
+    return { providerID: opencodeCustomProviderId(option.id), modelID: option.model };
+  }
   return { providerID: 'deepseek', modelID: option.model };
 }
 
@@ -33,6 +36,7 @@ function modelsFor(provider: AiProviderId): Record<string, unknown> {
       name: model.displayName || model.label,
       tool_call: true,
       temperature: true,
+      ...openaiCompatModelFlags(),
       limit: {
         context: provider === 'ollama' ? 32768 : 128000,
         output: 8192,
@@ -43,8 +47,8 @@ function modelsFor(provider: AiProviderId): Record<string, unknown> {
 }
 
 /**
- * OPENCODE_CONFIG_CONTENT for the sidecar. Only OLKIL's three providers are
- * enabled so OpenCode does not probe dozens of unused vendor SDKs at boot.
+ * OPENCODE_CONFIG_CONTENT for the sidecar. Built-in providers plus any user
+ * OpenAI-compatible custom models. Unused vendor SDKs stay disabled.
  */
 export interface OpencodeMcpServer {
   name: string;
@@ -88,17 +92,19 @@ export function toOpencodeMcp(servers?: OpencodeMcpServer[]): Record<string, unk
 
 export function buildOpencodeConfigContent(
   secrets: OpencodeProviderSecrets,
-  extras?: { mcp?: Record<string, unknown> },
+  extras?: { mcp?: Record<string, unknown>; customModels?: CustomModelEndpoint[]; plugin?: string[] },
 ): Record<string, unknown> {
   const deepseekBase = withV1(secrets.deepseekBase || DEFAULT_DEEPSEEK_BASE);
   const ollamaBase = withV1(secrets.ollamaBase || DEFAULT_OLLAMA_BASE);
+  const customProviders = customProviderBlock(extras?.customModels);
+  const enabled = ['deepseek', 'poolside', 'ollama', ...Object.keys(customProviders)];
   const config: Record<string, unknown> = {
     $schema: 'https://opencode.ai/config.json',
     username: 'OLKIL',
     autoupdate: false,
     share: 'disabled',
     logLevel: 'WARN',
-    enabled_providers: ['deepseek', 'poolside', 'ollama'],
+    enabled_providers: enabled,
     permission: {
       edit: 'allow',
       bash: 'allow',
@@ -141,12 +147,61 @@ export function buildOpencodeConfigContent(
         },
         models: modelsFor('ollama'),
       },
+      ...customProviders,
     },
   };
   if (extras?.mcp && Object.keys(extras.mcp).length) {
     config.mcp = extras.mcp;
   }
+  if (extras?.plugin?.length) {
+    config.plugin = extras.plugin;
+  }
   return config;
+}
+
+function customProviderBlock(endpoints?: CustomModelEndpoint[]): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  for (const ep of endpoints || []) {
+    const optionId = ep.id;
+    const secret = customEndpointFor(optionId);
+    const baseURL = secret?.baseUrl || ep.baseUrl;
+    const apiKey = secret?.apiKey || ep.apiKey;
+    if (!baseURL || !apiKey || !ep.model) {
+      continue;
+    }
+    const providerID = opencodeCustomProviderId(optionId);
+    out[providerID] = {
+      npm: '@ai-sdk/openai-compatible',
+      name: ep.label || ep.model,
+      options: {
+        baseURL,
+        apiKey,
+        timeout: 300000,
+      },
+      models: {
+        [ep.model]: {
+          id: ep.model,
+          name: ep.label || ep.model,
+          tool_call: true,
+          temperature: true,
+          ...openaiCompatModelFlags(),
+          limit: {
+            context: 128000,
+            output: 8192,
+          },
+        },
+      },
+    };
+  }
+  return out;
+}
+
+function openaiCompatModelFlags(): Record<string, unknown> {
+  // OpenCode 1.18.21 injects OpenAI-only `textVerbosity` for gpt-5.x ids on
+  // @ai-sdk/openai-compatible (gateways 400 with "verbosity is not supported").
+  // Keep reasoning off so variants don't add more of those params. The sidecar
+  // is pinned to 1.18.22+ where that injection is native-OpenAI only.
+  return { reasoning: false };
 }
 
 function splitCommand(command: string): string[] {

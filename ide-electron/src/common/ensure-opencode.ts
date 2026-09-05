@@ -11,7 +11,7 @@ import * as https from 'https';
 import * as os from 'os';
 import * as path from 'path';
 
-export const OPENCODE_VERSION = process.env.OPENCODE_VERSION || 'v1.18.21';
+export const OPENCODE_VERSION = process.env.OPENCODE_VERSION || 'v1.18.22';
 export const OPENCODE_EXE = process.platform === 'win32' ? 'opencode.exe' : 'opencode';
 
 const MIN_BYTES = 5 * 1024 * 1024;
@@ -64,8 +64,13 @@ export function opencodeCacheDir(): string {
   return path.join(os.homedir(), '.olkil', 'opencode-bin');
 }
 
+/** One folder per sidecar version so a cached 1.18.21 binary is not reused. */
+export function opencodeVersionCacheDir(): string {
+  return path.join(opencodeCacheDir(), OPENCODE_VERSION);
+}
+
 export function opencodeCacheBinary(): string {
-  return path.join(opencodeCacheDir(), OPENCODE_EXE);
+  return path.join(opencodeVersionCacheDir(), OPENCODE_EXE);
 }
 
 function resourceDirs(): string[] {
@@ -85,9 +90,12 @@ function resourceDirs(): string[] {
   dirs.push(path.join(__dirname, '..', '..', 'opencode'));
   dirs.push(path.join(__dirname, '..', '..', '..', 'opencode'));
   dirs.push(path.join(process.cwd(), 'build', 'opencode'));
-  dirs.push(opencodeCacheDir());
-  dirs.push(path.join(os.homedir(), '.opencode', 'bin'));
+  dirs.push(opencodeVersionCacheDir());
   return dirs;
+}
+
+function legacyCacheBinary(): string {
+  return path.join(opencodeCacheDir(), OPENCODE_EXE);
 }
 
 export function resolveOpencodeBinary(): string | undefined {
@@ -100,6 +108,10 @@ export function resolveOpencodeBinary(): string | undefined {
     if (found) {
       return found;
     }
+  }
+  const legacy = legacyCacheBinary();
+  if (existsFile(legacy)) {
+    return legacy;
   }
   return undefined;
 }
@@ -204,6 +216,7 @@ async function downloadIntoCache(): Promise<string> {
   const destDir = opencodeCacheDir();
   const destBin = opencodeCacheBinary();
   fs.mkdirSync(destDir, { recursive: true });
+  fs.mkdirSync(path.dirname(destBin), { recursive: true });
   if (existsFile(destBin)) {
     process.env.OLKIL_OPENCODE_BIN = destBin;
     return destBin;
@@ -282,9 +295,24 @@ async function downloadIntoCache(): Promise<string> {
 
 /** Resolve immediately, or download into the user cache. Safe to call from main + node. */
 export function ensureOpencodeBinary(): Promise<string> {
+  const versioned = opencodeCacheBinary();
+  if (existsFile(versioned)) {
+    process.env.OLKIL_OPENCODE_BIN = versioned;
+    return Promise.resolve(versioned);
+  }
   const existing = resolveOpencodeBinary();
   if (existing) {
     process.env.OLKIL_OPENCODE_BIN = existing;
+    if (!inflight) {
+      inflight = downloadIntoCache()
+        .catch((err) => {
+          console.warn('[olkil-opencode] upgrade download failed', err instanceof Error ? err.message : err);
+          return existing;
+        })
+        .finally(() => {
+          inflight = null;
+        });
+    }
     return Promise.resolve(existing);
   }
   if (!inflight) {

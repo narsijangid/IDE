@@ -41,6 +41,17 @@ export interface OlkilMcpServer {
   url?: string;
 }
 
+/** User-added OpenAI-compatible model (own base URL + API key). */
+export interface OlkilCustomModel {
+  id: string;
+  label: string;
+  model: string;
+  baseUrl: string;
+  apiKey: string;
+  enabled: boolean;
+  updatedAt: number;
+}
+
 export interface OlkilSettings {
   /** Default agent mode for new chats */
   defaultChatMode: ChatModeSetting;
@@ -69,6 +80,8 @@ export interface OlkilSettings {
   mcpServers: OlkilMcpServer[];
   /** Discovered (extension/Cursor) MCP ids turned off in OLKIL. */
   mcpDiscoveredDisabled: string[];
+  /** User-added OpenAI-compatible models (BYOK). Synced to Firebase when signed in. */
+  customModels: OlkilCustomModel[];
 
   indexCodebase: boolean;
   indexIgnore: string;
@@ -135,6 +148,7 @@ export const DEFAULT_OLKIL_SETTINGS: OlkilSettings = {
   gitDefaultBranch: 'main',
   mcpServers: [],
   mcpDiscoveredDisabled: [],
+  customModels: [],
   indexCodebase: true,
   indexIgnore: 'node_modules\n.git\ndist\nbuild\n.olkil',
   colorTheme: 'Default Dark+',
@@ -163,7 +177,7 @@ export const SETTINGS_NAV: SettingsNavItem[] = [
   { id: 'general', label: 'General', group: 'OLKIL', keywords: 'startup pin panel language default mode' },
   { id: 'plan', label: 'Plan & usage', group: 'OLKIL', keywords: 'credits tokens subscription billing quota lite pro' },
   { id: 'agents', label: 'Agents', group: 'Agent', keywords: 'plan ask agent auto apply diffs continue' },
-  { id: 'models', label: 'Models', group: 'Agent', keywords: 'deepseek dazzlone ollama local cloud default' },
+  { id: 'models', label: 'Models', group: 'Agent', keywords: 'deepseek dazzlone ollama local cloud default custom openai openrouter groq api key byok' },
   { id: 'rules', label: 'Rules', group: 'Agent', keywords: 'user rules agents.md cursorrules prompt' },
   { id: 'mcp', label: 'MCP', group: 'Agent', keywords: 'mcp server model context protocol tools npx hostinger extension cursor vscode' },
   { id: 'indexing', label: 'Indexing', group: 'Agent', keywords: 'codebase index ignore search embeddings' },
@@ -181,6 +195,8 @@ export interface IOlkilSettingsService {
   reset(): void;
   resetSection(keys: Array<keyof OlkilSettings>): void;
   initialize(): Promise<void>;
+  /** Merge custom models from Firestore when signed in. Safe to call repeatedly. */
+  syncCustomModelsCloud(): Promise<void>;
   onDidChange(listener: (settings: OlkilSettings) => void): { dispose: () => void };
 }
 
@@ -207,6 +223,7 @@ export function mergeOlkilSettings(raw: unknown): OlkilSettings {
   } else {
     next.enabledModelIds = next.enabledModelIds.filter((id) => typeof id === 'string' && id.trim());
   }
+  next.customModels = sanitizeCustomModels(next.customModels);
   next.editorFontSize = clampNum(next.editorFontSize, 10, 24, 14);
   next.editorTabSize = clampNum(next.editorTabSize, 1, 8, 2);
   if (next.terminalAutoRun !== 'always' && next.terminalAutoRun !== 'allowlist' && next.terminalAutoRun !== 'never') {
@@ -247,6 +264,76 @@ export function toggleEnabledModelId(
 
 export function newMcpServerId(): string {
   return `mcp_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
+}
+
+export function newCustomModelId(): string {
+  return `cm_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
+}
+
+export function customModelCatalogId(id: string): string {
+  const raw = String(id || '').trim();
+  if (!raw) {
+    return '';
+  }
+  return raw.startsWith('custom:') ? raw : `custom:${raw}`;
+}
+
+export function mergeCustomModelLists(
+  local: OlkilCustomModel[],
+  remote: OlkilCustomModel[],
+): OlkilCustomModel[] {
+  const byId = new Map<string, OlkilCustomModel>();
+  for (const item of [...remote, ...local]) {
+    const clean = sanitizeCustomModel(item);
+    if (!clean) {
+      continue;
+    }
+    const prev = byId.get(clean.id);
+    if (!prev || clean.updatedAt >= prev.updatedAt) {
+      byId.set(clean.id, clean);
+    }
+  }
+  return [...byId.values()].sort((a, b) => a.updatedAt - b.updatedAt);
+}
+
+function sanitizeCustomModels(raw: unknown): OlkilCustomModel[] {
+  if (!Array.isArray(raw)) {
+    return [];
+  }
+  const out: OlkilCustomModel[] = [];
+  const seen = new Set<string>();
+  for (const item of raw) {
+    const clean = sanitizeCustomModel(item);
+    if (!clean || seen.has(clean.id)) {
+      continue;
+    }
+    seen.add(clean.id);
+    out.push(clean);
+  }
+  return out;
+}
+
+function sanitizeCustomModel(raw: unknown): OlkilCustomModel | null {
+  if (!raw || typeof raw !== 'object') {
+    return null;
+  }
+  const src = raw as Record<string, unknown>;
+  const id = String(src.id || '').trim();
+  const model = String(src.model || '').trim();
+  const baseUrl = String(src.baseUrl || '').trim();
+  if (!id || !model || !baseUrl) {
+    return null;
+  }
+  const updatedAt = Number(src.updatedAt);
+  return {
+    id,
+    label: String(src.label || model).trim() || model,
+    model,
+    baseUrl,
+    apiKey: String(src.apiKey || '').trim(),
+    enabled: src.enabled !== false,
+    updatedAt: Number.isFinite(updatedAt) && updatedAt > 0 ? updatedAt : Date.now(),
+  };
 }
 
 function clampNum(value: unknown, min: number, max: number, fallback: number): number {

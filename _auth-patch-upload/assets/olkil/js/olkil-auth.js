@@ -45,7 +45,7 @@
   }
 
   function setBusy(busy) {
-    document.querySelectorAll('.olkil-auth-btn, #olkil-auth-email-form button').forEach(function (btn) {
+    document.querySelectorAll('.olkil-auth-btn').forEach(function (btn) {
       btn.disabled = !!busy;
     });
   }
@@ -53,8 +53,6 @@
   function hideActions() {
     var actions = document.getElementById('olkil-auth-actions');
     if (actions) actions.hidden = true;
-    var email = document.querySelector('.olkil-auth-email');
-    if (email) email.hidden = true;
   }
 
   function showSuccessStayOnPage() {
@@ -258,70 +256,6 @@
             }
             setBusy(false);
             setStatus((err && err.message) || 'Google sign-in failed', true);
-          });
-      });
-    }
-
-    var githubBtn = document.getElementById('olkil-auth-github');
-    if (githubBtn) {
-      githubBtn.addEventListener('click', function () {
-        setBusy(true);
-        setStatus('Redirecting to GitHub…');
-        var provider = new firebase.auth.GithubAuthProvider();
-        auth
-          .signInWithPopup(provider)
-          .then(function (cred) {
-            completeToIde(cred.user);
-          })
-          .catch(function (err) {
-            if (err && err.code === 'auth/popup-blocked') {
-              return auth.signInWithRedirect(provider);
-            }
-            setBusy(false);
-            setStatus((err && err.message) || 'GitHub sign-in failed', true);
-          });
-      });
-    }
-
-    var form = document.getElementById('olkil-auth-email-form');
-    if (form) {
-      form.addEventListener('submit', function (e) {
-        e.preventDefault();
-        var email = form.email.value.trim();
-        var password = form.password.value;
-        setBusy(true);
-        setStatus('Signing in…');
-        auth
-          .signInWithEmailAndPassword(email, password)
-          .then(function (cred) {
-            completeToIde(cred.user);
-          })
-          .catch(function (err) {
-            setBusy(false);
-            setStatus((err && err.message) || 'Email sign-in failed', true);
-          });
-      });
-    }
-
-    var signupBtn = document.getElementById('olkil-auth-signup');
-    if (signupBtn && form) {
-      signupBtn.addEventListener('click', function () {
-        var email = form.email.value.trim();
-        var password = form.password.value;
-        if (!email || !password) {
-          setStatus('Enter email and password first.', true);
-          return;
-        }
-        setBusy(true);
-        setStatus('Creating account…');
-        auth
-          .createUserWithEmailAndPassword(email, password)
-          .then(function (cred) {
-            completeToIde(cred.user);
-          })
-          .catch(function (err) {
-            setBusy(false);
-            setStatus((err && err.message) || 'Sign-up failed', true);
           });
       });
     }

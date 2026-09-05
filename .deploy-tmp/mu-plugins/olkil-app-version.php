@@ -1,8 +1,8 @@
 <?php
 /**
  * Plugin Name: OLKIL App Version Override
- * Description: Forces desktop download version to match latest GitHub release.
- * Version: 1.3.22
+ * Description: Forces desktop download URLs to Hostinger /downloads/ (GitHub repo is private).
+ * Version: 1.3.25
  */
 
 if ( ! defined( 'ABSPATH' ) ) {
@@ -10,17 +10,17 @@ if ( ! defined( 'ABSPATH' ) ) {
 }
 
 add_filter( 'olkil_app_version', function () {
-	return '1.3.22';
+	return '1.3.25';
 }, 99 );
 
 add_filter( 'olkil_download_urls', function ( $urls ) {
-	$v  = '1.3.22';
-	$gh = 'https://github.com/narsijangid/IDE/releases/download/v' . $v;
+	$win = '1.3.25';
+	$mac = '1.3.22';
 	return array(
-		'windows'        => 'https://olkil.com/downloads/OLKIL-' . $v . '.exe',
-		'macos'          => $gh . '/OLKIL-' . $v . '-arm64.dmg',
-		'macos_intel'    => $gh . '/OLKIL-' . $v . '-x64.dmg',
-		'linux'          => $gh . '/OLKIL-' . $v . '.deb',
-		'linux_appimage' => $gh . '/OLKIL-' . $v . '.AppImage',
+		'windows'        => 'https://olkil.com/downloads/OLKIL-' . $win . '.exe',
+		'macos'          => 'https://olkil.com/downloads/OLKIL-' . $mac . '-arm64.dmg',
+		'macos_intel'    => 'https://olkil.com/downloads/OLKIL-' . $mac . '-x64.dmg',
+		'linux'          => 'https://olkil.com/downloads/OLKIL-' . $mac . '.AppImage',
+		'linux_appimage' => 'https://olkil.com/downloads/OLKIL-' . $mac . '.AppImage',
 	);
 }, 99 );

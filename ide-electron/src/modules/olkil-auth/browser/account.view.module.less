@@ -609,6 +609,39 @@
   grid-column: 1 / -1;
 }
 
+.secretRow {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.secretRow .input {
+  flex: 1;
+  min-width: 0;
+}
+
+.customActions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.probeOk,
+.probeErr {
+  margin: 8px 0 0;
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.probeOk {
+  color: #86efac;
+}
+
+.probeErr {
+  color: #fca5a5;
+}
+
 .label {
   display: block;
   margin-bottom: 6px;

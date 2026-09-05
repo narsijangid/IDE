@@ -24,7 +24,7 @@ import {
   QueuedChatMessage,
   UiChatMessage,
 } from '../common';
-import { AI_MODELS, DEFAULT_MODEL_ID, findModel, publicModelName } from '../common/models';
+import { AI_MODELS, DEFAULT_MODEL_ID, findModel, publicModelName, applyCustomModelEndpoints, customModelCatalogId, isCustomProvider } from '../common/models';
 import {
   buildSystemPrompt,
   AGENT_TOOLS,
@@ -194,6 +194,8 @@ export class OlkilChatService extends Disposable implements IOlkilChatService {
   private liveTestBootResult: LiveTestResult | null = null;
   /** Virtual Office Jasmine desk task while Live Test uses the Dev Studio browser loop. */
   private voLiveQaTaskId: string | null = null;
+  /** Dedupes console/network issues already shown in chat this Live Test run. */
+  private liveIssueKeys = new Set<string>();
   chatHistory: ChatHistorySummary[] = [];
   private sessionId = nextSessionId();
   private sessionCreatedAt = Date.now();
@@ -218,6 +220,7 @@ export class OlkilChatService extends Disposable implements IOlkilChatService {
     badge: m.badge,
     approxSizeGb: m.approxSizeGb,
   }));
+  private builtinModels = [...this.catalogModels];
   models: Array<{
     id: string;
     provider: string;
@@ -285,20 +288,23 @@ export class OlkilChatService extends Disposable implements IOlkilChatService {
       }
 
       this.catalogModels = await this.aiNode.listModels();
-      this.applyVisibleModels();
+      this.builtinModels = this.catalogModels.length ? this.catalogModels : [...this.builtinModels];
+      this.rebuildCatalog();
       this.wireSettings();
-      this.modelName = await this.aiNode.getModelName(this.modelId);
+      this.modelName = findModel(this.modelId).model;
       const option = findModel(this.modelId);
       if (option.provider === 'ollama') {
         await this.refreshOllamaStatus();
       } else {
         this.ollamaDownload = { phase: 'idle', percent: 0, message: '' };
-        const ok = await this.aiNode.hasApiKey(option.provider);
-        if (!ok) {
-          this.pushUi(
-            'status',
-            `Missing API key for ${option.provider}. Add it to .env`,
-          );
+        if (!isCustomProvider(option.provider)) {
+          const ok = await this.aiNode.hasApiKey(option.provider);
+          if (!ok) {
+            this.pushUi(
+              'status',
+              `Missing API key for ${option.provider}. Add it to .env`,
+            );
+          }
         }
       }
       this.fire();
@@ -315,7 +321,7 @@ export class OlkilChatService extends Disposable implements IOlkilChatService {
     }
     this.settingsUnsub = this.settings.onDidChange(() => {
       const prevId = this.modelId;
-      this.applyVisibleModels();
+      this.rebuildCatalog();
       if (this.modelId !== prevId) {
         const option = findModel(this.modelId);
         if (option.provider === 'ollama') {
@@ -329,9 +335,43 @@ export class OlkilChatService extends Disposable implements IOlkilChatService {
     this.addDispose({ dispose: () => this.settingsUnsub?.dispose() });
   }
 
+  private rebuildCatalog() {
+    const custom = applyCustomModelEndpoints(this.runtimeCustomModels());
+    this.catalogModels = [
+      ...this.builtinModels,
+      ...custom.map((m) => ({
+        id: m.id,
+        provider: m.provider,
+        model: m.model,
+        label: m.label,
+        displayName: m.displayName,
+        badge: m.badge,
+        approxSizeGb: m.approxSizeGb,
+      })),
+    ];
+    this.applyVisibleModels();
+  }
+
+  private runtimeCustomModels() {
+    return (this.settings.get().customModels || [])
+      .filter((m) => m.enabled !== false)
+      .map((m) => ({
+        id: customModelCatalogId(m.id),
+        label: m.label || m.model,
+        model: m.model,
+        baseUrl: m.baseUrl,
+        apiKey: m.apiKey || '',
+      }));
+  }
+
   private applyVisibleModels() {
     const saved = this.settings.get();
-    const filtered = this.catalogModels.filter((model) => isModelEnabledInSettings(saved, model.id));
+    const filtered = this.catalogModels.filter((model) => {
+      if (model.provider === 'custom') {
+        return true;
+      }
+      return isModelEnabledInSettings(saved, model.id);
+    });
     this.models = filtered.length ? filtered : [...this.catalogModels];
     if (this.models.some((model) => model.id === this.modelId)) {
       return;
@@ -752,12 +792,13 @@ export class OlkilChatService extends Disposable implements IOlkilChatService {
 
   /** Live browser verify — UI shows the user's goal; agent gets the full test loop. */
   async startLiveTest(goal?: string) {
-    if (this.busy) {
+    if (this.busy || this.liveTesting) {
       return;
     }
     this.chatMode = 'agent';
     this.liveTesting = true;
     this.liveTestBootResult = null;
+    this.liveIssueKeys.clear();
     const focus = (goal || '').trim() || 'Test the application';
 
     if (this.virtualOffice?.active) {
@@ -768,26 +809,34 @@ export class OlkilChatService extends Disposable implements IOlkilChatService {
       }
     }
 
-    // Open Test Browser immediately — do not wait for the LLM.
+    // Animated status bar first — browser launch can take a few seconds in the background.
+    this.setStatus('Thinking');
     this.liveTestBootPromise = this.bootstrapLiveBrowser(focus);
-    this.fire();
 
-    const agentPrompt = `LIVE TEST MODE — Verify this project in a real browser (headed Chromium on my screen).
+    const agentPrompt = `LIVE TEST MODE — You are a senior QA tester in a real headed Chromium on the user's screen.
 
 User test goal:
 ${focus}
 
-IMPORTANT: Chromium is already launching on the user's screen right now. Do NOT stall on planning.
+ONE BROWSER
+- Chromium is already launching. DevTools Console is open on the RIGHT so the user can see console.log / errors / Network.
+- NEVER call live_test, browser_launch, or browser_close again. NEVER open a second window. NEVER reload just to "start over".
+- If bootstrap says the browser is ready: browser_snapshot immediately, then click/fill.
+- browser_goto ONLY if the page is about:blank or the wrong URL.
+- To show the user Network: browser_devtools panel=network (or browser_network). Console: panel=console. Do not close DevTools.
 
-Required loop:
-1. If bootstrap notes say the browser is ready, call browser_snapshot immediately. Otherwise call live_test (start_app true, headed true) once with goal set to the user test goal above.
-2. Exercise the goal via browser_click / browser_fill using role+name. Move fast — prefer actions over long explanations.
-3. File uploads: click Upload OR call browser_upload — OS dialogs are auto-handled (latest matching file from Downloads/Desktop: image→newest image, pdf→newest pdf). Never wait on a file picker.
-4. Call browser_console + browser_network. Use browser_screenshot only when needed (not every click). Treat pageerror / 4xx–5xx as bugs.
-5. Only if you need the visible inspector: browser_devtools panel=console|network (right dock). Close it when done.
-6. If broken: investigate_codepath / read_file → search_replace fix → browser_reload → retest the SAME goal.
-7. Max 5 fix rounds. End with PASS/FAIL, evidence (console/network), and files changed.
-8. Do not claim success without a successful retest in this turn. Start now.`;
+TEST LIKE QA (fast, thorough)
+- Use the product the way a human tester would: primary flow, buttons, forms, empty/invalid input, navigation.
+- After important clicks, read NEW_ISSUES (console errors, 4xx/5xx). Silent console failures are still bugs.
+- Prefer actions over talk. No planning essays. No repeating the goal.
+
+WHEN YOU FIND A BUG — tell chat immediately (2–4 lines), then keep testing:
+**Issue:** what broke
+**Where:** screen / control / URL
+**Evidence:** console error or HTTP status
+Do not write a long report until the end. Max 5 fix rounds; after a fix use browser_reload (same window) and retest that flow only.
+
+END with a short PASS/FAIL + issue list + evidence. Start now.`;
     await this.send(focus, [], { historyText: agentPrompt, liveTest: true });
     if (this.voLiveQaTaskId && !this.busy) {
       this.finishVoLiveQa(this.cancelRequested ? 'cancelled' : 'completed');
@@ -797,7 +846,6 @@ Required loop:
   /** Start / reuse the live app and open headed Chromium as fast as possible. */
   private async bootstrapLiveBrowser(goal: string): Promise<LiveTestResult | null> {
     try {
-      this.setStatus('Opening Test Browser…');
       const result = await this.aiNode.liveTest({
         workspaceRoot: this.workspaceRoot(),
         goal,
@@ -806,9 +854,11 @@ Required loop:
       });
       this.liveTestBootResult = result;
       if (result.ok) {
-        this.setStatus(this.liveTesting ? 'Testing' : '');
-      } else {
-        this.setStatus(result.error || 'Browser launch issue');
+        if (this.liveTesting) {
+          this.setStatus('Thinking');
+        }
+      } else if (result.error) {
+        this.setStatus(result.error);
       }
       return result;
     } catch (e: any) {
@@ -839,16 +889,35 @@ Required loop:
     if (runId) {
       void this.aiNode.clineCancel(runId).catch(() => undefined);
     }
-    this.liveTesting = false;
-    this.liveTestBootPromise = null;
-    this.liveTestBootResult = null;
-    this.finishVoLiveQa('cancelled');
     this.completeOpenActivities();
     this.status = 'Stopped';
     this.busy = false;
+    this.finishVoLiveQa('cancelled');
+    this.endLiveTestSession();
     this.fire();
-    void this.aiNode.browserClose().catch(() => undefined);
     this.scheduleFlushQueue();
+  }
+
+  /** Live Test finished or stopped — always close the headed Test Browser. */
+  private endLiveTestSession() {
+    const wasLive = this.liveTesting || Boolean(this.liveTestBootPromise);
+    this.liveTesting = false;
+    this.liveTestBootPromise = null;
+    this.liveTestBootResult = null;
+    this.liveIssueKeys.clear();
+    if (!wasLive) {
+      return;
+    }
+    this.status = 'Closing Test Browser…';
+    void this.aiNode
+      .browserClose()
+      .catch(() => undefined)
+      .then(() => {
+        if (this.status === 'Closing Test Browser…') {
+          this.status = '';
+          this.fire();
+        }
+      });
   }
 
   cancelQueued(id: string) {
@@ -1293,14 +1362,13 @@ Required loop:
 
     const pendingId = nextId();
     this.messages.push({ id: pendingId, role: 'assistant', content: '', pending: true });
-    this.setStatus(isLiveTestRun ? 'Testing' : this.chatMode === 'agent' ? 'Thinking' : 'Planning');
+    this.setStatus(isLiveTestRun ? 'Thinking' : this.chatMode === 'agent' ? 'Thinking' : 'Planning');
 
     // Live Test: Chromium must open on send — never wait for Cline (no browser tools there).
     if (isLiveTestRun && !this.liveTestBootPromise) {
       this.liveTestBootPromise = this.bootstrapLiveBrowser(text || 'Test the application');
     }
     if (isLiveTestRun) {
-      this.pushActivity(pendingId, 'browsing', 'Opening Test Browser…');
       void this.liveTestBootPromise?.then((boot) => {
         if (this.cancelRequested) {
           return;
@@ -1310,21 +1378,9 @@ Required loop:
             ? `Test Browser open · ${boot.url}`
             : 'Test Browser open'
           : boot?.error || 'Test Browser launch failed';
-        for (let i = this.messages.length - 1; i >= 0; i--) {
-          const m = this.messages[i];
-          if (
-            m.role === 'activity' &&
-            m.activity &&
-            !m.activity.done &&
-            /Opening (Test Browser|Chromium)/i.test(m.activity.label || m.content || '')
-          ) {
-            m.activity = { ...m.activity, done: true, label };
-            m.content = label;
-            break;
-          }
-        }
-        if (this.liveTesting) {
-          this.setStatus('Testing');
+        this.pushActivity(pendingId, 'browsing', label, undefined, true);
+        if (this.liveTesting && boot?.ok) {
+          this.setStatus('Thinking');
         }
         this.fire();
       });
@@ -1480,12 +1536,11 @@ Required loop:
     } finally {
       this.completeOpenActivities();
       this.busy = false;
-      if (this.liveTesting) {
-        this.liveTesting = false;
-        this.liveTestBootPromise = null;
-        this.liveTestBootResult = null;
-      }
+      const wasLiveTest = this.liveTesting || Boolean(this.liveTestBootPromise);
       this.finishVoLiveQa(this.cancelRequested ? 'cancelled' : 'completed');
+      if (wasLiveTest) {
+        this.endLiveTestSession();
+      }
       this.persistCurrentSession();
       this.fire();
       this.scheduleFlushQueue();
@@ -2788,6 +2843,7 @@ Read the highest-scoring evidence in trail order. For a bug, trace UI → handle
           url: server.url,
         })),
       mcpDiscoveredDisabled: saved.mcpDiscoveredDisabled,
+      customModels: this.runtimeCustomModels(),
       conversationId: this.sessionId,
     });
 
@@ -2944,6 +3000,7 @@ Read the highest-scoring evidence in trail order. For a bug, trace UI → handle
       }
     };
 
+    let lastPollStatus = '';
     try {
       while (!this.cancelRequested) {
         const st = await this.aiNode.clineGetState(runId);
@@ -2961,10 +3018,11 @@ Read the highest-scoring evidence in trail order. For a bug, trace UI → handle
           }
           return (st.text || lastText || '').trim();
         }
+        const pollMs = st.status && st.status === lastPollStatus ? 280 : 160;
+        lastPollStatus = st.status || '';
         const raced = await Promise.race([
           runPromise.then((r) => ({ kind: 'done' as const, r })),
-          // 120ms: less IPC than 80ms while still feeling live.
-          sleep(120).then(() => ({ kind: 'tick' as const, r: null })),
+          sleep(pollMs).then(() => ({ kind: 'tick' as const, r: null })),
         ]);
         if (raced.kind === 'done') {
           await applyState(raced.r!);
@@ -3164,16 +3222,17 @@ Read the highest-scoring evidence in trail order. For a bug, trace UI → handle
         ? `\nBootstrap result: ok=${boot.ok} url=${boot.url}` +
           (boot.notes?.length ? `\nNotes: ${boot.notes.join(' | ')}` : '') +
           (boot.error ? `\nError: ${boot.error}` : '') +
-          `\nBrowser window should already be visible. Prefer browser_snapshot next (skip re-calling live_test unless bootstrap failed).`
-        : `\nBootstrap still running or failed — call live_test headed=true once if needed.`;
+          `\nBrowser is already visible with DevTools Console on the right. Call browser_snapshot next. Do NOT call live_test, browser_launch, or browser_close.`
+        : `\nBootstrap still running or failed — call live_test headed=true ONCE only if the window is missing.`;
       messages.push({
         role: 'system',
         content:
-          `LIVE BROWSER TASK — prioritize tools now:\n` +
-          `1) Call live_test${url ? ` with url=${url}` : ' (or browser_goto the URL the user gave)'} headed=true ONLY if browser is not open yet.\n` +
-          `2) browser_snapshot → exercise the user goal with browser_click / browser_fill.\n` +
-          `3) browser_console + browser_network for errors; fix code only if the UI fails.\n` +
-          `Do NOT spend many rounds only reading backend helpers — open/use the browser first.` +
+          `LIVE QA — one headed browser, DevTools visible to the user:\n` +
+          (url ? `Target URL (only goto if not already there): ${url}\n` : '') +
+          `1) Do NOT relaunch. Snapshot the current page, then exercise the goal with click/fill.\n` +
+          `2) browser_console / browser_network after important steps. browser_devtools panel=network to show Network.\n` +
+          `3) On each NEW console error or 4xx/5xx: write a 2-line Issue in chat, then keep testing. No essays.\n` +
+          `4) Fix code only if the UI/API actually fails; reload the SAME window to retest. Never a second browser.` +
           bootHint,
       });
     }
@@ -4199,7 +4258,7 @@ Read the highest-scoring evidence in trail order. For a bug, trace UI → handle
           const settled = await Promise.all(
             slice.map(async (idx) => {
               const r = await this.executeTool(toolCalls[idx]);
-              return { idx, r };
+              return { idx, r: this.decorateLiveTestToolResult(pendingId, toolCalls[idx].function?.name || '', r) };
             }),
           );
           for (const { idx, r } of settled) {
@@ -4209,7 +4268,11 @@ Read the highest-scoring evidence in trail order. For a bug, trace UI → handle
         }
       } else {
         this.announceToolStart(pendingId, toolCalls[i]);
-        results[i] = await this.executeTool(toolCalls[i]);
+        results[i] = this.decorateLiveTestToolResult(
+          pendingId,
+          toolCalls[i].function?.name || '',
+          await this.executeTool(toolCalls[i]),
+        );
         this.announceToolDone(pendingId, toolCalls[i], results[i]);
         i++;
       }
@@ -5236,6 +5299,7 @@ Read the highest-scoring evidence in trail order. For a bug, trace UI → handle
         modelId: request.modelId,
         stream: false,
         maxTokens: request.maxTokens,
+        customModels: this.runtimeCustomModels(),
       });
     }
 
@@ -5306,6 +5370,7 @@ Read the highest-scoring evidence in trail order. For a bug, trace UI → handle
         stream: true,
         streamId,
         maxTokens: request.maxTokens,
+        customModels: this.runtimeCustomModels(),
       });
       stopPoll = true;
       await poll;
@@ -5322,6 +5387,7 @@ Read the highest-scoring evidence in trail order. For a bug, trace UI → handle
           modelId: request.modelId,
           stream: false,
           maxTokens: request.maxTokens,
+          customModels: this.runtimeCustomModels(),
         });
       }
       throw e;
@@ -5559,8 +5625,14 @@ Read the highest-scoring evidence in trail order. For a bug, trace UI → handle
           this.setStatus('Reading network / API calls…');
           return this.fmtJson(await this.aiNode.browserNetwork());
         case 'browser_devtools':
+          if (this.liveTesting && String(args.action || '') === 'close') {
+            args.action = 'open';
+            args.panel = args.panel || 'console';
+          }
           this.setStatus(
-            args.action === 'close' ? 'Closing DevTools…' : 'Opening DevTools…',
+            String(args.panel || 'console') === 'network'
+              ? 'Showing Network tab…'
+              : 'Showing Console…',
           );
           return this.fmtJson(
             await this.aiNode.browserDevtools({
@@ -5574,6 +5646,18 @@ Read the highest-scoring evidence in trail order. For a bug, trace UI → handle
           this.setStatus('Capturing screenshot…');
           return this.fmtJson(await this.aiNode.browserScreenshot());
         case 'browser_close':
+          if (this.liveTesting) {
+            return this.fmtJson({
+              ok: true,
+              action: 'close',
+              message: 'Live Test keeps one Test Browser open. Not closing.',
+              url: this.liveTestBootResult?.url || '',
+              snapshot: '',
+              consoleErrors: [],
+              networkFailures: [],
+              devtoolsOpen: true,
+            });
+          }
           this.setStatus('Closing browser…');
           return this.fmtJson(await this.aiNode.browserClose());
         default:
@@ -5591,6 +5675,63 @@ Read the highest-scoring evidence in trail order. For a bug, trace UI → handle
     } catch {
       return String(value);
     }
+  }
+
+  /** Push new console/network bugs into chat immediately; remind the model to stay brief. */
+  private decorateLiveTestToolResult(pendingId: string, name: string, raw: string): string {
+    if (!this.liveTesting || !/^(live_test|browser_)/.test(name)) {
+      return raw;
+    }
+    const issues: string[] = [];
+    const tryAdd = (key: string, line: string) => {
+      if (!key || this.liveIssueKeys.has(key) || issues.length >= 4) {
+        return;
+      }
+      this.liveIssueKeys.add(key);
+      issues.push(line);
+    };
+    try {
+      const parsed = JSON.parse(raw);
+      const payload = parsed?.result && typeof parsed.result === 'object' ? { ...parsed, ...parsed.result } : parsed;
+      const errors = [
+        ...(Array.isArray(payload?.consoleErrors) ? payload.consoleErrors : []),
+      ];
+      const nets = [
+        ...(Array.isArray(payload?.networkFailures) ? payload.networkFailures : []),
+      ];
+      for (const e of errors) {
+        const type = String(e?.type || '');
+        const text = String(e?.text || '').trim();
+        if (!text || (type !== 'error' && type !== 'pageerror' && type !== 'warning')) {
+          continue;
+        }
+        if (type === 'warning' && /deprecated|Download the React/i.test(text)) {
+          continue;
+        }
+        tryAdd(`c:${text.slice(0, 180)}`, `console ${type}: ${text.slice(0, 160)}`);
+      }
+      for (const n of nets) {
+        const url = String(n?.url || '').trim();
+        const status = n?.status != null ? String(n.status) : '';
+        const err = String(n?.error || '').trim();
+        if (!url) {
+          continue;
+        }
+        tryAdd(
+          `n:${n?.method || ''}:${status}:${url.slice(0, 160)}`,
+          `network ${n?.method || 'GET'} ${status || err || 'fail'} ${url.slice(0, 120)}`,
+        );
+      }
+    } catch {
+      // not JSON
+    }
+    if (!issues.length) {
+      return raw;
+    }
+    for (const line of issues) {
+      this.pushActivity(pendingId, 'info', `Issue · ${line}`, undefined, true);
+    }
+    return `${raw}\n\nNEW_ISSUES (tell the user in 2 lines now, then keep testing):\n- ${issues.join('\n- ')}`;
   }
 
   private isLiveTestIntent(text: string): boolean {
