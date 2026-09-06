@@ -1,11 +1,11 @@
-version: 1.3.22
+version: 1.3.26
 files:
-  - url: https://olkil.com/downloads/OLKIL-1.3.22-arm64.dmg
-    sha512: sbL3r9VSkp+/h1sStnzZdVLkSzv5Tsm5yybOsUr89+fXanEu+S+igf/XcNsXoELh4y9BHYup2z7cMz4Loh/3lQ==
-    size: 132639147
-  - url: https://olkil.com/downloads/OLKIL-1.3.22-x64.dmg
-    sha512: xiHY2E4hMKh2cHL9L6Mkp6Xda8aLY/PEs+JnuS7KjCCMw5SUbrnp6NyoUne6ekw6WiFiCxSmz/QzsmtUhPz97g==
-    size: 137123966
-path: https://olkil.com/downloads/OLKIL-1.3.22-arm64.dmg
-sha512: sbL3r9VSkp+/h1sStnzZdVLkSzv5Tsm5yybOsUr89+fXanEu+S+igf/XcNsXoELh4y9BHYup2z7cMz4Loh/3lQ==
-releaseDate: '2026-08-27T06:40:24.661Z'
+  - url: https://olkil.com/downloads/OLKIL-1.3.26-arm64.dmg
+    sha512: 8+vOB66EJ7e19EcfFVC2UVZ+8P9JoRyo6/hJNoAozBtUxh6cGkCbkW8R7UTcKvl3jhH62MdGRoXge6R1sEdqPw==
+    size: 132646098
+  - url: https://olkil.com/downloads/OLKIL-1.3.26-x64.dmg
+    sha512: 7xR8k8/iX3Pxl0QUrAsuT6WpMSKDjY5H5Y/I12XJpQ+FoeXrIKaV/YXqHeRFkJPk0LSZhkUq9DdxC8z1cphBcw==
+    size: 137147889
+path: https://olkil.com/downloads/OLKIL-1.3.26-arm64.dmg
+sha512: 8+vOB66EJ7e19EcfFVC2UVZ+8P9JoRyo6/hJNoAozBtUxh6cGkCbkW8R7UTcKvl3jhH62MdGRoXge6R1sEdqPw==
+releaseDate: '2026-09-05T18:35:25.496Z'

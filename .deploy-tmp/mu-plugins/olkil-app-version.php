@@ -14,13 +14,12 @@ add_filter( 'olkil_app_version', function () {
 }, 99 );
 
 add_filter( 'olkil_download_urls', function ( $urls ) {
-	$win = '1.3.26';
-	$mac = '1.3.22';
+	$ver = '1.3.26';
 	return array(
-		'windows'        => 'https://olkil.com/downloads/OLKIL-' . $win . '.exe',
-		'macos'          => 'https://olkil.com/downloads/OLKIL-' . $mac . '-arm64.dmg',
-		'macos_intel'    => 'https://olkil.com/downloads/OLKIL-' . $mac . '-x64.dmg',
-		'linux'          => 'https://olkil.com/downloads/OLKIL-' . $mac . '.AppImage',
-		'linux_appimage' => 'https://olkil.com/downloads/OLKIL-' . $mac . '.AppImage',
+		'windows'        => 'https://olkil.com/downloads/OLKIL-' . $ver . '.exe',
+		'macos'          => 'https://olkil.com/downloads/OLKIL-' . $ver . '-arm64.dmg',
+		'macos_intel'    => 'https://olkil.com/downloads/OLKIL-' . $ver . '-x64.dmg',
+		'linux'          => 'https://olkil.com/downloads/OLKIL-' . $ver . '.AppImage',
+		'linux_appimage' => 'https://olkil.com/downloads/OLKIL-' . $ver . '.AppImage',
 	);
 }, 99 );

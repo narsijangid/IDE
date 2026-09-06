@@ -1,9 +1,9 @@
-version: 1.3.22
+version: 1.3.26
 files:
-  - url: https://olkil.com/downloads/OLKIL-1.3.22.AppImage
-    sha512: Wi+ehdt00ijMFlwEgM+uBXUFFcWhKqiUs/oaEPIFjzzWJg7yzOoExRrqbfUc8rEL1m2scuA/7uEUUbPD2R+47w==
-    size: 148166544
-    blockMapSize: 153508
-path: https://olkil.com/downloads/OLKIL-1.3.22.AppImage
-sha512: Wi+ehdt00ijMFlwEgM+uBXUFFcWhKqiUs/oaEPIFjzzWJg7yzOoExRrqbfUc8rEL1m2scuA/7uEUUbPD2R+47w==
-releaseDate: '2026-08-27T06:40:01.967Z'
+  - url: https://olkil.com/downloads/OLKIL-1.3.26.AppImage
+    sha512: gtWhju53QiWTvJhRQh6nN3cvLK3XFcpIGoXYdx9cRqWmeYSfpj3dTmt1Wr5ROYzarsc1/IyqqJYopKvvdx/TOw==
+    size: 148182453
+    blockMapSize: 153033
+path: https://olkil.com/downloads/OLKIL-1.3.26.AppImage
+sha512: gtWhju53QiWTvJhRQh6nN3cvLK3XFcpIGoXYdx9cRqWmeYSfpj3dTmt1Wr5ROYzarsc1/IyqqJYopKvvdx/TOw==
+releaseDate: '2026-09-05T18:35:00.765Z'
