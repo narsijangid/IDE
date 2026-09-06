@@ -7,7 +7,12 @@
 !**/.env.example
 **/.secret.local
 **/olkil-payu-checkout/secrets.php
+**/olkil-payu-checkout/engine-secrets.php
 wp-plugins/olkil-payu-checkout/secrets.php
+wp-plugins/olkil-payu-checkout/engine-secrets.php
+
+# Local Hostinger / pack scratch — never commit
+.deploy-tmp/
 
 # Dependencies & build outputs
 **/node_modules/

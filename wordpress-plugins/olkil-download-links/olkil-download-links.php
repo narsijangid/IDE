@@ -15,11 +15,10 @@ function olkil_dl_app_version() {
 }
 
 /**
- * Last Hostinger-hosted Mac/Linux build. Windows is 1.3.26; Mac/Linux
- * were not packed for 1.3.26. GitHub Releases are private.
+ * Hostinger-hosted Mac/Linux build. GitHub Releases are private.
  */
 function olkil_dl_maclin_version() {
-	return '1.3.22';
+	return olkil_dl_app_version();
 }
 
 /**

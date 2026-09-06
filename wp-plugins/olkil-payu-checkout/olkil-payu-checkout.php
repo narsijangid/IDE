@@ -2,7 +2,7 @@
 /**
  * Plugin Name: OLKIL PayU Checkout
  * Description: Professional PayU checkout — Firebase-held KEY/SALT, webhook, invoices, receipts, email.
- * Version: 2.6.5
+ * Version: 2.6.6
  * Author: OLKIL
  */
 
@@ -10,7 +10,7 @@ if ( ! defined( 'ABSPATH' ) ) {
 	exit;
 }
 
-define( 'OLKIL_PAYU_CHECKOUT_VERSION', '2.6.5' );
+define( 'OLKIL_PAYU_CHECKOUT_VERSION', '2.6.6' );
 define( 'OLKIL_PAYU_CHECKOUT_DIR', plugin_dir_path( __FILE__ ) );
 define( 'OLKIL_PAYU_CHECKOUT_URL', plugin_dir_url( __FILE__ ) );
 
@@ -200,6 +200,95 @@ function olkil_payu_credentials() {
 		'mode' => $mode,
 	);
 	return $cached;
+}
+
+/**
+ * Shared cloud-model key. Lives on Hostinger only (engine-secrets.php / option / env).
+ * Never commit the value. CLI fetches it after a paid-plan login.
+ *
+ * @return string
+ */
+function olkil_payu_engine_key() {
+	olkil_payu_load_dotenv();
+
+	if ( defined( 'OLKIL_DEEPSEEK_API_KEY' ) && OLKIL_DEEPSEEK_API_KEY ) {
+		return trim( (string) OLKIL_DEEPSEEK_API_KEY );
+	}
+
+	$env = getenv( 'DEEPSEEK_API_KEY' ) ?: getenv( 'OLKIL_DEEPSEEK_API_KEY' );
+	if ( $env ) {
+		return trim( (string) $env );
+	}
+
+	foreach ( array( 'engine-secrets.php', 'secrets.php' ) as $name ) {
+		$file = OLKIL_PAYU_CHECKOUT_DIR . $name;
+		if ( ! file_exists( $file ) || ! is_readable( $file ) ) {
+			continue;
+		}
+		$s = include $file;
+		if ( ! is_array( $s ) ) {
+			continue;
+		}
+		foreach ( array( 'deepseek_key', 'DEEPSEEK_API_KEY', 'engine_key' ) as $k ) {
+			if ( ! empty( $s[ $k ] ) ) {
+				return trim( (string) $s[ $k ] );
+			}
+		}
+	}
+
+	return trim( (string) get_option( 'olkil_deepseek_api_key', '' ) );
+}
+
+function olkil_payu_import_engine_secrets() {
+	$key = olkil_payu_engine_key();
+	if ( '' === $key ) {
+		return;
+	}
+	if ( (string) get_option( 'olkil_deepseek_api_key', '' ) !== $key ) {
+		update_option( 'olkil_deepseek_api_key', $key, false );
+	}
+}
+
+/**
+ * Paid CLI / desktop session: return the shared pool key. Never log it.
+ *
+ * @param WP_REST_Request $request Request.
+ * @return WP_REST_Response|WP_Error
+ */
+function olkil_payu_rest_engine( WP_REST_Request $request ) {
+	$email = olkil_payu_authenticated_email( $request );
+	if ( is_wp_error( $email ) ) {
+		return $email;
+	}
+
+	$quota = olkil_payu_check_quota( $email );
+	if ( empty( $quota['allowed'] ) && empty( $quota['cloud_allowed'] ) ) {
+		$code = ( 'quota_exceeded' === ( $quota['reason'] ?? '' ) ) ? 402 : 403;
+		return new WP_Error(
+			(string) ( $quota['reason'] ?? 'plan_required' ),
+			(string) ( $quota['message'] ?? 'plan_required' ),
+			array( 'status' => $code )
+		);
+	}
+
+	$key = olkil_payu_engine_key();
+	if ( '' === $key ) {
+		return new WP_Error( 'engine_unconfigured', 'engine_unconfigured', array( 'status' => 503 ) );
+	}
+
+	$response = new WP_REST_Response(
+		array(
+			'ok'       => true,
+			'provider' => 'deepseek',
+			'baseURL'  => 'https://api.deepseek.com/v1',
+			'apiKey'   => $key,
+		),
+		200
+	);
+	$response->header( 'Cache-Control', 'no-store, no-cache, must-revalidate, max-age=0' );
+	$response->header( 'X-LiteSpeed-Cache-Control', 'no-cache' );
+	$response->header( 'Pragma', 'no-cache' );
+	return $response;
 }
 
 function olkil_payu_payment_url() {
@@ -396,6 +485,7 @@ register_activation_hook( __FILE__, function () {
 	delete_option( 'olkil_payu_checkout_pages' );
 	delete_option( 'olkil_payu_profile_sync' );
 	olkil_payu_import_secrets_to_options();
+	olkil_payu_import_engine_secrets();
 	olkil_payu_ensure_pages();
 	olkil_payu_sync_profile_template();
 	olkil_payu_schedule_expiry_cron();
@@ -405,6 +495,9 @@ register_activation_hook( __FILE__, function () {
 add_action( 'init', function () {
 	if ( ! get_option( 'olkil_payu_merchant_key' ) ) {
 		olkil_payu_import_secrets_to_options();
+	}
+	if ( ! get_option( 'olkil_deepseek_api_key' ) ) {
+		olkil_payu_import_engine_secrets();
 	}
 }, 1 );
 
@@ -570,6 +663,15 @@ function olkil_payu_register_routes() {
 		array(
 			'methods'             => 'GET',
 			'callback'            => 'olkil_payu_rest_checkout_nonce',
+			'permission_callback' => '__return_true',
+		)
+	);
+	register_rest_route(
+		'olkil-payu/v1',
+		'/engine',
+		array(
+			'methods'             => array( 'GET', 'POST' ),
+			'callback'            => 'olkil_payu_rest_engine',
 			'permission_callback' => '__return_true',
 		)
 	);
