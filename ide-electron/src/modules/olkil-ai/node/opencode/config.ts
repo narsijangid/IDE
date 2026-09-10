@@ -1,15 +1,18 @@
 import type { AiModelOption, AiProviderId, CustomModelEndpoint } from '../../common/models';
-import { AI_MODELS, customEndpointFor, opencodeCustomProviderId } from '../../common/models';
+import { AI_MODELS, customEndpointFor, opencodeCustomProviderId, openRouterExtraModels } from '../../common/models';
 
 const POOLSIDE_URL = 'https://inference.poolside.ai/v1';
 const DEFAULT_DEEPSEEK_BASE = 'https://api.deepseek.com';
 const DEFAULT_OLLAMA_BASE = 'http://127.0.0.1:11434';
+const DEFAULT_OPENROUTER_BASE = 'https://openrouter.ai/api/v1';
 
 export interface OpencodeProviderSecrets {
   deepseekKey: string;
   deepseekBase: string;
   poolsideKey: string;
   ollamaBase: string;
+  openrouterKey: string;
+  openrouterBase: string;
 }
 
 export function opencodeModelRef(option: AiModelOption): { providerID: string; modelID: string } {
@@ -22,13 +25,24 @@ export function opencodeModelRef(option: AiModelOption): { providerID: string; m
   if (option.provider === 'custom') {
     return { providerID: opencodeCustomProviderId(option.id), modelID: option.model };
   }
+  if (option.provider === 'openrouter') {
+    return { providerID: 'openrouter', modelID: option.model };
+  }
   return { providerID: 'deepseek', modelID: option.model };
 }
 
 function modelsFor(provider: AiProviderId): Record<string, unknown> {
   const out: Record<string, unknown> = {};
-  for (const model of AI_MODELS) {
+  const extras = provider === 'openrouter' ? openRouterExtraModels() : [];
+  const list = provider === 'openrouter' ? [...AI_MODELS, ...extras] : AI_MODELS;
+  for (const model of list) {
     if (model.provider !== provider) {
+      continue;
+    }
+    if (provider === 'openrouter' && (model.model === 'auto' || model.id.endsWith(':auto'))) {
+      continue;
+    }
+    if (out[model.model]) {
       continue;
     }
     out[model.model] = {
@@ -96,8 +110,9 @@ export function buildOpencodeConfigContent(
 ): Record<string, unknown> {
   const deepseekBase = withV1(secrets.deepseekBase || DEFAULT_DEEPSEEK_BASE);
   const ollamaBase = withV1(secrets.ollamaBase || DEFAULT_OLLAMA_BASE);
+  const openrouterBase = withV1(secrets.openrouterBase || DEFAULT_OPENROUTER_BASE);
   const customProviders = customProviderBlock(extras?.customModels);
-  const enabled = ['deepseek', 'poolside', 'ollama', ...Object.keys(customProviders)];
+  const enabled = ['openrouter', 'deepseek', 'poolside', 'ollama', ...Object.keys(customProviders)];
   const config: Record<string, unknown> = {
     $schema: 'https://opencode.ai/config.json',
     username: 'OLKIL',
@@ -107,7 +122,7 @@ export function buildOpencodeConfigContent(
     enabled_providers: enabled,
     permission: {
       edit: 'allow',
-      bash: 'allow',
+      bash: 'ask',
       webfetch: 'allow',
       doom_loop: 'allow',
       external_directory: 'deny',
@@ -117,6 +132,20 @@ export function buildOpencodeConfigContent(
       auto: false,
     },
     provider: {
+      openrouter: {
+        npm: '@ai-sdk/openai-compatible',
+        name: 'OpenRouter',
+        options: {
+          baseURL: openrouterBase,
+          apiKey: secrets.openrouterKey,
+          timeout: 300000,
+          headers: {
+            'HTTP-Referer': 'https://olkil.com',
+            'X-Title': 'OLKIL',
+          },
+        },
+        models: modelsFor('openrouter'),
+      },
       deepseek: {
         npm: '@ai-sdk/openai-compatible',
         name: 'DeepSeek',

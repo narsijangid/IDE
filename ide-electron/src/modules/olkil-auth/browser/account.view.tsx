@@ -10,8 +10,7 @@ import {
   IOlkilChatUiService,
   OlkilAiNodeServicePath,
 } from 'modules/olkil-ai/common';
-import { AI_MODELS } from 'modules/olkil-ai/common/models';
-import { DeepSeekIcon, isDeepSeekProvider } from 'modules/olkil-ai/browser/deepseek-icon';
+import { AI_MODELS, isMeteredCloudProvider } from 'modules/olkil-ai/common/models';
 import logoUrl from '../../../browser/assets/olkil-logo.png';
 import { IOlkilAuthService, OlkilAuthUser } from '../common';
 import {
@@ -713,13 +712,13 @@ function ModelsPane({
     <div className={styles.pane}>
       <h1 className={styles.paneTitle}>Models</h1>
       <p className={styles.paneDesc}>
-        Toggle which built-in models appear in the chat dropdown. At least one built-in model must stay on.
+        Toggle which built-in models appear in the chat dropdown. Auto stays available. At least one built-in model must stay on.
       </p>
       <div className={styles.card}>
         <div className={styles.modelList}>
           {AI_MODELS.map((model) => {
             const on = isModelEnabledInSettings(settings, model.id);
-            const modelLocked = locked && isDeepSeekProvider(model.provider);
+            const modelLocked = locked && isMeteredCloudProvider(model.provider);
             return (
               <div
                 key={model.id}
@@ -732,11 +731,8 @@ function ModelsPane({
               >
                 <div>
                   <div className={styles.modelName}>
-                    {isDeepSeekProvider(model.provider) ? (
-                      <DeepSeekIcon className={styles.modelProviderIcon} />
-                    ) : null}
                     {model.displayName || model.label}
-                    {model.badge ? ` · ${model.badge}` : ''}
+                    {model.badge && !/premium|cloud|openrouter|auto/i.test(model.badge) ? ` · ${model.badge}` : ''}
                   </div>
                   <div className={styles.modelSub}>
                     {modelLocked
@@ -885,8 +881,7 @@ function CustomModelsSection({
       <div className={styles.block}>
         <p className={styles.rowTitle}>Your models</p>
         <p className={styles.rowDesc}>
-          Add any OpenAI-compatible API — OpenAI, OpenRouter, Groq, Together, Fireworks, or a local server. Uses your
-          own key and is not billed on your OLKIL plan.
+          Add any OpenAI-compatible API. Uses your own key and is not billed on your OLKIL plan.
           {signedIn
             ? ' Saved to your signed-in account so it follows you on other devices.'
             : ' Saved on this device. Sign in to keep it with your account.'}

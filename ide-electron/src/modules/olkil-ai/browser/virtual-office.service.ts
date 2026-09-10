@@ -255,6 +255,7 @@ export class OlkilVirtualOfficeService extends Disposable implements IOlkilVirtu
           activeFile,
           mode,
           modelId: opts?.modelId,
+          autoOptimizeFor: saved.autoOptimizeFor,
           autoApprove: mode === 'agent' && (saved.autoApproveEdits || saved.terminalAutoRun === 'always'),
           autoApproveEdits: mode === 'agent' && saved.autoApproveEdits,
           autoApproveWeb: mode === 'agent' && saved.autoApproveWeb,
@@ -283,49 +284,6 @@ export class OlkilVirtualOfficeService extends Disposable implements IOlkilVirtu
 
     this.runPromises.set(runId, promise);
     return task;
-  }
-
-  beginLiveQa(goal: string): string | null {
-    if (!this.active) {
-      return null;
-    }
-    const title = titleFromPrompt(goal) || 'Live Test';
-    this.assigneeId = 'jasmine';
-    this.inspectedWorkerId = 'jasmine';
-    this.postToOffice({ type: 'assign', workerId: 'jasmine', task: title });
-
-    if (this.workerTask.has('jasmine')) {
-      this.fire();
-      return null;
-    }
-
-    const now = Date.now();
-    const task: VirtualOfficeTask = {
-      id: nextTaskId(),
-      workerId: 'jasmine',
-      workerName: 'Jasmine',
-      title,
-      prompt: goal,
-      status: 'running',
-      runId: `vo_live_${now}`,
-      createdAt: now,
-      updatedAt: now,
-      liveStatus: 'Live Test',
-      activities: [{ id: 'live-qa', label: 'Live browser test', done: false }],
-      files: [],
-      engine: 'live-test',
-    };
-    this.tasks = [task, ...this.tasks].slice(0, 60);
-    this.workerTask.set('jasmine', task.id);
-    this.fire();
-    return task.id;
-  }
-
-  endLiveQa(
-    taskId: string,
-    result: { status: 'completed' | 'failed' | 'cancelled'; summary?: string },
-  ) {
-    this.finishTask(taskId, result);
   }
 
   completeWorker(workerId: string) {
@@ -404,7 +362,7 @@ export class OlkilVirtualOfficeService extends Disposable implements IOlkilVirtu
   }
 
   private maybeStopPoll() {
-    if (this.tasks.some((t) => t.status === 'running' && t.engine !== 'live-test')) {
+    if (this.tasks.some((t) => t.status === 'running')) {
       return;
     }
     if (this.pollTimer) {
@@ -414,7 +372,7 @@ export class OlkilVirtualOfficeService extends Disposable implements IOlkilVirtu
   }
 
   private async pollRuns() {
-    const running = this.tasks.filter((t) => t.status === 'running' && t.engine !== 'live-test');
+    const running = this.tasks.filter((t) => t.status === 'running');
     if (!running.length) {
       this.maybeStopPoll();
       return;

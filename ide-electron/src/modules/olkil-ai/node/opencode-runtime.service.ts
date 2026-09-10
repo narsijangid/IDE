@@ -10,9 +10,12 @@ import type {
   FileChangeKind,
 } from '../common';
 import { findModel, applyCustomModelEndpoints, customEndpointFor, DEFAULT_MODEL_ID, type AiProviderId, type CustomModelEndpoint } from '../common/models';
+import { isHeavyProjectBuildCommand, userAskedToRunBuild } from '../common/shell-policy';
+import { routeOpenRouterModel } from '../common/auto-router';
 import {
   EMBEDDED_DEEPSEEK_API_KEY,
   EMBEDDED_ENV,
+  EMBEDDED_OPENROUTER_API_KEY,
   EMBEDDED_POOLSIDE_API_KEY,
 } from './embedded-secrets';
 import { assertOlkilWallet, chargeOlkilWallet, addApiUsage, parseProviderUsage, type OlkilApiUsage } from './olkil-wallet.service';
@@ -20,6 +23,7 @@ import { opencodeAgentForMode, opencodeModelRef, toOpencodeMcp } from './opencod
 import { OpencodeSidecar } from './opencode/sidecar';
 import { startOpencodeDownload } from './opencode/binary';
 import type { OpencodeMcpServer, OpencodeProviderSecrets } from './opencode/config';
+import { refreshOpenRouterCatalog } from './openrouter';
 
 type ActivityKind = ClineEngineActivity['kind'];
 
@@ -41,6 +45,7 @@ interface LiveRun {
   autoApproveWeb: boolean;
   terminalAutoRun: 'always' | 'allowlist' | 'never';
   terminalAllowlist: string[];
+  userPrompt: string;
   inputTokens: number;
   outputTokens: number;
   apiUsage: OlkilApiUsage | null;
@@ -99,6 +104,7 @@ function clipSnapshot(text: string | null): string | null {
 
 const DEFAULT_DEEPSEEK_BASE = 'https://api.deepseek.com';
 const DEFAULT_OLLAMA_BASE = 'http://127.0.0.1:11434';
+const DEFAULT_OPENROUTER_BASE = 'https://openrouter.ai/api/v1';
 
 function readEnvFile(): Record<string, string> {
   const out: Record<string, string> = { ...EMBEDDED_ENV };
@@ -150,6 +156,13 @@ function providerSecrets(): OpencodeProviderSecrets {
       EMBEDDED_POOLSIDE_API_KEY,
     ),
     ollamaBase: process.env.OLLAMA_BASE_URL || env.OLLAMA_BASE_URL || DEFAULT_OLLAMA_BASE,
+    openrouterKey: firstKey(
+      process.env.OPENROUTER_API_KEY,
+      env.OPENROUTER_API_KEY,
+      EMBEDDED_OPENROUTER_API_KEY,
+    ),
+    openrouterBase:
+      process.env.OPENROUTER_BASE_URL || env.OPENROUTER_BASE_URL || DEFAULT_OPENROUTER_BASE,
   };
 }
 
@@ -333,7 +346,13 @@ export class OlkilOpencodeRuntimeHost {
 
     try {
       applyCustomModelEndpoints(request.customModels);
-      const option = findModel(request.modelId || DEFAULT_MODEL_ID);
+      const routedId = routeOpenRouterModel({
+        modelId: request.modelId || DEFAULT_MODEL_ID,
+        optimizeFor: request.autoOptimizeFor,
+        userText: request.prompt,
+        messageCount: 2,
+      });
+      const option = findModel(routedId);
       if (option.provider === 'custom') {
         const ep = customEndpointFor(option.id);
         if (!ep?.baseUrl) {
@@ -344,9 +363,18 @@ export class OlkilOpencodeRuntimeHost {
         }
       }
       await assertOlkilWallet(option.provider);
-      if (option.provider === 'deepseek' && !providerSecrets().deepseekKey) {
+      const secrets = providerSecrets();
+      if (option.provider === 'openrouter' && secrets.openrouterKey) {
+        await refreshOpenRouterCatalog(secrets.openrouterKey, secrets.openrouterBase);
+      }
+      if (option.provider === 'openrouter' && !secrets.openrouterKey) {
         throw new Error(
-          'DeepSeek is not configured in this OLKIL build. Reinstall the latest app from olkil.com.',
+          'Cloud models are not configured in this OLKIL build. Reinstall the latest app from olkil.com.',
+        );
+      }
+      if (option.provider === 'deepseek' && !secrets.deepseekKey) {
+        throw new Error(
+          'This model is not configured in this OLKIL build. Reinstall the latest app from olkil.com.',
         );
       }
       this.syncMcp(this.mergeMcp(request));
@@ -381,6 +409,7 @@ export class OlkilOpencodeRuntimeHost {
           autoApproveWeb,
           terminalAutoRun,
           terminalAllowlist: request.terminalAllowlist || [],
+          userPrompt: request.prompt || '',
           inputTokens: 0,
           outputTokens: 0,
           apiUsage: null,
@@ -484,6 +513,9 @@ export class OlkilOpencodeRuntimeHost {
     }
     bits.push(
       `You are OLKIL's coding agent. Product name is OLKIL. Never say you are OpenCode, Cursor, Cline, ChatGPT, or Claude.`,
+    );
+    bits.push(
+      `Never run npm run build, yarn build, pnpm build, vite build, or next build after edits unless the user explicitly asked. Those commands are too slow as a verify step.`,
     );
     if (active) {
       bits.push(active);
@@ -984,8 +1016,8 @@ export class OlkilOpencodeRuntimeHost {
     billed?: OlkilApiUsage | null,
   ): Promise<void> {
     if (!billed || billed.totalTokens < 1) {
-      if (provider === 'deepseek') {
-        console.warn('[olkil-wallet] skip charge: OpenCode run had no DeepSeek usage');
+      if (provider === 'deepseek' || provider === 'openrouter') {
+        console.warn('[olkil-wallet] skip charge: OpenCode run had no usage');
       }
       return;
     }
@@ -1068,6 +1100,9 @@ function decidePermissionResponse(live: LiveRun, permission: any): 'always' | 'o
   const command = permissionCommand(permission);
 
   if (/(external.?directory|outside)/.test(kind)) {
+    return 'reject';
+  }
+  if (isHeavyProjectBuildCommand(command) && !userAskedToRunBuild(live.userPrompt)) {
     return 'reject';
   }
   // Agent mode: never silently reject — that freezes the UI on "Planning next move"

@@ -55,11 +55,23 @@ if ( ! defined( 'ABSPATH' ) ) {
 
 			<?php
 			$hero_webm = OLKIL_URI . 'assets/olkil/video/hero-agent.webm';
+			$hero_mp4  = OLKIL_URI . 'assets/olkil/video/hero-agent.mp4';
 			?>
 			<div class="olkil-hero-agent" aria-hidden="true">
-				<div class="olkil-hero-agent__stage" data-olkil-loop-video>
-					<video class="olkil-hero-agent__video is-active" src="<?php echo esc_url( $hero_webm ); ?>" muted autoplay loop playsinline webkit-playsinline preload="auto" disablePictureInPicture></video>
-					<video class="olkil-hero-agent__video" src="<?php echo esc_url( $hero_webm ); ?>" muted playsinline webkit-playsinline preload="auto" disablePictureInPicture></video>
+				<div class="olkil-hero-agent__stage">
+					<video
+						class="olkil-hero-agent__video"
+						muted
+						autoplay
+						loop
+						playsinline
+						webkit-playsinline
+						preload="auto"
+						disablePictureInPicture
+					>
+						<source src="<?php echo esc_url( $hero_webm ); ?>" type="video/webm" />
+						<source src="<?php echo esc_url( $hero_mp4 ); ?>" type="video/mp4" />
+					</video>
 				</div>
 			</div>
 		</div>

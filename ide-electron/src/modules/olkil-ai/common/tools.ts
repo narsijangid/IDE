@@ -1,5 +1,6 @@
 import { ToolDefinition } from './index';
-import { AI_MODELS, publicModelName } from './models';
+import { findModel, publicModelName } from './models';
+import { isAutoModelId } from './auto-router';
 import { buildClineStyleSystemPrompt, type ChatMode } from './cline-prompt';
 
 export type { ChatMode };
@@ -68,7 +69,7 @@ function buildLocalOllamaSystemPrompt(
           'Agent mode: UPDATE THE PROJECT FILES. Chat code is not a solution.',
           'You MUST call tools: read_file, then search_replace or write_file / create_file.',
           'NEVER paste full files or big code fences in chat instead of editing.',
-          'After a successful edit, reply in 1–2 short sentences.',
+          'After a successful edit, reply in 1–2 short sentences. Do not run npm/yarn build.',
         ].join('\n'),
     'Never output XML, DSML, <invoke>, or fake tool-call text.',
     rules ? `\nProject rules:\n${rules}` : '',
@@ -93,10 +94,12 @@ function identityBlock(modelInfo?: { provider: string; model: string; label: str
 - If asked which *model* you are → say ${name}. If asked which *IDE* this is → say OLKIL.`;
   }
 
-  const matched =
-    AI_MODELS.find((m) => m.provider === modelInfo.provider && m.model === modelInfo.model) ||
-    AI_MODELS[0];
-  const name = publicModelName(matched);
+  const matched = findModel(
+    modelInfo.provider === 'openrouter' || modelInfo.model === 'auto'
+      ? `openrouter:${modelInfo.model}`
+      : `${modelInfo.provider}:${modelInfo.model}`,
+  );
+  const name = isAutoModelId(matched.id) ? 'OLKIL Auto' : publicModelName(matched);
 
   if (matched.provider === 'poolside' || matched.publicName === 'Dazzlone') {
     return `# Identity
@@ -525,7 +528,7 @@ export const AGENT_TOOLS: ToolDefinition[] = [
     function: {
       name: 'run_command',
       description:
-        'Run a shell command in the workspace. Use background=true for long-lived servers (npm run dev). Returns stdout/stderr and any detected localhost URLs.',
+        'Run a shell command in the workspace. Use background=true for long-lived servers (npm run dev). Do not run npm/yarn/pnpm build unless the user asked — it is too slow as a verify step.',
       parameters: {
         type: 'object',
         properties: {
@@ -575,239 +578,6 @@ export const AGENT_TOOLS: ToolDefinition[] = [
       },
     },
   },
-  {
-    type: 'function',
-    function: {
-      name: 'live_test',
-      description:
-        'Prepare live verify: start the app if needed and open ONE headed Chromium with DevTools (Console) on the right. If the Test Browser is already open, REUSE it — never launch a second window, never reload unless the URL is wrong. Then browser_snapshot + click/fill. File choosers auto-upload the newest matching Downloads/Desktop file.',
-      parameters: {
-        type: 'object',
-        properties: {
-          url: {
-            type: 'string',
-            description: 'Optional explicit URL (default: auto-detect from server output / common ports)',
-          },
-          goal: {
-            type: 'string',
-            description: 'What to verify, e.g. "signup button should create account"',
-          },
-          start_app: {
-            type: 'boolean',
-            description: 'Start package.json dev/start script if needed (default true)',
-          },
-          headed: {
-            type: 'boolean',
-            description: 'Show real browser window (default true)',
-          },
-        },
-        additionalProperties: false,
-      },
-    },
-  },
-  {
-    type: 'function',
-    function: {
-      name: 'browser_launch',
-      description:
-        'Launch headed Chromium only if none is open. If a Test Browser already exists, this is a no-op reuse. Prefer live_test. Never force a second window.',
-      parameters: {
-        type: 'object',
-        properties: {
-          headed: { type: 'boolean', description: 'Default true (visible window)' },
-        },
-        additionalProperties: false,
-      },
-    },
-  },
-  {
-    type: 'function',
-    function: {
-      name: 'browser_goto',
-      description:
-        'Navigate the existing Test Browser to a URL. Skips reload when already on that page. Never opens a new browser.',
-      parameters: {
-        type: 'object',
-        properties: {
-          url: { type: 'string' },
-        },
-        required: ['url'],
-        additionalProperties: false,
-      },
-    },
-  },
-  {
-    type: 'function',
-    function: {
-      name: 'browser_reload',
-      description: 'Reload the current page (use after code fixes).',
-      parameters: { type: 'object', properties: {}, additionalProperties: false },
-    },
-  },
-  {
-    type: 'function',
-    function: {
-      name: 'browser_snapshot',
-      description:
-        'Return an accessibility snapshot of the page (roles/names). Use this before click/fill.',
-      parameters: { type: 'object', properties: {}, additionalProperties: false },
-    },
-  },
-  {
-    type: 'function',
-    function: {
-      name: 'browser_click',
-      description:
-        'Click an element. Prefer role+name from snapshot. File-upload clicks auto-pick the newest matching file from Downloads/Desktop (no OS dialog hang).',
-      parameters: {
-        type: 'object',
-        properties: {
-          role: { type: 'string', description: 'ARIA role: button, link, textbox, etc.' },
-          name: { type: 'string', description: 'Accessible name / label' },
-          text: { type: 'string', description: 'Visible text fallback' },
-          selector: { type: 'string', description: 'CSS selector fallback' },
-          testid: { type: 'string', description: 'data-testid value' },
-          exact: { type: 'boolean' },
-        },
-        additionalProperties: false,
-      },
-    },
-  },
-  {
-    type: 'function',
-    function: {
-      name: 'browser_upload',
-      description:
-        'Upload a file into a file input / chooser. If path omitted, auto-picks the newest matching file from Downloads/Desktop (image→latest image, pdf→latest pdf). Prefer this or a normal click on Upload — never wait on OS dialogs.',
-      parameters: {
-        type: 'object',
-        properties: {
-          role: { type: 'string' },
-          name: { type: 'string' },
-          text: { type: 'string' },
-          selector: { type: 'string', description: 'CSS for input[type=file] or upload button' },
-          testid: { type: 'string' },
-          value: { type: 'string', description: 'Optional absolute file path; else auto-pick' },
-          kind: {
-            type: 'string',
-            description: 'image | pdf | document | spreadsheet | any (default inferred)',
-          },
-        },
-        additionalProperties: false,
-      },
-    },
-  },
-  {
-    type: 'function',
-    function: {
-      name: 'browser_fill',
-      description: 'Fill an input/textarea. Prefer role=textbox + name, or label name.',
-      parameters: {
-        type: 'object',
-        properties: {
-          value: { type: 'string' },
-          role: { type: 'string' },
-          name: { type: 'string' },
-          selector: { type: 'string' },
-          testid: { type: 'string' },
-          text: { type: 'string' },
-        },
-        required: ['value'],
-        additionalProperties: false,
-      },
-    },
-  },
-  {
-    type: 'function',
-    function: {
-      name: 'browser_type',
-      description: 'Type into a focused/located field (appends keystrokes).',
-      parameters: {
-        type: 'object',
-        properties: {
-          value: { type: 'string' },
-          role: { type: 'string' },
-          name: { type: 'string' },
-          selector: { type: 'string' },
-          testid: { type: 'string' },
-        },
-        required: ['value'],
-        additionalProperties: false,
-      },
-    },
-  },
-  {
-    type: 'function',
-    function: {
-      name: 'browser_press',
-      description: 'Press a keyboard key (Enter, Tab, Escape, etc.).',
-      parameters: {
-        type: 'object',
-        properties: {
-          key: { type: 'string' },
-        },
-        required: ['key'],
-        additionalProperties: false,
-      },
-    },
-  },
-  {
-    type: 'function',
-    function: {
-      name: 'browser_console',
-      description:
-        'Return captured console.log / warnings / errors plus failed network requests. The headed DevTools Console is already visible to the user.',
-      parameters: { type: 'object', properties: {}, additionalProperties: false },
-    },
-  },
-  {
-    type: 'function',
-    function: {
-      name: 'browser_network',
-      description:
-        'Return recent XHR/fetch API calls + failures (status/url/method). Also switch the visible DevTools to the Network panel so the user can watch requests.',
-      parameters: { type: 'object', properties: {}, additionalProperties: false },
-    },
-  },
-  {
-    type: 'function',
-    function: {
-      name: 'browser_devtools',
-      description:
-        'Show Chromium DevTools docked RIGHT so the user can watch Console (console.log) or Network like a QA. Live Test already opens Console. Use panel=network or panel=console to switch. Do not close during Live Test.',
-      parameters: {
-        type: 'object',
-        properties: {
-          action: {
-            type: 'string',
-            description: 'open | close | toggle (default open)',
-          },
-          panel: {
-            type: 'string',
-            description: 'console | network | elements | sources | application',
-          },
-        },
-        additionalProperties: false,
-      },
-    },
-  },
-  {
-    type: 'function',
-    function: {
-      name: 'browser_screenshot',
-      description: 'Capture a PNG screenshot of the current page (path returned for evidence).',
-      parameters: { type: 'object', properties: {}, additionalProperties: false },
-    },
-  },
-  {
-    type: 'function',
-    function: {
-      name: 'browser_close',
-      description:
-        'Close the Test Browser. During Live Test this is refused — keep one window open until the run finishes.',
-      parameters: { type: 'object', properties: {}, additionalProperties: false },
-    },
-  },
 ];
 
 /** Tools safe to run in parallel within one model step. */
@@ -830,10 +600,6 @@ export const READONLY_TOOL_NAMES = new Set([
   'list_dir',
   'detect_dev_server',
   'get_command_output',
-  'browser_snapshot',
-  'browser_console',
-  'browser_network',
-  'browser_screenshot',
 ]);
 
 export const MUTATING_TOOL_NAMES = new Set([
@@ -881,24 +647,6 @@ const EDIT_TOOL_NAMES = new Set([
   'detect_dev_server',
 ]);
 
-const BROWSER_TOOL_NAMES = new Set([
-  ...EDIT_TOOL_NAMES,
-  'live_test',
-  'browser_launch',
-  'browser_goto',
-  'browser_reload',
-  'browser_snapshot',
-  'browser_click',
-  'browser_fill',
-  'browser_upload',
-  'browser_type',
-  'browser_press',
-  'browser_console',
-  'browser_network',
-  'browser_devtools',
-  'browser_screenshot',
-]);
-
 /** Small Ollama models cannot bind the full tool catalog. */
 const LOCAL_ASK_TOOL_NAMES = new Set([
   'get_active_file',
@@ -921,7 +669,6 @@ const LOCAL_EDIT_TOOL_NAMES = new Set([
  */
 export function selectAgentTools(opts: {
   mode?: ChatMode;
-  liveTest?: boolean;
   madeEdits?: boolean;
   searchCount?: number;
   readCount?: number;
@@ -936,9 +683,6 @@ export function selectAgentTools(opts: {
   }
   if (opts.mode === 'ask') {
     return AGENT_TOOLS.filter((t) => ASK_TOOL_NAMES.has(t.function.name));
-  }
-  if (opts.liveTest) {
-    return AGENT_TOOLS.filter((t) => BROWSER_TOOL_NAMES.has(t.function.name));
   }
   const exploring =
     (opts.searchCount || 0) + (opts.readCount || 0) < 1 &&

@@ -10,8 +10,12 @@ if ( ! defined( 'ABSPATH' ) ) {
 
 $video_url = OLKIL_URI . 'assets/olkil/video/IDEdemo.mp4';
 ?>
-<section class="olkil-demo olkil-section olkil-section--tight" id="demo" aria-label="<?php esc_attr_e( 'OLKIL product demo', 'olkil' ); ?>">
+<section class="olkil-demo olkil-section olkil-section--tight" id="demo" aria-labelledby="olkil-demo-title">
 	<div class="olkil-wrap">
+		<header class="olkil-section__head">
+			<h2 id="olkil-demo-title"><?php esc_html_e( 'See OLKIL in action', 'olkil' ); ?></h2>
+			<p><?php esc_html_e( 'The full IDE — agents, autocomplete, and chat — in one take.', 'olkil' ); ?></p>
+		</header>
 		<div class="olkil-demo__frame olkil-reveal">
 			<video
 				class="olkil-demo__video"

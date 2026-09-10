@@ -43,6 +43,8 @@ export interface ChatCompletionRequest {
   streamId?: string;
   /** Model catalog id, e.g. poolside:poolside/laguna-s-2.1 (Dazzlone) */
   modelId?: string;
+  /** Cursor Auto optimize-for: cost | balanced | intelligence */
+  autoOptimizeFor?: 'cost' | 'balanced' | 'intelligence';
   /** Override default max_tokens (helps avoid provider 500s on huge replies). */
   maxTokens?: number;
   /** User-added OpenAI-compatible models for this request (BYOK). */
@@ -70,15 +72,19 @@ export interface ChatCompletionResult {
   content: string;
   tool_calls?: ChatToolCall[];
   finish_reason?: string;
-  /** DeepSeek (or OpenAI-compatible) usage from the API — never estimated. */
+  /** Provider usage from the API — never estimated. */
   usage?: {
     prompt_tokens?: number;
     completion_tokens?: number;
     total_tokens?: number;
     prompt_cache_hit_tokens?: number;
     prompt_cache_miss_tokens?: number;
+    native_tokens_prompt?: number;
+    native_tokens_completion?: number;
     completion_tokens_details?: { reasoning_tokens?: number };
   };
+  /** OpenRouter generation id for native token lookup. */
+  generationId?: string;
 }
 
 export interface ChatStreamState {
@@ -233,7 +239,7 @@ export interface LocalModelStatus {
   approxSizeGb?: number;
 }
 
-/** Background / foreground shell command for the live-test agent. */
+/** Background / foreground shell command. */
 export interface CommandRunRequest {
   command: string;
   cwd?: string;
@@ -265,95 +271,6 @@ export interface DevServerDetectResult {
   recommendedCommand: string | null;
   suggestedUrls: string[];
   frameworkHints: string[];
-  error?: string;
-}
-
-/** Locator + action payload for Playwright tools. */
-export interface BrowserActionRequest {
-  url?: string;
-  headed?: boolean;
-  role?: string;
-  name?: string;
-  selector?: string;
-  text?: string;
-  testid?: string;
-  exact?: boolean;
-  value?: string;
-  key?: string;
-  timeoutMs?: number;
-  /** File upload: image | pdf | document | spreadsheet | any */
-  kind?: string;
-  accept?: string;
-}
-
-export interface BrowserConsoleEntry {
-  type: string;
-  text: string;
-  timestamp: number;
-}
-
-export interface BrowserNetworkFailure {
-  url: string;
-  method: string;
-  status?: number;
-  error?: string;
-  timestamp: number;
-}
-
-export interface BrowserNetworkRequest {
-  url: string;
-  method: string;
-  status?: number;
-  resourceType?: string;
-  error?: string;
-  timestamp: number;
-}
-
-/** Open / close Chromium DevTools (docked right, on-demand). */
-export interface BrowserDevToolsRequest {
-  action?: 'open' | 'close' | 'toggle' | 'show';
-  /** console | network | elements | sources | application */
-  panel?: string;
-}
-
-export interface BrowserActionResult {
-  ok: boolean;
-  action: string;
-  message: string;
-  url: string;
-  title?: string;
-  snapshot: string;
-  screenshotPath?: string;
-  consoleErrors: BrowserConsoleEntry[];
-  /** console.log / info — user can also see these in the headed DevTools Console. */
-  consoleLogs?: BrowserConsoleEntry[];
-  networkFailures: BrowserNetworkFailure[];
-  /** Recent XHR/fetch (+ errors) for accurate API diagnosis without DevTools UI. */
-  networkRequests?: BrowserNetworkRequest[];
-  /** Whether the visible DevTools dock is currently open. */
-  devtoolsOpen?: boolean;
-  /** Last auto/manual file upload from Downloads (live test). */
-  lastUpload?: { path: string; kind: string };
-  error?: string;
-}
-
-export interface LiveTestRequest {
-  workspaceRoot: string;
-  url?: string;
-  goal?: string;
-  startApp?: boolean;
-  headed?: boolean;
-  readyTimeoutMs?: number;
-}
-
-export interface LiveTestResult {
-  ok: boolean;
-  url: string;
-  commandId?: string;
-  command?: string;
-  detect: DevServerDetectResult;
-  notes: string[];
-  result: BrowserActionResult;
   error?: string;
 }
 
@@ -401,6 +318,7 @@ export interface IOlkilAiNodeService {
       displayName?: string;
       badge?: string;
       approxSizeGb?: number;
+      group?: string;
     }>
   >;
   /** Check if an Ollama model is already downloaded (does not start pull). */
@@ -417,31 +335,12 @@ export interface IOlkilAiNodeService {
   /** Cancel an in-progress Ollama model download. */
   cancelLocalModelDownload(): Promise<OllamaSetupState>;
 
-  /** Detect package.json scripts / framework for live testing. */
+  /** Detect package.json scripts / framework. */
   detectDevServer(root: string): Promise<DevServerDetectResult>;
   /** Run a shell command in the workspace (optionally background for `npm run dev`). */
   runCommand(request: CommandRunRequest): Promise<CommandRunResult>;
   getCommandOutput(id: string): Promise<CommandRunResult | null>;
   stopCommand(id: string): Promise<boolean>;
-  /** Playwright: launch / navigate / interact / evidence. */
-  browserLaunch(headed?: boolean): Promise<BrowserActionResult>;
-  browserGoto(url: string): Promise<BrowserActionResult>;
-  browserReload(): Promise<BrowserActionResult>;
-  browserClick(request: BrowserActionRequest): Promise<BrowserActionResult>;
-  browserFill(request: BrowserActionRequest): Promise<BrowserActionResult>;
-  browserType(request: BrowserActionRequest): Promise<BrowserActionResult>;
-  browserUpload(request: BrowserActionRequest): Promise<BrowserActionResult>;
-  browserPress(key: string): Promise<BrowserActionResult>;
-  browserSnapshot(): Promise<BrowserActionResult>;
-  browserScreenshot(): Promise<BrowserActionResult>;
-  browserConsole(): Promise<BrowserActionResult>;
-  /** Captured XHR/fetch + failures (prefer over DevTools for API diagnosis). */
-  browserNetwork(): Promise<BrowserActionResult>;
-  /** Open/close DevTools UI on demand (right dock). Not open by default. */
-  browserDevtools(request?: BrowserDevToolsRequest): Promise<BrowserActionResult>;
-  browserClose(): Promise<BrowserActionResult>;
-  /** Start app (if needed) + open headed browser + first snapshot. */
-  liveTest(request: LiveTestRequest): Promise<LiveTestResult>;
 
   /**
    * Run the coding agent (OpenCode sidecar). Branding stays OLKIL.
@@ -482,6 +381,7 @@ export interface ClineEngineRunRequest {
   activeFile?: string;
   mode: 'agent' | 'plan' | 'ask';
   modelId?: string;
+  autoOptimizeFor?: 'cost' | 'balanced' | 'intelligence';
   rules?: string;
   autoApprove?: boolean;
   /** File writes inside the workspace */
@@ -656,8 +556,6 @@ export interface UiChatMessage {
   todos?: AgentTodoItem[];
   /** Parsed follow-up suggestion chips under assistant reply */
   suggestions?: string[];
-  /** User prompt started a Live Test — show Testing badge on this bubble */
-  liveTest?: boolean;
 }
 
 export interface IOlkilChatService {
@@ -674,11 +572,10 @@ export interface IOlkilChatService {
     displayName?: string;
     badge?: string;
     approxSizeGb?: number;
+    group?: string;
   }>;
   /** 'agent' = autonomous edits; 'plan' = discuss first; 'ask' = read-only */
   chatMode: 'agent' | 'plan' | 'ask';
-  /** True while a Live Test run is active (pink Testing badge). */
-  liveTesting: boolean;
   /** Free-plan DeepSeek 50k token cap used up — models stay visible but locked. */
   deepseekLocked: boolean;
   /** Local Ollama download / readiness for the selected model */
@@ -704,7 +601,7 @@ export interface IOlkilChatService {
   send(
     text: string,
     attachments?: ChatAttachment[],
-    opts?: { historyText?: string; liveTest?: boolean },
+    opts?: { historyText?: string },
   ): Promise<void>;
   /** Fuzzy file/folder list for @mention picker. */
   listMentionCandidates(query: string, limit?: number): Promise<ChatAttachment[]>;
@@ -714,8 +611,6 @@ export interface IOlkilChatService {
   pauseOllamaDownload(): Promise<void>;
   cancelOllamaDownload(): Promise<void>;
   setChatMode(mode: 'agent' | 'plan' | 'ask'): void;
-  /** One-click live browser verify → fix → retest loop. */
-  startLiveTest(goal?: string): Promise<void>;
   clear(): void;
   /** Persist current chat (if signed in), then start a fresh session. */
   newChat(): void;

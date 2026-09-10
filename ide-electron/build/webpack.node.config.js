@@ -71,8 +71,6 @@ module.exports = createConfig({
           'vm2',
           'keytar',
           'vertx',
-          'playwright',
-          'playwright-core',
         ].indexOf(request) !== -1
       ) {
         return callback(null, 'commonjs ' + request);

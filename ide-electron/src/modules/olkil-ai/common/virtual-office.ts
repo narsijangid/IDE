@@ -67,8 +67,7 @@ export interface VirtualOfficeTask {
   liveStatus?: string;
   activities: VirtualOfficeLiveActivity[];
   files: VirtualOfficeLiveFile[];
-  /** live-test = Jasmine QA via Dev Studio browser loop (no Cline run). */
-  engine?: 'cline' | 'live-test';
+  engine?: 'cline';
 }
 
 /** Snapshot shown when user clicks a person on the floor. */
@@ -105,16 +104,6 @@ export interface IOlkilVirtualOfficeService {
    * Does not set single-agent chat.busy.
    */
   assignFromChat(prompt: string, opts?: { modelId?: string; mode?: 'agent' | 'plan' | 'ask' }): Promise<VirtualOfficeTask>;
-
-  /**
-   * Live Test from chat while Virtual Office is open: Jasmine (QA) takes the desk
-   * visually. Actual browser testing still runs on the Dev Studio live-test engine.
-   */
-  beginLiveQa(goal: string): string | null;
-  endLiveQa(
-    taskId: string,
-    result: { status: 'completed' | 'failed' | 'cancelled'; summary?: string },
-  ): void;
 
   /** Floor click — focus this worker's live brief in chat. */
   inspectWorker(workerId: string): void;

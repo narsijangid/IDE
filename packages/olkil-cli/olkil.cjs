@@ -14,7 +14,7 @@ const os = require('os');
 const path = require('path');
 const { spawn, spawnSync, execSync } = require('child_process');
 
-const VERSION = '1.0.22';
+const VERSION = '1.0.23';
 const OPENCODE_VERSION = process.env.OPENCODE_VERSION || 'v1.18.21';
 const ORIGIN = (process.env.OLKIL_AUTH_ORIGIN || 'https://olkil.com').replace(/\/$/, '');
 const FIREBASE_API_KEY = 'AIzaSyA3z0FDMJrfskddGj4Iair9D2XH3K_IS2k';
@@ -1273,6 +1273,7 @@ function runOlkilChat(api, meta) {
       cursor: 0,
       scroll: 0,
       busy: false,
+      paused: false,
       status: 'ready',
       tick: 0,
       sessionId: '',
@@ -1322,6 +1323,9 @@ function runOlkilChat(api, meta) {
           for (const w of wrapText(msg.text, inner)) lines.push(fg(FG, w));
         } else if (msg.role === 'system') {
           for (const w of wrapText(msg.text, inner)) lines.push(fg(MUTED, w));
+        } else if (msg.role === 'error') {
+          lines.push(fg(RED, '✗  expected error'));
+          for (const w of wrapText(msg.text, inner)) lines.push(fg(RED, w));
         } else {
           const tag = msg.live ? state.status || 'working' : '';
           lines.push(fg(PINK, 'OLKIL') + (tag ? fg(MUTED, '  ·  ' + tag) : ''));
@@ -1392,7 +1396,15 @@ function runOlkilChat(api, meta) {
       }
       rows.push(filledRail(boxLeft, boxW, ''));
       rows.push(filledRail(boxLeft, boxW, ''));
-      rows.push(filledRail(boxLeft, boxW, fg(PINK, 'Agent') + fg(MUTED, ' · OLKIL')));
+      rows.push(
+        filledRail(
+          boxLeft,
+          boxW,
+          state.paused
+            ? fg(RED, 'Paused') + fg(MUTED, ' · new requests → Server busy')
+            : fg(PINK, 'Agent') + fg(MUTED, ' · OLKIL')
+        )
+      );
       rows.push(filledRail(boxLeft, boxW, ''));
       rows.push(roundEdge(boxLeft, boxW, 'bot'));
 
@@ -1456,7 +1468,7 @@ function runOlkilChat(api, meta) {
       for (const row of view) lines.push('  ' + row);
       lines.push(fg(LINE, '─'.repeat(w)));
       const inputStartRow = lines.length;
-      const ph = state.busy ? 'working…' : 'What should we change?';
+      const ph = state.paused ? 'paused — /resume' : state.busy ? 'working…' : 'What should we change?';
       if (state.input) {
         lines.push('  ' + fg(PINK, 'ASK') + '  ' + fg(FG, typed[0] || ''));
         for (let i = 1; i < inputRows; i++) lines.push('       ' + fg(FG, typed[i] || ''));
@@ -1464,11 +1476,22 @@ function runOlkilChat(api, meta) {
         lines.push('  ' + fg(PINK, 'ASK') + '  ' + fg(MUTED, ph));
       }
       lines.push(
-        fg(MUTED, state.busy ? '  esc stop   ctrl+c quit' : '  enter send   /quit   ctrl+c quit')
+        fg(
+          MUTED,
+          state.paused
+            ? '  PAUSED   /resume   ctrl+c quit'
+            : state.busy
+              ? '  esc stop   ctrl+c quit'
+              : '  enter send   /pause   /quit   ctrl+c quit'
+        )
       );
 
       const folder = shortDir(meta.projectDir);
-      const fl = '  ' + fg(GREEN, '●') + ' ' + fg(MUTED, folder);
+      const fl =
+        '  ' +
+        (state.paused ? fg(RED, '●') : fg(GREEN, '●')) +
+        ' ' +
+        fg(MUTED, state.paused ? folder + '  paused' : folder);
       const fr = fg(PINK, 'OLKIL') + '  ';
       lines.push(fl + ' '.repeat(Math.max(1, w - visLen(fl) - visLen(fr))) + fr);
 
@@ -1499,6 +1522,27 @@ function runOlkilChat(api, meta) {
         clearInterval(spinner);
         spinner = null;
       }
+    }
+
+    function pushServerBusy() {
+      const last = state.messages[state.messages.length - 1];
+      if (last && last.role === 'error' && /^Server busy/.test(String(last.text || ''))) {
+        scheduleDraw();
+        return;
+      }
+      const detail = state.paused
+        ? 'CLI is paused. Type /resume to accept requests again.'
+        : 'A request is already running. Press esc to stop, then try again.';
+      state.messages.push({
+        role: 'error',
+        text: 'Server busy\n' + detail,
+      });
+      state.scroll = 0;
+      scheduleDraw();
+    }
+
+    function isSlashCommand(text) {
+      return /^(?:\/(?:pause|resume|quit|exit|clear|help))$/i.test(String(text || '').trim());
     }
 
     async function settleTurn(err) {
@@ -1686,6 +1730,24 @@ function runOlkilChat(api, meta) {
       const text = String(raw || '').trim();
       if (!text) return;
       if (text === '/quit' || text === '/exit') return quit(0);
+      if (text === '/pause') {
+        state.paused = true;
+        state.messages.push({
+          role: 'system',
+          text: 'CLI paused. Incoming prompts return Server busy until you type /resume.',
+        });
+        scheduleDraw();
+        return;
+      }
+      if (text === '/resume') {
+        state.paused = false;
+        state.messages.push({
+          role: 'system',
+          text: 'CLI resumed. Ready for requests.',
+        });
+        scheduleDraw();
+        return;
+      }
       if (text === '/clear') {
         state.messages = [];
         scheduleDraw();
@@ -1694,9 +1756,13 @@ function runOlkilChat(api, meta) {
       if (text === '/help') {
         state.messages.push({
           role: 'system',
-          text: 'enter send · esc stop · /clear · /quit',
+          text: 'enter send · esc stop · /pause · /resume · /clear · /quit',
         });
         scheduleDraw();
+        return;
+      }
+      if (state.paused || state.busy) {
+        pushServerBusy();
         return;
       }
       state.history.push(text);
@@ -1740,8 +1806,11 @@ function runOlkilChat(api, meta) {
         return;
       }
       if (s === '\r' || s === '\n') {
-        if (state.busy) return;
         const text = state.input;
+        if ((state.busy || state.paused) && !isSlashCommand(text)) {
+          pushServerBusy();
+          return;
+        }
         state.input = '';
         state.cursor = 0;
         onSubmit(text);

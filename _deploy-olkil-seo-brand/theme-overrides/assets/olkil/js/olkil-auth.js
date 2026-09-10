@@ -1,0 +1,309 @@
+/**
+ * OLKIL website ↔ IDE auth bridge (Firebase).
+ *
+ * 1) POST tokens to http://127.0.0.1:<port>/callback (preferred)
+ * 2) Fallback: olkil://auth/callback?... deep link (never leave user on a dead localhost page)
+ * Stay on olkil.com with a success + "Open OLKIL" button whenever possible.
+ */
+(function () {
+  'use strict';
+
+  var firebaseConfig = {
+    apiKey: 'AIzaSyA3z0FDMJrfskddGj4Iair9D2XH3K_IS2k',
+    authDomain: 'olkil-2c8ac.firebaseapp.com',
+    projectId: 'olkil-2c8ac',
+    storageBucket: 'olkil-2c8ac.firebasestorage.app',
+    messagingSenderId: '781364120676',
+    appId: '1:781364120676:web:b95ff8f1839b3a0b0aa371',
+    measurementId: 'G-77ZW0JFXSB',
+  };
+
+  var completing = false;
+  var completed = false;
+
+  function qs(name) {
+    return new URLSearchParams(window.location.search).get(name);
+  }
+
+  function isLoopbackRedirect(uri) {
+    if (!uri) return false;
+    try {
+      var u = new URL(uri);
+      if (u.protocol !== 'http:' && u.protocol !== 'https:') return false;
+      if (u.hostname !== '127.0.0.1' && u.hostname !== 'localhost') return false;
+      return u.pathname.indexOf('/callback') === 0 || u.pathname === '/';
+    } catch (e) {
+      return false;
+    }
+  }
+
+  function setStatus(msg, isError) {
+    var el = document.getElementById('olkil-auth-status');
+    if (!el) return;
+    el.hidden = !msg;
+    el.textContent = msg || '';
+    el.classList.toggle('is-error', !!isError);
+  }
+
+  function setBusy(busy) {
+    document.querySelectorAll('.olkil-auth-btn').forEach(function (btn) {
+      btn.disabled = !!busy;
+    });
+  }
+
+  function hideActions() {
+    var actions = document.getElementById('olkil-auth-actions');
+    if (actions) actions.hidden = true;
+  }
+
+  function showSuccessStayOnPage() {
+    completed = true;
+    completing = false;
+    setBusy(false);
+    hideActions();
+
+    var lead = document.getElementById('olkil-auth-lead');
+    var isCli = qs('client') === 'olkil-cli';
+    if (lead) {
+      lead.textContent = isCli
+        ? 'Return to your terminal — OLKIL CLI is signed in.'
+        : 'Authentication complete. Return to the OLKIL app — you can close this tab.';
+    }
+    var title = document.querySelector('.olkil-auth-card h1');
+    if (title) {
+      title.textContent = isCli ? 'CLI connected' : "You're signed in";
+    }
+    setStatus(isCli ? 'CLI login successful.' : 'Connected to OLKIL successfully.', false);
+
+    var done = document.getElementById('olkil-auth-done');
+    if (done) {
+      done.hidden = false;
+      if (isCli) {
+        var openApp = done.querySelector('a[href^="olkil:"]');
+        if (openApp) openApp.hidden = true;
+      }
+    } else if (!document.getElementById('olkil-auth-done-fallback')) {
+      var card = document.querySelector('.olkil-auth-card');
+      if (card) {
+        var wrap = document.createElement('div');
+        wrap.id = 'olkil-auth-done-fallback';
+        wrap.className = 'olkil-auth-done';
+        wrap.innerHTML =
+          '<a class="olkil-btn olkil-btn--primary olkil-btn--lg" href="olkil://auth/done">Open OLKIL</a>' +
+          '<button type="button" class="olkil-btn olkil-btn--ghost olkil-btn--lg" id="olkil-auth-close-fallback">Close this tab</button>';
+        card.appendChild(wrap);
+        var closeBtn = document.getElementById('olkil-auth-close-fallback');
+        if (closeBtn) {
+          closeBtn.addEventListener('click', function () {
+            try {
+              window.close();
+            } catch (e) {}
+          });
+        }
+      }
+    }
+  }
+
+  function postToIde(redirectUri, state, idToken, refreshToken) {
+    return fetch(redirectUri, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Accept: 'application/json',
+      },
+      body: JSON.stringify({
+        state: state,
+        id_token: idToken,
+        refresh_token: refreshToken,
+      }),
+      mode: 'cors',
+      cache: 'no-store',
+    }).then(function (res) {
+      if (!res.ok) {
+        throw new Error('IDE callback returned ' + res.status);
+      }
+      return res.json().catch(function () {
+        return { ok: true };
+      });
+    });
+  }
+
+  function deepLinkToIde(state, idToken, refreshToken) {
+    var url =
+      'olkil://auth/callback?state=' +
+      encodeURIComponent(state) +
+      '&id_token=' +
+      encodeURIComponent(idToken) +
+      '&refresh_token=' +
+      encodeURIComponent(refreshToken);
+    // Hidden iframe is less disruptive than top-level navigation away from success UI
+    try {
+      var iframe = document.createElement('iframe');
+      iframe.style.display = 'none';
+      iframe.src = url;
+      document.body.appendChild(iframe);
+      setTimeout(function () {
+        try {
+          document.body.removeChild(iframe);
+        } catch (e) {}
+      }, 2000);
+    } catch (e) {
+      window.location.href = url;
+    }
+  }
+
+  function completeToIde(user) {
+    if (!user || completing || completed) {
+      return;
+    }
+
+    var state = qs('state');
+    var redirectUri = qs('redirect_uri');
+
+    if (!state) {
+      setStatus('Signed in. Your profile is ready on OLKIL.', false);
+      hideActions();
+      var lead = document.getElementById('olkil-auth-lead');
+      if (lead) {
+        lead.textContent = 'Welcome back — open your profile or return home.';
+      }
+      setTimeout(function () {
+        var profileUrl = (window.olkilData && olkilData.profileUrl) || '/profile/';
+        window.location.href = profileUrl;
+      }, 700);
+      return;
+    }
+
+    completing = true;
+    setBusy(true);
+
+    Promise.all([user.getIdToken(true), Promise.resolve(user.refreshToken)])
+      .then(function (parts) {
+        var idToken = parts[0];
+        var refreshToken = parts[1];
+        if (!idToken || !refreshToken) {
+          completing = false;
+          setBusy(false);
+          setStatus('Could not read Firebase tokens.', true);
+          return;
+        }
+
+        if (isLoopbackRedirect(redirectUri)) {
+          setStatus('Connecting back to OLKIL…', false);
+          return postToIde(redirectUri, state, idToken, refreshToken)
+            .then(function () {
+              showSuccessStayOnPage();
+            })
+            .catch(function (err) {
+              console.warn('[olkil-auth] loopback POST failed, using deep link', err);
+              // Do NOT navigate to http://127.0.0.1 — that shows "can't be reached"
+              // when the IDE already closed the port. Use the custom protocol instead.
+              deepLinkToIde(state, idToken, refreshToken);
+              showSuccessStayOnPage();
+            });
+        }
+
+        completing = false;
+        setBusy(false);
+        setStatus(
+          'Signed in in the browser. Keep OLKIL open and use Sign in from the IDE so it can receive the session.',
+          true,
+        );
+        hideActions();
+      })
+      .catch(function (err) {
+        completing = false;
+        setBusy(false);
+        setStatus((err && err.message) || 'Token error', true);
+      });
+  }
+
+  function boot() {
+    if (!document.getElementById('olkil-auth-ide')) return;
+    if (typeof firebase === 'undefined') {
+      setStatus('Firebase SDK failed to load.', true);
+      return;
+    }
+
+    if (!firebase.apps.length) {
+      firebase.initializeApp(firebaseConfig);
+    }
+    var auth = firebase.auth();
+
+    var client = qs('client');
+    if (client === 'olkil-ide') {
+      var lead = document.getElementById('olkil-auth-lead');
+      if (lead) {
+        lead.textContent = 'Authorize this browser session to unlock OLKIL on your desktop.';
+      }
+    }
+    if (client === 'olkil-cli') {
+      var cliLead = document.getElementById('olkil-auth-lead');
+      if (cliLead) {
+        cliLead.textContent = 'Authorize OLKIL CLI. After Google sign-in, return to your terminal.';
+      }
+      var cliTitle = document.querySelector('.olkil-auth-card h1');
+      if (cliTitle) cliTitle.textContent = 'Sign in to OLKIL CLI';
+    }
+
+    var closeBtn = document.getElementById('olkil-auth-close');
+    if (closeBtn) {
+      closeBtn.addEventListener('click', function () {
+        try {
+          window.close();
+        } catch (e) {}
+      });
+    }
+
+    var autoHandled = false;
+    auth.onAuthStateChanged(function (user) {
+      if (user && qs('state') && !autoHandled && !completing && !completed) {
+        autoHandled = true;
+        setTimeout(function () {
+          if (!completing && !completed) {
+            completeToIde(user);
+          }
+        }, 250);
+      }
+    });
+
+    var googleBtn = document.getElementById('olkil-auth-google');
+    if (googleBtn) {
+      googleBtn.addEventListener('click', function () {
+        setBusy(true);
+        setStatus('Redirecting to Google…');
+        var provider = new firebase.auth.GoogleAuthProvider();
+        provider.setCustomParameters({ prompt: 'select_account' });
+        auth
+          .signInWithPopup(provider)
+          .then(function (cred) {
+            completeToIde(cred.user);
+          })
+          .catch(function (err) {
+            if (err && (err.code === 'auth/popup-blocked' || err.code === 'auth/cancelled-popup-request')) {
+              return auth.signInWithRedirect(provider);
+            }
+            setBusy(false);
+            setStatus((err && err.message) || 'Google sign-in failed', true);
+          });
+      });
+    }
+
+    auth
+      .getRedirectResult()
+      .then(function (result) {
+        if (result && result.user) {
+          completeToIde(result.user);
+        }
+      })
+      .catch(function (err) {
+        if (err) setStatus(err.message || 'Redirect sign-in failed', true);
+      });
+  }
+
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', boot);
+  } else {
+    boot();
+  }
+})();

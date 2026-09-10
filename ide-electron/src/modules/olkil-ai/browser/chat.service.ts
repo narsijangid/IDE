@@ -18,13 +18,13 @@ import {
   FileChangeKind,
   IOlkilAiNodeService,
   IOlkilChatService,
-  LiveTestResult,
   OlkilAiNodeServicePath,
   OllamaDownloadUiState,
   QueuedChatMessage,
   UiChatMessage,
 } from '../common';
-import { AI_MODELS, DEFAULT_MODEL_ID, findModel, publicModelName, applyCustomModelEndpoints, customModelCatalogId, isCustomProvider } from '../common/models';
+import { AI_MODELS, DEFAULT_MODEL_ID, findModel, publicModelName, applyCustomModelEndpoints, applyOpenRouterExtraModels, customModelCatalogId, isCustomProvider, isMeteredCloudProvider } from '../common/models';
+import { isAutoModelId } from '../common/auto-router';
 import {
   buildSystemPrompt,
   AGENT_TOOLS,
@@ -193,16 +193,8 @@ export class OlkilChatService extends Disposable implements IOlkilChatService {
   modelId = DEFAULT_MODEL_ID;
   modelName = findModel(DEFAULT_MODEL_ID).model;
   chatMode: ChatMode = DEFAULT_CHAT_MODE;
-  /** Active Live Test session — UI shows pink Testing badge; browser boot runs immediately. */
-  liveTesting = false;
   /** Free-plan DeepSeek 50k token cap used up. */
   deepseekLocked = false;
-  private liveTestBootPromise: Promise<LiveTestResult | null> | null = null;
-  private liveTestBootResult: LiveTestResult | null = null;
-  /** Virtual Office Jasmine desk task while Live Test uses the Dev Studio browser loop. */
-  private voLiveQaTaskId: string | null = null;
-  /** Dedupes console/network issues already shown in chat this Live Test run. */
-  private liveIssueKeys = new Set<string>();
   chatHistory: ChatHistorySummary[] = [];
   private sessionId = nextSessionId();
   private sessionCreatedAt = Date.now();
@@ -218,6 +210,7 @@ export class OlkilChatService extends Disposable implements IOlkilChatService {
     displayName?: string;
     badge?: string;
     approxSizeGb?: number;
+    group?: string;
   }> = AI_MODELS.map((m) => ({
     id: m.id,
     provider: m.provider,
@@ -226,6 +219,7 @@ export class OlkilChatService extends Disposable implements IOlkilChatService {
     displayName: m.displayName,
     badge: m.badge,
     approxSizeGb: m.approxSizeGb,
+    group: m.group,
   }));
   private builtinModels = [...this.catalogModels];
   models: Array<{
@@ -236,6 +230,7 @@ export class OlkilChatService extends Disposable implements IOlkilChatService {
     displayName?: string;
     badge?: string;
     approxSizeGb?: number;
+    group?: string;
   }> = [...this.catalogModels];
   ollamaDownload: OllamaDownloadUiState = {
     phase: 'idle',
@@ -295,6 +290,20 @@ export class OlkilChatService extends Disposable implements IOlkilChatService {
       }
 
       this.catalogModels = await this.aiNode.listModels();
+      applyOpenRouterExtraModels(
+        this.catalogModels
+          .filter((m) => m.provider === 'openrouter' && m.id !== DEFAULT_MODEL_ID)
+          .map((m) => ({
+            id: m.id,
+            provider: 'openrouter' as const,
+            model: m.model,
+            label: m.label,
+            displayName: m.displayName,
+            badge: m.badge,
+            publicName: m.displayName || m.label,
+            group: 'more' as const,
+          })),
+      );
       this.builtinModels = this.catalogModels.length ? this.catalogModels : [...this.builtinModels];
       this.rebuildCatalog();
       this.wireSettings();
@@ -307,10 +316,7 @@ export class OlkilChatService extends Disposable implements IOlkilChatService {
         if (!isCustomProvider(option.provider)) {
           const ok = await this.aiNode.hasApiKey(option.provider);
           if (!ok) {
-            this.pushUi(
-              'status',
-              `Missing API key for ${option.provider}. Add it to .env`,
-            );
+            this.pushUi('status', 'Cloud models are not configured in this OLKIL build.');
           }
         }
       }
@@ -354,6 +360,7 @@ export class OlkilChatService extends Disposable implements IOlkilChatService {
         displayName: m.displayName,
         badge: m.badge,
         approxSizeGb: m.approxSizeGb,
+        group: m.group,
       })),
     ];
     this.applyVisibleModels();
@@ -375,6 +382,9 @@ export class OlkilChatService extends Disposable implements IOlkilChatService {
     const saved = this.settings.get();
     const filtered = this.catalogModels.filter((model) => {
       if (model.provider === 'custom') {
+        return true;
+      }
+      if (isAutoModelId(model.id) || model.group === 'more') {
         return true;
       }
       return isModelEnabledInSettings(saved, model.id);
@@ -728,7 +738,7 @@ export class OlkilChatService extends Disposable implements IOlkilChatService {
     if (this.busy) {
       return;
     }
-    if (this.deepseekLocked && findModel(modelId).provider === 'deepseek') {
+    if (this.deepseekLocked && isMeteredCloudProvider(findModel(modelId).provider)) {
       return;
     }
     if (!this.models.some((model) => model.id === modelId)) {
@@ -744,6 +754,7 @@ export class OlkilChatService extends Disposable implements IOlkilChatService {
     this.modelId = modelId;
     const option = findModel(modelId);
     this.modelName = option.model;
+    this.settings.patch({ defaultModelId: modelId });
     this.pushUi('status', `Model switched to ${option.label}`);
     this.fire();
     if (option.provider === 'ollama') {
@@ -758,10 +769,10 @@ export class OlkilChatService extends Disposable implements IOlkilChatService {
     try {
       const access = await this.aiNode.getDeepseekAccess();
       this.deepseekLocked = Boolean(access.locked);
-      if (this.deepseekLocked && !this.busy && findModel(this.modelId).provider === 'deepseek') {
+      if (this.deepseekLocked && !this.busy && isMeteredCloudProvider(findModel(this.modelId).provider)) {
         const next =
           this.models.find((m) => m.provider === 'poolside')?.id ||
-          this.models.find((m) => m.provider !== 'deepseek')?.id;
+          this.models.find((m) => !isMeteredCloudProvider(m.provider))?.id;
         if (next) {
           this.modelId = next;
           this.modelName = findModel(next).model;
@@ -797,99 +808,6 @@ export class OlkilChatService extends Disposable implements IOlkilChatService {
     this.fire();
   }
 
-  /** Live browser verify — UI shows the user's goal; agent gets the full test loop. */
-  async startLiveTest(goal?: string) {
-    if (this.busy || this.liveTesting) {
-      return;
-    }
-    this.chatMode = 'agent';
-    this.liveTesting = true;
-    this.liveTestBootResult = null;
-    this.liveIssueKeys.clear();
-    const focus = (goal || '').trim() || 'Test the application';
-
-    if (this.virtualOffice?.active) {
-      try {
-        this.voLiveQaTaskId = this.virtualOffice.beginLiveQa(focus);
-      } catch {
-        this.voLiveQaTaskId = null;
-      }
-    }
-
-    // Animated status bar first — browser launch can take a few seconds in the background.
-    this.setStatus('Thinking');
-    this.liveTestBootPromise = this.bootstrapLiveBrowser(focus);
-
-    const agentPrompt = `LIVE TEST MODE — You are a senior QA tester in a real headed Chromium on the user's screen.
-
-User test goal:
-${focus}
-
-ONE BROWSER
-- Chromium is already launching. DevTools Console is open on the RIGHT so the user can see console.log / errors / Network.
-- NEVER call live_test, browser_launch, or browser_close again. NEVER open a second window. NEVER reload just to "start over".
-- If bootstrap says the browser is ready: browser_snapshot immediately, then click/fill.
-- browser_goto ONLY if the page is about:blank or the wrong URL.
-- To show the user Network: browser_devtools panel=network (or browser_network). Console: panel=console. Do not close DevTools.
-
-TEST LIKE QA (fast, thorough)
-- Use the product the way a human tester would: primary flow, buttons, forms, empty/invalid input, navigation.
-- After important clicks, read NEW_ISSUES (console errors, 4xx/5xx). Silent console failures are still bugs.
-- Prefer actions over talk. No planning essays. No repeating the goal.
-
-WHEN YOU FIND A BUG — tell chat immediately (2–4 lines), then keep testing:
-**Issue:** what broke
-**Where:** screen / control / URL
-**Evidence:** console error or HTTP status
-Do not write a long report until the end. Max 5 fix rounds; after a fix use browser_reload (same window) and retest that flow only.
-
-END with a short PASS/FAIL + issue list + evidence. Start now.`;
-    await this.send(focus, [], { historyText: agentPrompt, liveTest: true });
-    if (this.voLiveQaTaskId && !this.busy) {
-      this.finishVoLiveQa(this.cancelRequested ? 'cancelled' : 'completed');
-    }
-  }
-
-  /** Start / reuse the live app and open headed Chromium as fast as possible. */
-  private async bootstrapLiveBrowser(goal: string): Promise<LiveTestResult | null> {
-    try {
-      const result = await this.aiNode.liveTest({
-        workspaceRoot: this.workspaceRoot(),
-        goal,
-        startApp: true,
-        headed: true,
-      });
-      this.liveTestBootResult = result;
-      if (result.ok) {
-        if (this.liveTesting) {
-          this.setStatus('Thinking');
-        }
-      } else if (result.error) {
-        this.setStatus(result.error);
-      }
-      return result;
-    } catch (e: any) {
-      const err = e?.message || String(e);
-      this.liveTestBootResult = null;
-      this.setStatus(`Browser failed: ${err}`);
-      return null;
-    }
-  }
-
-  private finishVoLiveQa(status: 'completed' | 'failed' | 'cancelled', summary?: string) {
-    const id = this.voLiveQaTaskId;
-    if (!id || !this.virtualOffice) {
-      this.voLiveQaTaskId = null;
-      return;
-    }
-    this.voLiveQaTaskId = null;
-    try {
-      this.virtualOffice.endLiveQa(id, { status, summary });
-    } catch {
-      // ignore
-    }
-  }
-
   stop() {
     this.cancelRequested = true;
     const runId = this.activeClineRunId;
@@ -899,32 +817,8 @@ END with a short PASS/FAIL + issue list + evidence. Start now.`;
     this.completeOpenActivities();
     this.status = 'Stopped';
     this.busy = false;
-    this.finishVoLiveQa('cancelled');
-    this.endLiveTestSession();
     this.fire();
     this.scheduleFlushQueue();
-  }
-
-  /** Live Test finished or stopped — always close the headed Test Browser. */
-  private endLiveTestSession() {
-    const wasLive = this.liveTesting || Boolean(this.liveTestBootPromise);
-    this.liveTesting = false;
-    this.liveTestBootPromise = null;
-    this.liveTestBootResult = null;
-    this.liveIssueKeys.clear();
-    if (!wasLive) {
-      return;
-    }
-    this.status = 'Closing Test Browser…';
-    void this.aiNode
-      .browserClose()
-      .catch(() => undefined)
-      .then(() => {
-        if (this.status === 'Closing Test Browser…') {
-          this.status = '';
-          this.fire();
-        }
-      });
   }
 
   cancelQueued(id: string) {
@@ -1255,33 +1149,26 @@ END with a short PASS/FAIL + issue list + evidence. Start now.`;
   async send(
     userText: string,
     attachments: ChatAttachment[] = [],
-    opts?: { historyText?: string; liveTest?: boolean },
+    opts?: { historyText?: string },
   ) {
     const text = userText.trim();
     if (!text && !attachments.length) {
       return;
     }
 
-    if (findModel(this.modelId).provider === 'deepseek') {
+    if (isMeteredCloudProvider(findModel(this.modelId).provider)) {
       await this.refreshDeepseekAccess();
       if (this.deepseekLocked) {
         this.pushUi(
           'status',
-          'Your 50,000 free DeepSeek tokens are used up. Upgrade your plan to keep using DeepSeek.',
+          'Your 50,000 free cloud tokens are used up. Upgrade your plan to keep using Auto.',
         );
         return;
       }
     }
 
-    const isLiveTestRun =
-      Boolean(opts?.liveTest) ||
-      this.liveTesting ||
-      /LIVE TEST MODE/i.test(opts?.historyText || '');
-
     // Virtual Office mode: parallel assign — does not touch single-agent busy flag.
-    // Live Test is the exception: Jasmine (QA) animates on the floor, but the
-    // actual run uses the same Dev Studio browser loop (not Cline).
-    if (this.virtualOffice?.active && !isLiveTestRun) {
+    if (this.virtualOffice?.active) {
       await this.sendVirtualOfficeAssignment(text, attachments, opts);
       return;
     }
@@ -1327,10 +1214,6 @@ END with a short PASS/FAIL + issue list + evidence. Start now.`;
     this.stallAutoRetries = 0;
     this.stepLimitAutoRetries = 0;
     this.busy = true;
-    if (isLiveTestRun) {
-      this.liveTesting = true;
-      this.chatMode = 'agent';
-    }
 
     const display =
       attachments.length > 0
@@ -1341,7 +1224,6 @@ END with a short PASS/FAIL + issue list + evidence. Start now.`;
       role: 'user',
       content: display || '(attachments)',
       attachments: attachments.length ? [...attachments] : undefined,
-      liveTest: isLiveTestRun || undefined,
     });
     if (this.messages.length > 160) {
       this.messages = this.messages.slice(-160);
@@ -1369,36 +1251,11 @@ END with a short PASS/FAIL + issue list + evidence. Start now.`;
 
     const pendingId = nextId();
     this.messages.push({ id: pendingId, role: 'assistant', content: '', pending: true });
-    this.setStatus(isLiveTestRun ? 'Thinking' : 'Planning next move');
-
-    // Live Test: Chromium must open on send — never wait for Cline (no browser tools there).
-    if (isLiveTestRun && !this.liveTestBootPromise) {
-      this.liveTestBootPromise = this.bootstrapLiveBrowser(text || 'Test the application');
-    }
-    if (isLiveTestRun) {
-      void this.liveTestBootPromise?.then((boot) => {
-        if (this.cancelRequested) {
-          return;
-        }
-        const label = boot?.ok
-          ? boot.url
-            ? `Test Browser open · ${boot.url}`
-            : 'Test Browser open'
-          : boot?.error || 'Test Browser launch failed';
-        this.pushActivity(pendingId, 'browsing', label, undefined, true);
-        if (this.liveTesting && boot?.ok) {
-          this.setStatus('Thinking');
-        }
-        this.fire();
-      });
-    }
+    this.setStatus('Planning next move');
 
     try {
       let reply = '';
-      if (isLiveTestRun) {
-        // Built-in loop owns live_test / browser_* tools. Cline does not.
-        reply = await this.runAgentLoop(pendingId);
-      } else if (option.provider === 'ollama') {
+      if (option.provider === 'ollama') {
         // Local models cannot run OpenCode's huge agent prompt — use the compact Ollama loop.
         reply = await this.runAgentLoop(pendingId);
       } else {
@@ -1443,7 +1300,7 @@ END with a short PASS/FAIL + issue list + evidence. Start now.`;
         await sleep(450);
         try {
           const resumed =
-            isLiveTestRun || option.provider === 'ollama'
+            option.provider === 'ollama'
               ? await this.runAgentLoop(pendingId)
               : await this.runClineEngine(pendingId, enriched);
           finalText = this.sanitizeUserFacingReply((resumed || '').trim());
@@ -1545,11 +1402,6 @@ END with a short PASS/FAIL + issue list + evidence. Start now.`;
     } finally {
       this.completeOpenActivities();
       this.busy = false;
-      const wasLiveTest = this.liveTesting || Boolean(this.liveTestBootPromise);
-      this.finishVoLiveQa(this.cancelRequested ? 'cancelled' : 'completed');
-      if (wasLiveTest) {
-        this.endLiveTestSession();
-      }
       this.persistCurrentSession();
       this.fire();
       this.scheduleFlushQueue();
@@ -2849,6 +2701,7 @@ Read the highest-scoring evidence in trail order. For a bug, trace UI → handle
       activeFile: active,
       mode: this.chatMode,
       modelId: this.modelId,
+      autoOptimizeFor: saved.autoOptimizeFor,
       rules: projectRules,
       autoApprove: this.chatMode === 'agent' && (saved.autoApproveEdits || saved.terminalAutoRun === 'always'),
       autoApproveEdits: this.chatMode === 'agent' && saved.autoApproveEdits,
@@ -3106,13 +2959,12 @@ Read the highest-scoring evidence in trail order. For a bug, trace UI → handle
     const latestUser = [...this.history].reverse().find((m) => m.role === 'user')?.content || '';
     const option = findModel(this.modelId);
     const localOllama = option.provider === 'ollama';
-    const liveTestIntent = this.liveTesting || this.isLiveTestIntent(latestUser);
     const casual = this.isCasualMessage(latestUser);
     const needsImplementation =
       this.chatMode === 'agent' &&
       (localOllama
         ? this.localWantsFileEdit(latestUser) ||
-          (!casual && !liveTestIntent && !this.isQuestionIntent(latestUser))
+          (!casual && !this.isQuestionIntent(latestUser))
         : this.requiresImplementation(latestUser));
     // Implement tasks are never Ask — "can you fix…?" must mutate
     const questionIntent = this.isQuestionIntent(latestUser) && !needsImplementation;
@@ -3169,7 +3021,7 @@ Read the highest-scoring evidence in trail order. For a bug, trace UI → handle
       candidates: string[];
       strongEvidence?: boolean;
     }> | null = null;
-    if (!casual && !liveTestIntent && !localOllama) {
+    if (!casual && !localOllama) {
       this.pushActivity(
         pendingId,
         'indexing',
@@ -3252,37 +3104,6 @@ Read the highest-scoring evidence in trail order. For a bug, trace UI → handle
         : []),
       ...recentHistory,
     ];
-
-    if (liveTestIntent && this.chatMode === 'agent') {
-      const urlMatch = /https?:\/\/[^\s)'"`]+/i.exec(latestUser);
-      const url = urlMatch?.[0] || '';
-      // Wait briefly for Chromium bootstrap so the model gets a ready URL/snapshot hint.
-      if (this.liveTestBootPromise) {
-        try {
-          await Promise.race([this.liveTestBootPromise, sleep(12_000)]);
-        } catch {
-          // continue — agent can still call live_test
-        }
-      }
-      const boot = this.liveTestBootResult;
-      const bootHint = boot
-        ? `\nBootstrap result: ok=${boot.ok} url=${boot.url}` +
-          (boot.notes?.length ? `\nNotes: ${boot.notes.join(' | ')}` : '') +
-          (boot.error ? `\nError: ${boot.error}` : '') +
-          `\nBrowser is already visible with DevTools Console on the right. Call browser_snapshot next. Do NOT call live_test, browser_launch, or browser_close.`
-        : `\nBootstrap still running or failed — call live_test headed=true ONCE only if the window is missing.`;
-      messages.push({
-        role: 'system',
-        content:
-          `LIVE QA — one headed browser, DevTools visible to the user:\n` +
-          (url ? `Target URL (only goto if not already there): ${url}\n` : '') +
-          `1) Do NOT relaunch. Snapshot the current page, then exercise the goal with click/fill.\n` +
-          `2) browser_console / browser_network after important steps. browser_devtools panel=network to show Network.\n` +
-          `3) On each NEW console error or 4xx/5xx: write a 2-line Issue in chat, then keep testing. No essays.\n` +
-          `4) Fix code only if the UI/API actually fails; reload the SAME window to retest. Never a second browser.` +
-          bootHint,
-      });
-    }
 
     if (questionIntent) {
       messages.push({
@@ -3571,23 +3392,20 @@ Read the highest-scoring evidence in trail order. For a bug, trace UI → handle
       tryInjectLateResearch();
 
       this.setStatus(
-        liveTestIntent
-          ? 'Testing'
-          : step === 0
-            ? this.chatMode === 'agent'
+        step === 0
+          ? this.chatMode === 'agent'
+            ? 'Thinking'
+            : this.chatMode === 'ask'
               ? 'Thinking'
-              : this.chatMode === 'ask'
-                ? 'Thinking'
-                : 'Planning'
-            : 'Thinking',
+              : 'Planning'
+          : 'Thinking',
       );
-      if (step === 0 && !liveTestIntent) {
+      if (step === 0) {
         this.pushActivity(pendingId, 'thinking', 'Thinking');
       }
 
       const tools = selectAgentTools({
         mode: questionIntent ? 'ask' : this.chatMode,
-        liveTest: liveTestIntent && !questionIntent,
         madeEdits,
         searchCount,
         readCount,
@@ -4305,7 +4123,7 @@ Read the highest-scoring evidence in trail order. For a bug, trace UI → handle
           const settled = await Promise.all(
             slice.map(async (idx) => {
               const r = await this.executeTool(toolCalls[idx]);
-              return { idx, r: this.decorateLiveTestToolResult(pendingId, toolCalls[idx].function?.name || '', r) };
+              return { idx, r };
             }),
           );
           for (const { idx, r } of settled) {
@@ -4315,11 +4133,7 @@ Read the highest-scoring evidence in trail order. For a bug, trace UI → handle
         }
       } else {
         this.announceToolStart(pendingId, toolCalls[i]);
-        results[i] = this.decorateLiveTestToolResult(
-          pendingId,
-          toolCalls[i].function?.name || '',
-          await this.executeTool(toolCalls[i]),
-        );
+        results[i] = await this.executeTool(toolCalls[i]);
         this.announceToolDone(pendingId, toolCalls[i], results[i]);
         i++;
       }
@@ -4509,27 +4323,6 @@ Read the highest-scoring evidence in trail order. For a bug, trace UI → handle
           ...base,
           kind: 'running',
           label: short ? `$ ${short}` : 'Running command…',
-          detail: short,
-        };
-      case 'live_test':
-      case 'browser_launch':
-      case 'browser_goto':
-      case 'browser_reload':
-      case 'browser_snapshot':
-      case 'browser_click':
-      case 'browser_fill':
-      case 'browser_upload':
-      case 'browser_type':
-      case 'browser_press':
-      case 'browser_console':
-      case 'browser_network':
-      case 'browser_devtools':
-      case 'browser_screenshot':
-      case 'browser_close':
-        return {
-          ...base,
-          kind: 'browsing',
-          label: `Browser: ${name.replace(/^browser_/, '')}`,
           detail: short,
         };
       default:
@@ -5377,6 +5170,7 @@ Read the highest-scoring evidence in trail order. For a bug, trace UI → handle
         tools: request.tools,
         toolChoice: request.toolChoice,
         modelId: request.modelId,
+        autoOptimizeFor: this.settings.get().autoOptimizeFor,
         stream: false,
         maxTokens: request.maxTokens,
         customModels: this.runtimeCustomModels(),
@@ -5447,6 +5241,7 @@ Read the highest-scoring evidence in trail order. For a bug, trace UI → handle
         tools: request.tools,
         toolChoice: request.toolChoice,
         modelId: request.modelId,
+        autoOptimizeFor: this.settings.get().autoOptimizeFor,
         stream: true,
         streamId,
         maxTokens: request.maxTokens,
@@ -5465,6 +5260,7 @@ Read the highest-scoring evidence in trail order. For a bug, trace UI → handle
           tools: request.tools,
           toolChoice: request.toolChoice,
           modelId: request.modelId,
+          autoOptimizeFor: this.settings.get().autoOptimizeFor,
           stream: false,
           maxTokens: request.maxTokens,
           customModels: this.runtimeCustomModels(),
@@ -5623,123 +5419,6 @@ Read the highest-scoring evidence in trail order. For a bug, trace UI → handle
         case 'stop_command':
           this.setStatus('Stopping command…');
           return this.fmtJson({ stopped: await this.aiNode.stopCommand(String(args.id || '')) });
-        case 'live_test':
-          this.setStatus('Live testing in browser…');
-          return this.fmtJson(
-            await this.aiNode.liveTest({
-              workspaceRoot: this.workspaceRoot(),
-              url: args.url ? String(args.url) : undefined,
-              goal: args.goal ? String(args.goal) : undefined,
-              startApp: args.start_app !== false,
-              headed: args.headed !== false,
-            }),
-          );
-        case 'browser_launch':
-          this.setStatus('Launching browser…');
-          return this.fmtJson(await this.aiNode.browserLaunch(args.headed !== false));
-        case 'browser_goto':
-          this.setStatus(`Opening ${args.url}…`);
-          return this.fmtJson(await this.aiNode.browserGoto(String(args.url || '')));
-        case 'browser_reload':
-          this.setStatus('Reloading page…');
-          return this.fmtJson(await this.aiNode.browserReload());
-        case 'browser_snapshot':
-          this.setStatus('Snapshotting page…');
-          return this.fmtJson(await this.aiNode.browserSnapshot());
-        case 'browser_click':
-          this.setStatus('Clicking in browser…');
-          return this.fmtJson(
-            await this.aiNode.browserClick({
-              role: args.role ? String(args.role) : undefined,
-              name: args.name ? String(args.name) : undefined,
-              text: args.text ? String(args.text) : undefined,
-              selector: args.selector ? String(args.selector) : undefined,
-              testid: args.testid ? String(args.testid) : undefined,
-              exact: Boolean(args.exact),
-            }),
-          );
-        case 'browser_fill':
-          this.setStatus('Filling form…');
-          return this.fmtJson(
-            await this.aiNode.browserFill({
-              value: String(args.value ?? ''),
-              role: args.role ? String(args.role) : undefined,
-              name: args.name ? String(args.name) : undefined,
-              text: args.text ? String(args.text) : undefined,
-              selector: args.selector ? String(args.selector) : undefined,
-              testid: args.testid ? String(args.testid) : undefined,
-            }),
-          );
-        case 'browser_upload':
-          this.setStatus('Uploading file…');
-          return this.fmtJson(
-            await this.aiNode.browserUpload({
-              value: args.value ? String(args.value) : undefined,
-              role: args.role ? String(args.role) : undefined,
-              name: args.name ? String(args.name) : undefined,
-              text: args.text ? String(args.text) : undefined,
-              selector: args.selector ? String(args.selector) : undefined,
-              testid: args.testid ? String(args.testid) : undefined,
-              kind: args.kind ? String(args.kind) : undefined,
-              accept: args.accept ? String(args.accept) : undefined,
-            }),
-          );
-        case 'browser_type':
-          this.setStatus('Typing in browser…');
-          return this.fmtJson(
-            await this.aiNode.browserType({
-              value: String(args.value ?? ''),
-              role: args.role ? String(args.role) : undefined,
-              name: args.name ? String(args.name) : undefined,
-              selector: args.selector ? String(args.selector) : undefined,
-              testid: args.testid ? String(args.testid) : undefined,
-            }),
-          );
-        case 'browser_press':
-          this.setStatus(`Pressing ${args.key}…`);
-          return this.fmtJson(await this.aiNode.browserPress(String(args.key || 'Enter')));
-        case 'browser_console':
-          this.setStatus('Reading browser console…');
-          return this.fmtJson(await this.aiNode.browserConsole());
-        case 'browser_network':
-          this.setStatus('Reading network / API calls…');
-          return this.fmtJson(await this.aiNode.browserNetwork());
-        case 'browser_devtools':
-          if (this.liveTesting && String(args.action || '') === 'close') {
-            args.action = 'open';
-            args.panel = args.panel || 'console';
-          }
-          this.setStatus(
-            String(args.panel || 'console') === 'network'
-              ? 'Showing Network tab…'
-              : 'Showing Console…',
-          );
-          return this.fmtJson(
-            await this.aiNode.browserDevtools({
-              action: (['open', 'close', 'toggle', 'show'].includes(String(args.action))
-                ? String(args.action)
-                : 'open') as 'open' | 'close' | 'toggle' | 'show',
-              panel: args.panel ? String(args.panel) : undefined,
-            }),
-          );
-        case 'browser_screenshot':
-          this.setStatus('Capturing screenshot…');
-          return this.fmtJson(await this.aiNode.browserScreenshot());
-        case 'browser_close':
-          if (this.liveTesting) {
-            return this.fmtJson({
-              ok: true,
-              action: 'close',
-              message: 'Live Test keeps one Test Browser open. Not closing.',
-              url: this.liveTestBootResult?.url || '',
-              snapshot: '',
-              consoleErrors: [],
-              networkFailures: [],
-              devtoolsOpen: true,
-            });
-          }
-          this.setStatus('Closing browser…');
-          return this.fmtJson(await this.aiNode.browserClose());
         default:
           return `Unknown tool: ${name}`;
       }
@@ -5755,70 +5434,6 @@ Read the highest-scoring evidence in trail order. For a bug, trace UI → handle
     } catch {
       return String(value);
     }
-  }
-
-  /** Push new console/network bugs into chat immediately; remind the model to stay brief. */
-  private decorateLiveTestToolResult(pendingId: string, name: string, raw: string): string {
-    if (!this.liveTesting || !/^(live_test|browser_)/.test(name)) {
-      return raw;
-    }
-    const issues: string[] = [];
-    const tryAdd = (key: string, line: string) => {
-      if (!key || this.liveIssueKeys.has(key) || issues.length >= 4) {
-        return;
-      }
-      this.liveIssueKeys.add(key);
-      issues.push(line);
-    };
-    try {
-      const parsed = JSON.parse(raw);
-      const payload = parsed?.result && typeof parsed.result === 'object' ? { ...parsed, ...parsed.result } : parsed;
-      const errors = [
-        ...(Array.isArray(payload?.consoleErrors) ? payload.consoleErrors : []),
-      ];
-      const nets = [
-        ...(Array.isArray(payload?.networkFailures) ? payload.networkFailures : []),
-      ];
-      for (const e of errors) {
-        const type = String(e?.type || '');
-        const text = String(e?.text || '').trim();
-        if (!text || (type !== 'error' && type !== 'pageerror' && type !== 'warning')) {
-          continue;
-        }
-        if (type === 'warning' && /deprecated|Download the React/i.test(text)) {
-          continue;
-        }
-        tryAdd(`c:${text.slice(0, 180)}`, `console ${type}: ${text.slice(0, 160)}`);
-      }
-      for (const n of nets) {
-        const url = String(n?.url || '').trim();
-        const status = n?.status != null ? String(n.status) : '';
-        const err = String(n?.error || '').trim();
-        if (!url) {
-          continue;
-        }
-        tryAdd(
-          `n:${n?.method || ''}:${status}:${url.slice(0, 160)}`,
-          `network ${n?.method || 'GET'} ${status || err || 'fail'} ${url.slice(0, 120)}`,
-        );
-      }
-    } catch {
-      // not JSON
-    }
-    if (!issues.length) {
-      return raw;
-    }
-    for (const line of issues) {
-      this.pushActivity(pendingId, 'info', `Issue · ${line}`, undefined, true);
-    }
-    return `${raw}\n\nNEW_ISSUES (tell the user in 2 lines now, then keep testing):\n- ${issues.join('\n- ')}`;
-  }
-
-  private isLiveTestIntent(text: string): boolean {
-    const t = String(text || '');
-    return /LIVE TEST MODE|live\s*test|browser.*(test|check|verify|open)|open.*(browser|chrome)|headed chromium|not working.*(browser|ui|page|button)|localhost:\d+|http:\/\/127\.0\.0\.1:\d+|http:\/\/localhost:\d+|login.*(user|pass|username)|test.*(login|ui|app|program)/i.test(
-      t,
-    );
   }
 
   /** Collapse streamed duplicates: read_fileread_file → read_file */

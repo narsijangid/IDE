@@ -56,6 +56,8 @@ export interface OlkilSettings {
   /** Default agent mode for new chats */
   defaultChatMode: ChatModeSetting;
   defaultModelId: string;
+  /** Auto router: Cost / Balance / Intelligence (Cursor-style). */
+  autoOptimizeFor: 'cost' | 'balanced' | 'intelligence';
   /** Model ids shown in the chat dropdown. Empty = all catalog models. */
   enabledModelIds: string[];
   openAgentOnStart: boolean;
@@ -129,7 +131,8 @@ export const DEFAULT_TERMINAL_ALLOWLIST: string[] = [
 
 export const DEFAULT_OLKIL_SETTINGS: OlkilSettings = {
   defaultChatMode: 'agent',
-  defaultModelId: 'deepseek:deepseek-v4-flash',
+  defaultModelId: 'openrouter:auto',
+  autoOptimizeFor: 'balanced',
   enabledModelIds: [],
   openAgentOnStart: false,
   pinAgentPanel: false,
@@ -177,7 +180,7 @@ export const SETTINGS_NAV: SettingsNavItem[] = [
   { id: 'general', label: 'General', group: 'OLKIL', keywords: 'startup pin panel language default mode' },
   { id: 'plan', label: 'Plan & usage', group: 'OLKIL', keywords: 'credits tokens subscription billing quota lite pro' },
   { id: 'agents', label: 'Agents', group: 'Agent', keywords: 'plan ask agent auto apply diffs continue' },
-  { id: 'models', label: 'Models', group: 'Agent', keywords: 'deepseek dazzlone ollama local cloud default custom openai openrouter groq api key byok' },
+  { id: 'models', label: 'Models', group: 'Agent', keywords: 'auto openrouter claude gpt gemini grok deepseek dazzlone ollama local cloud default custom openai groq api key byok' },
   { id: 'rules', label: 'Rules', group: 'Agent', keywords: 'user rules agents.md cursorrules prompt' },
   { id: 'mcp', label: 'MCP', group: 'Agent', keywords: 'mcp server model context protocol tools npx hostinger extension cursor vscode' },
   { id: 'indexing', label: 'Indexing', group: 'Agent', keywords: 'codebase index ignore search embeddings' },
@@ -231,6 +234,15 @@ export function mergeOlkilSettings(raw: unknown): OlkilSettings {
   }
   if (next.defaultChatMode !== 'agent' && next.defaultChatMode !== 'plan' && next.defaultChatMode !== 'ask') {
     next.defaultChatMode = 'agent';
+  }
+  if (next.autoOptimizeFor !== 'cost' && next.autoOptimizeFor !== 'balanced' && next.autoOptimizeFor !== 'intelligence') {
+    next.autoOptimizeFor = 'balanced';
+  }
+  if (next.enabledModelIds.some((id) => /^deepseek:|poolside:/.test(id))) {
+    next.enabledModelIds = [];
+  }
+  if (/^deepseek:|poolside:/.test(String(next.defaultModelId || ''))) {
+    next.defaultModelId = 'openrouter:auto';
   }
   return next;
 }

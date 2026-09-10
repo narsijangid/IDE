@@ -1,5 +1,4 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState, startTransition } from 'react';
-import { createPortal } from 'react-dom';
 import { CommandService, useInjectable } from '@opensumi/ide-core-browser';
 import {
   AgentTodoItem,
@@ -20,24 +19,17 @@ import {
   basenamePath,
 } from '../common/virtual-office';
 import { MarkdownMessage } from './markdown';
-import { LiveStatusBar, ThinkingLoader, shouldShowLiveStatusBar, useLiveStatusLabel, useWorkspaceRoot } from './live-status-rotator';
-import { DeepSeekIcon, isDeepSeekProvider } from './deepseek-icon';
-import { CheckIcon, CopyIcon, RefreshIcon, SendIcon, ShieldStarIcon, StopIcon } from './icons';
+import { LiveStatusBar, shouldShowLiveStatusBar, useLiveStatusLabel, useWorkspaceRoot } from './live-status-rotator';
+import { CheckIcon, CopyIcon, RefreshIcon, SendIcon, StopIcon } from './icons';
 import styles from './chat.view.module.less';
 import logoUrl from './olkil-logo.png';
 import { OLKIL_AUTH_OPEN_ACCOUNT, rememberOlkilSettingsSection } from '../../olkil-auth/browser/commands';
+import { isAutoModelId } from '../common/auto-router';
+import { isMeteredCloudProvider } from '../common/models';
 
 /** How long the composer confirms a finished turn before offering Send again. */
 const DONE_HINT_MS = 1800;
 const INPUT_MAX_HEIGHT = 168;
-
-const LIVE_TEST_SUGGESTIONS = [
-  'Test the application',
-  'Login and test',
-  'Test the workflow',
-  'Find UI bugs and report them',
-  'Verify the happy path end-to-end',
-] as const;
 
 function activityGlyph(kind: string, done?: boolean): string {
   if (done) {
@@ -132,13 +124,9 @@ function ExplorationGroup({
   return (
     <div className={`${styles.activityGroup} ${spinning ? styles.activityLive : styles.activityDone}`}>
       <button type="button" className={styles.activityGroupHeader} onClick={() => setOpen((v) => !v)}>
-        {spinning ? (
-          <ThinkingLoader />
-        ) : (
-          <span className={styles.activityGlyph} aria-hidden>
-            {activityGlyph(a.kind, true)}
-          </span>
-        )}
+        <span className={styles.activityGlyph} aria-hidden>
+          {activityGlyph(a.kind, !spinning)}
+        </span>
         <span className={styles.activityLabel}>{label}</span>
         <span className={styles.activityGroupMeta}>
           {files ? `${files} files` : ''}
@@ -201,13 +189,9 @@ function ActivityRow({
         onClick={() => expandable && setOpen((v) => !v)}
         disabled={!expandable}
       >
-        {spinning ? (
-          <ThinkingLoader />
-        ) : (
-          <span className={styles.activityGlyph} aria-hidden>
-            {activityGlyph(a.kind, true)}
-          </span>
-        )}
+        <span className={styles.activityGlyph} aria-hidden>
+          {activityGlyph(a.kind, !spinning)}
+        </span>
         <span className={styles.activityLabel}>{a.label}</span>
         {a.exitCode != null ? (
           <span className={a.exitCode === 0 ? styles.activityOk : styles.activityFail}>
@@ -543,7 +527,6 @@ export const OlkilAiChatView = ({ dormant = false }: OlkilAiChatViewProps) => {
   const [modelId, setModelId] = useState(chat.modelId);
   const [models, setModels] = useState(chat.models);
   const [chatMode, setChatMode] = useState(chat.chatMode);
-  const [liveTesting, setLiveTesting] = useState(chat.liveTesting);
   const [deepseekLocked, setDeepseekLocked] = useState(chat.deepseekLocked);
   const [lockHoverId, setLockHoverId] = useState<string | null>(null);
   const [ollamaDownload, setOllamaDownload] = useState<OllamaDownloadUiState>(chat.ollamaDownload);
@@ -572,7 +555,6 @@ export const OlkilAiChatView = ({ dormant = false }: OlkilAiChatViewProps) => {
     setModelId(chat.modelId);
     setModels([...chat.models]);
     setChatMode(chat.chatMode);
-    setLiveTesting(chat.liveTesting);
     setDeepseekLocked(chat.deepseekLocked);
     setOllamaDownload({ ...chat.ollamaDownload });
     setPendingCount(chat.pendingChanges.length);
@@ -832,9 +814,7 @@ export const OlkilAiChatView = ({ dormant = false }: OlkilAiChatViewProps) => {
   };
 
   const [modelMenuOpen, setModelMenuOpen] = useState(false);
-  const [liveTestOpen, setLiveTestOpen] = useState(false);
-  const [liveTestPrompt, setLiveTestPrompt] = useState('');
-  const liveTestInputRef = useRef<HTMLTextAreaElement>(null);
+  const [modelQuery, setModelQuery] = useState('');
   const modelMenuRef = useRef<HTMLDivElement>(null);
   const selectedModel = models.find((m) => m.id === modelId) || models[0];
   const modelSelectDisabled =
@@ -842,6 +822,7 @@ export const OlkilAiChatView = ({ dormant = false }: OlkilAiChatViewProps) => {
 
   useEffect(() => {
     if (!modelMenuOpen) {
+      setModelQuery('');
       return;
     }
     const onDoc = (ev: MouseEvent) => {
@@ -862,47 +843,38 @@ export const OlkilAiChatView = ({ dormant = false }: OlkilAiChatViewProps) => {
     };
   }, [modelMenuOpen]);
 
-  useEffect(() => {
-    if (!liveTestOpen) {
-      return;
-    }
-    const t = window.setTimeout(() => {
-      liveTestInputRef.current?.focus();
-      liveTestInputRef.current?.select();
-    }, 40);
-    const onKey = (ev: KeyboardEvent) => {
-      if (ev.key === 'Escape') {
-        setLiveTestOpen(false);
+  const modelGroups = useMemo(() => {
+    const q = modelQuery.trim().toLowerCase();
+    const hit = (m: (typeof models)[number]) => {
+      if (!q) {
+        return true;
       }
+      return `${m.displayName || ''} ${m.label} ${m.model}`.toLowerCase().includes(q);
     };
-    document.addEventListener('keydown', onKey);
-    return () => {
-      window.clearTimeout(t);
-      document.removeEventListener('keydown', onKey);
+    const auto = models.filter((m) => isAutoModelId(m.id) && hit(m));
+    const featured = models.filter(
+      (m) => !isAutoModelId(m.id) && m.group !== 'more' && m.provider !== 'custom' && hit(m),
+    );
+    const more = models.filter((m) => (m.group === 'more' || m.provider === 'custom') && hit(m));
+    return {
+      auto,
+      featured,
+      more: q ? more.slice(0, 80) : more.filter((m) => m.provider === 'custom').slice(0, 12),
+      moreHint: !q && more.length > 12,
     };
-  }, [liveTestOpen]);
+  }, [models, modelQuery]);
 
-  const openLiveTestModal = useCallback(() => {
-    setLiveTestPrompt(input.trim() || 'Test the application');
-    setLiveTestOpen(true);
-  }, [input]);
-
-  const runLiveTest = useCallback(() => {
-    const goal = liveTestPrompt.trim();
-    if (!goal || busy || liveTesting) {
-      return;
-    }
-    setLiveTestOpen(false);
-    setInput('');
-    void chat.startLiveTest(goal);
-  }, [liveTestPrompt, busy, liveTesting, chat]);
-
-  const renderModelLabel = (m?: { displayName?: string; badge?: string; label: string; provider?: string }) => {
+  const renderModelLabel = (m?: {
+    displayName?: string;
+    badge?: string;
+    label: string;
+  }) => {
     if (!m) {
       return null;
     }
     const name = m.displayName || m.label;
     const badge = m.badge;
+    const hiddenBadge = !badge || /premium|cloud|openrouter|auto/i.test(badge);
     const badgeClass =
       badge === 'FREE'
         ? styles.modelBadgeFree
@@ -913,9 +885,8 @@ export const OlkilAiChatView = ({ dormant = false }: OlkilAiChatViewProps) => {
             : styles.modelBadge;
     return (
       <>
-        {isDeepSeekProvider(m.provider) ? <DeepSeekIcon className={styles.modelProviderIcon} /> : null}
         <span className={styles.modelName}>{name}</span>
-        {badge ? <span className={badgeClass}>{badge}</span> : null}
+        {!hiddenBadge ? <span className={badgeClass}>{badge}</span> : null}
       </>
     );
   };
@@ -980,7 +951,7 @@ export const OlkilAiChatView = ({ dormant = false }: OlkilAiChatViewProps) => {
     return false;
   }, [messages]);
   const statusActive = shouldShowLiveStatusBar({
-    active: busy || liveTesting,
+    active: busy,
     status,
     activityLabel: liveActivityLabel,
     hasVisibleReply,
@@ -1041,15 +1012,6 @@ export const OlkilAiChatView = ({ dormant = false }: OlkilAiChatViewProps) => {
               Plan
             </button>
           </div>
-          <button
-            type="button"
-            className={styles.liveTestBtn}
-            disabled={busy || liveTesting || ollamaBlocked}
-            title="Open live browser test — choose what to verify"
-            onClick={openLiveTestModal}
-          >
-            Live Test
-          </button>
           <div className={styles.modelPicker} ref={modelMenuRef}>
             <button
               type="button"
@@ -1071,8 +1033,15 @@ export const OlkilAiChatView = ({ dormant = false }: OlkilAiChatViewProps) => {
             </button>
             {modelMenuOpen ? (
               <div className={styles.modelMenu} role="listbox" aria-label="AI models">
-                {models.map((m) => {
-                  const locked = deepseekLocked && isDeepSeekProvider(m.provider);
+                <input
+                  className={styles.modelSearch}
+                  value={modelQuery}
+                  placeholder="Search models"
+                  onChange={(e) => setModelQuery(e.target.value)}
+                  onKeyDown={(e) => e.stopPropagation()}
+                />
+                {[...modelGroups.auto, ...modelGroups.featured, ...modelGroups.more].map((m) => {
+                  const locked = deepseekLocked && isMeteredCloudProvider(m.provider);
                   return (
                     <div
                       key={m.id}
@@ -1119,6 +1088,9 @@ export const OlkilAiChatView = ({ dormant = false }: OlkilAiChatViewProps) => {
                     </div>
                   );
                 })}
+                {modelGroups.moreHint ? (
+                  <div className={styles.modelMoreHint}>Type to search more models</div>
+                ) : null}
                 <button
                   type="button"
                   className={styles.modelMenuAdd}
@@ -1433,9 +1405,7 @@ export const OlkilAiChatView = ({ dormant = false }: OlkilAiChatViewProps) => {
               <div
                 className={`${styles.bubble} ${styles[m.role] || ''} ${
                   isUser ? styles.bubbleUser : styles.bubbleAssistant
-                } ${isUser && m.liveTest ? styles.bubbleUserLiveTest : ''} ${
-                  m.pending ? styles.bubblePending : ''
-                }`}
+                } ${m.pending ? styles.bubblePending : ''}`}
               >
                 {!isUser && !isSystem ? (
                   <div className={styles.roleRow}>
@@ -1445,22 +1415,7 @@ export const OlkilAiChatView = ({ dormant = false }: OlkilAiChatViewProps) => {
                     </span>
                   </div>
                 ) : null}
-                {isUser && m.liveTest ? (
-                  <div className={styles.userLiveTestLayout}>
-                    <div className={styles.userLiveTestBody}>
-                      <div className={styles.content}>{m.content || (m.pending ? '…' : '')}</div>
-                    </div>
-                    <span
-                      className={`${styles.testingBadgeOnPrompt} ${
-                        liveTesting ? styles.testingBadgeOnPromptLive : ''
-                      }`}
-                      title="Live browser test"
-                    >
-                      <ShieldStarIcon size={11} className={styles.testingBadgeIcon} />
-                      Testing
-                    </span>
-                  </div>
-                ) : isUser || isSystem ? (
+                {isUser || isSystem ? (
                   <div className={styles.content}>{m.content || (m.pending ? '…' : '')}</div>
                 ) : (
                   <MarkdownMessage
@@ -1728,103 +1683,6 @@ export const OlkilAiChatView = ({ dormant = false }: OlkilAiChatViewProps) => {
           </div>
         </div>
       </div>
-
-      {liveTestOpen
-        ? createPortal(
-            <div
-              className={styles.liveTestBackdrop}
-              role="presentation"
-              onMouseDown={(e) => {
-                if (e.target === e.currentTarget) {
-                  setLiveTestOpen(false);
-                }
-              }}
-            >
-              <div
-                className={styles.liveTestModal}
-                role="dialog"
-                aria-modal="true"
-                aria-labelledby="olkil-live-test-title"
-              >
-                <div className={styles.liveTestModalHeader}>
-                  <div className={styles.liveTestModalTitleBlock}>
-                    <span className={styles.liveTestModalEyebrow}>Browser verify</span>
-                    <h2 id="olkil-live-test-title" className={styles.liveTestModalTitle}>
-                      Live Test
-                    </h2>
-                    <p className={styles.liveTestModalSub}>
-                      Tell OLKIL what to exercise in a real headed browser — then it will start the
-                      app, test, capture errors, fix, and retest.
-                    </p>
-                  </div>
-                  <button
-                    type="button"
-                    className={styles.liveTestModalClose}
-                    aria-label="Close"
-                    onClick={() => setLiveTestOpen(false)}
-                  >
-                    <span className={styles.liveTestModalCloseIcon} aria-hidden />
-                  </button>
-                </div>
-
-                <label className={styles.liveTestLabel} htmlFor="olkil-live-test-prompt">
-                  Custom prompt
-                </label>
-                <textarea
-                  id="olkil-live-test-prompt"
-                  ref={liveTestInputRef}
-                  className={styles.liveTestTextarea}
-                  value={liveTestPrompt}
-                  onChange={(e) => setLiveTestPrompt(e.target.value)}
-                  placeholder="e.g. Login with demo credentials and complete the main workflow…"
-                  rows={4}
-                  onKeyDown={(e) => {
-                    if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
-                      e.preventDefault();
-                      runLiveTest();
-                    }
-                  }}
-                />
-
-                <div className={styles.liveTestSuggestionsLabel}>Suggestions</div>
-                <div className={styles.liveTestSuggestions} role="list">
-                  {LIVE_TEST_SUGGESTIONS.map((s) => (
-                    <button
-                      key={s}
-                      type="button"
-                      role="listitem"
-                      className={`${styles.liveTestChip} ${
-                        liveTestPrompt.trim() === s ? styles.liveTestChipActive : ''
-                      }`}
-                      onClick={() => setLiveTestPrompt(s)}
-                    >
-                      {s}
-                    </button>
-                  ))}
-                </div>
-
-                <div className={styles.liveTestModalFooter}>
-                  <button
-                    type="button"
-                    className={styles.liveTestCancel}
-                    onClick={() => setLiveTestOpen(false)}
-                  >
-                    Cancel
-                  </button>
-                  <button
-                    type="button"
-                    className={styles.liveTestStart}
-                    disabled={!liveTestPrompt.trim() || busy || liveTesting || ollamaBlocked}
-                    onClick={runLiveTest}
-                  >
-                    Start Live Test
-                  </button>
-                </div>
-              </div>
-            </div>,
-            document.body,
-          )
-        : null}
     </div>
   );
 };

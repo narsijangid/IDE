@@ -5,7 +5,6 @@ import { URI } from '@opensumi/ide-core-common';
 import { IWorkspaceService } from '@opensumi/ide-workspace/lib/common';
 import * as fs from 'fs';
 import styles from './chat.view.module.less';
-import loaderUrl from './multi-color-loader.svg';
 
 /** Shown while the model is deciding — never fake file/repo work. */
 export const PLANNING_LABEL = 'Planning next move';
@@ -137,7 +136,6 @@ export function LiveStatusBar({ label }: { label: string }) {
 
   return (
     <div className={styles.liveStatus} aria-live="polite">
-      <img src={loaderUrl} className={styles.thinkingLoader} alt="" aria-hidden />
       <span
         key={label}
         className={`${styles.liveStatusText} ${animating ? styles.liveStatusTextSwap : ''}`}
@@ -146,8 +144,4 @@ export function LiveStatusBar({ label }: { label: string }) {
       </span>
     </div>
   );
-}
-
-export function ThinkingLoader() {
-  return <img src={loaderUrl} className={styles.thinkingLoader} alt="" aria-hidden />;
 }

@@ -2,7 +2,7 @@
 /**
  * Plugin Name: OLKIL SEO Brand
  * Description: Advanced OLKIL SEO + syncs Dazzlone pricing UI into the OLKIL theme.
- * Version: 1.5.8
+ * Version: 1.6.2
  * Author: OLKIL
  */
 
@@ -11,7 +11,7 @@ if ( ! defined( 'ABSPATH' ) ) {
 }
 
 define( 'OLKIL_SEO_BRAND_NAME', 'OLKIL' );
-define( 'OLKIL_SEO_BRAND_VERSION', '1.5.8' );
+define( 'OLKIL_SEO_BRAND_VERSION', '1.6.2' );
 define( 'OLKIL_SEO_BRAND_DIR', plugin_dir_path( __FILE__ ) );
 define( 'OLKIL_SEO_BRAND_URL', plugin_dir_url( __FILE__ ) );
 
@@ -30,7 +30,24 @@ function olkil_seo_brand_sync_theme_files() {
 
 	$map = array(
 		'theme-overrides/template-parts/olkil/sections/hero.php'    => 'template-parts/olkil/sections/hero.php',
+		'theme-overrides/template-parts/olkil/sections/partners.php' => 'template-parts/olkil/sections/partners.php',
 		'theme-overrides/template-parts/olkil/sections/demo.php'    => 'template-parts/olkil/sections/demo.php',
+		'theme-overrides/assets/olkil/img/ai-logos/google.svg'      => 'assets/olkil/img/ai-logos/google.svg',
+		'theme-overrides/assets/olkil/img/ai-logos/openai.svg'      => 'assets/olkil/img/ai-logos/openai.svg',
+		'theme-overrides/assets/olkil/img/ai-logos/anthropic.svg'   => 'assets/olkil/img/ai-logos/anthropic.svg',
+		'theme-overrides/assets/olkil/img/ai-logos/xai.svg'         => 'assets/olkil/img/ai-logos/xai.svg',
+		'theme-overrides/assets/olkil/img/ai-logos/deepseek.svg'    => 'assets/olkil/img/ai-logos/deepseek.svg',
+		'theme-overrides/assets/olkil/img/ai-logos/meta.svg'        => 'assets/olkil/img/ai-logos/meta.svg',
+		'theme-overrides/assets/olkil/img/ai-logos/mistral.svg'     => 'assets/olkil/img/ai-logos/mistral.svg',
+		'theme-overrides/assets/olkil/img/ai-logos/alibaba.svg'     => 'assets/olkil/img/ai-logos/alibaba.svg',
+		'theme-overrides/assets/olkil/img/ai-logos/qwen.svg'        => 'assets/olkil/img/ai-logos/qwen.svg',
+		'theme-overrides/assets/olkil/img/ai-logos/poolside.svg'    => 'assets/olkil/img/ai-logos/poolside.svg',
+		'theme-overrides/assets/olkil/img/ai-logos/nvidia.svg'      => 'assets/olkil/img/ai-logos/nvidia.svg',
+		'theme-overrides/assets/olkil/img/ai-logos/microsoft.svg'   => 'assets/olkil/img/ai-logos/microsoft.svg',
+		'theme-overrides/assets/olkil/img/ai-logos/cohere.svg'      => 'assets/olkil/img/ai-logos/cohere.svg',
+		'theme-overrides/assets/olkil/img/ai-logos/perplexity.svg'  => 'assets/olkil/img/ai-logos/perplexity.svg',
+		'theme-overrides/assets/olkil/img/ai-logos/huggingface.svg' => 'assets/olkil/img/ai-logos/huggingface.svg',
+		'theme-overrides/assets/olkil/img/ai-logos/groq.svg'        => 'assets/olkil/img/ai-logos/groq.svg',
 		'theme-overrides/front-page.php'                            => 'front-page.php',
 		'theme-overrides/page.php'                                  => 'page.php',
 		'theme-overrides/home.php'                                  => 'home.php',

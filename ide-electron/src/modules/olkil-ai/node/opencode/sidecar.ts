@@ -115,6 +115,7 @@ export class OpencodeSidecar {
       OPENCODE_SERVER_PASSWORD: password,
       DEEPSEEK_API_KEY: this.secrets.deepseekKey || '',
       POOLSIDE_API_KEY: this.secrets.poolsideKey || '',
+      OPENROUTER_API_KEY: this.secrets.openrouterKey || '',
     });
 
     const proc = spawn(binary, args, {
@@ -135,6 +136,9 @@ export class OpencodeSidecar {
   /** OpenCode also reads auth.json; keep it in sync so packaged users don't 401. */
   private writeProviderAuth(): void {
     const auth: Record<string, { type: 'api'; key: string }> = {};
+    if (this.secrets.openrouterKey) {
+      auth.openrouter = { type: 'api', key: this.secrets.openrouterKey };
+    }
     if (this.secrets.deepseekKey) {
       auth.deepseek = { type: 'api', key: this.secrets.deepseekKey };
     }
@@ -319,17 +323,37 @@ function writeStripGatewayPlugin(homeDir: string): string {
     },
     "permission.ask": async function (input, output) {
       const kind = String((input && (input.permission || input.type || input.tool)) || "").toLowerCase();
-      output.status = /external/.test(kind) ? "deny" : "allow";
+      const cmd = String(
+        (input && (input.pattern || input.command || (input.metadata && input.metadata.command))) || ""
+      );
+      if (/external/.test(kind)) {
+        output.status = "deny";
+        return;
+      }
+      if (
+        /\\b(?:npm|pnpm|bun)\\s+run\\s+build(?:[:\\\\w.-]*)?\\b/i.test(cmd) ||
+        /\\byarn\\s+(?:run\\s+)?build(?:[:\\\\w.-]*)?\\b/i.test(cmd) ||
+        /\\b(?:npx\\s+)?(?:vite|next|nuxt|ng)\\s+build\\b/i.test(cmd)
+      ) {
+        output.status = "deny";
+        return;
+      }
+      output.status = "allow";
     },
     "experimental.chat.system.transform": async function (_input, output) {
       if (!output || !Array.isArray(output.system) || !output.system.length) {
         return;
       }
       const first = String(output.system[0] || "");
+      const noBuild =
+        "Never run npm run build, yarn build, pnpm build, vite build, or next build unless the user explicitly asked. Do not verify edits with a full compile.";
       if (first.indexOf("coding agent inside OLKIL") >= 0) {
+        if (first.indexOf("Never run npm run build") < 0) {
+          output.system[0] = first + "\\n\\n" + noBuild;
+        }
         return;
       }
-      output.system[0] = brand + "\\n\\n" + first;
+      output.system[0] = brand + "\\n\\n" + noBuild + "\\n\\n" + first;
     },
     "experimental.text.complete": async function (_input, output) {
       if (!output || typeof output.text !== "string") {
@@ -463,10 +487,11 @@ function httpRequest<T>(
         headers,
       },
       (res) => {
-        const chunks: Buffer[] = [];
-        res.on('data', (chunk) => chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)));
+        const chunks: string[] = [];
+        res.setEncoding('utf8');
+        res.on('data', (chunk) => chunks.push(String(chunk)));
         res.on('end', () => {
-          const raw = Buffer.concat(chunks).toString('utf8');
+          const raw = chunks.join('');
           const status = res.statusCode || 0;
           if (status < 200 || status >= 300) {
             reject(new Error(`OpenCode ${method} ${url.pathname} failed (${status}): ${raw.slice(0, 800)}`));

@@ -5,9 +5,6 @@ import { spawn } from 'child_process';
 import { Injectable } from '@opensumi/di';
 import fetch from 'node-fetch';
 import {
-  BrowserActionRequest,
-  BrowserActionResult,
-  BrowserDevToolsRequest,
   ChatCompletionRequest,
   ChatCompletionResult,
   ChatMessage,
@@ -18,8 +15,6 @@ import {
   DevServerDetectResult,
   InvestigationResult,
   IOlkilAiNodeService,
-  LiveTestRequest,
-  LiveTestResult,
   OllamaSetupState,
   RepositoryIndexStatus,
   RepositoryGrepResult,
@@ -28,17 +23,18 @@ import {
   RepositorySymbolResult,
   DiscoveredMcpServer,
 } from '../common';
-import { AI_MODELS, DEFAULT_MODEL_ID, findModel, applyCustomModelEndpoints, customEndpointFor, normalizeOpenAiBaseUrl, AiProviderId } from '../common/models';
+import { AI_MODELS, DEFAULT_MODEL_ID, findModel, applyCustomModelEndpoints, customEndpointFor, normalizeOpenAiBaseUrl, AiProviderId, openRouterExtraModels } from '../common/models';
+import { lastUserText, routeOpenRouterModel } from '../common/auto-router';
 import { AGENT_TOOLS, selectAgentTools, stripLocalThinkTags } from '../common/tools';
 import { getSharedRepositoryIndex } from './repository-index.service';
 import { ripgrepSearch } from './ripgrep';
 import {
   EMBEDDED_DEEPSEEK_API_KEY,
   EMBEDDED_ENV,
+  EMBEDDED_OPENROUTER_API_KEY,
   EMBEDDED_POOLSIDE_API_KEY,
 } from './embedded-secrets';
 import { CommandRunner } from './command-runner';
-import { BrowserTestService } from './browser-test.service';
 import { getOlkilAgentRuntime } from './agent-runtime';
 import type { ClineEngineRunRequest, ClineEngineRunState } from '../common';
 import { listDiscoveredMcpServers as discoverMcpServers } from './mcp-discover';
@@ -48,6 +44,12 @@ import {
   getDeepseekAccess as loadDeepseekAccess,
   parseProviderUsage,
 } from './olkil-wallet.service';
+import {
+  actualOpenRouterUsage,
+  DEFAULT_OPENROUTER_BASE,
+  openRouterHeaders,
+  refreshOpenRouterCatalog,
+} from './openrouter';
 
 const POOLSIDE_URL = 'https://inference.poolside.ai/v1/chat/completions';
 const DEFAULT_DEEPSEEK_BASE = 'https://api.deepseek.com';
@@ -290,6 +292,9 @@ function providerLabel(provider: AiProviderId): string {
   if (provider === 'deepseek') {
     return 'DeepSeek';
   }
+  if (provider === 'openrouter') {
+    return 'OpenRouter';
+  }
   if (provider === 'custom') {
     return 'Custom model';
   }
@@ -339,7 +344,6 @@ export class OlkilAiNodeService implements IOlkilAiNodeService {
   private pullIntent: 'run' | 'pause' | 'cancel' = 'run';
   private readonly repositoryIndex = getSharedRepositoryIndex();
   private readonly commandRunner = new CommandRunner();
-  private readonly browserTest = new BrowserTestService(this.commandRunner);
 
   private refreshEnv() {
     this.env = { ...loadDotEnv(), ...this.env };
@@ -426,66 +430,6 @@ export class OlkilAiNodeService implements IOlkilAiNodeService {
 
   async stopCommand(id: string): Promise<boolean> {
     return this.commandRunner.stop(id);
-  }
-
-  browserLaunch(headed?: boolean): Promise<BrowserActionResult> {
-    return this.browserTest.launch(headed !== false);
-  }
-
-  browserGoto(url: string): Promise<BrowserActionResult> {
-    return this.browserTest.goto(url);
-  }
-
-  browserReload(): Promise<BrowserActionResult> {
-    return this.browserTest.reload();
-  }
-
-  browserClick(request: BrowserActionRequest): Promise<BrowserActionResult> {
-    return this.browserTest.click(request);
-  }
-
-  browserFill(request: BrowserActionRequest): Promise<BrowserActionResult> {
-    return this.browserTest.fill(request);
-  }
-
-  browserType(request: BrowserActionRequest): Promise<BrowserActionResult> {
-    return this.browserTest.type(request);
-  }
-
-  browserUpload(request: BrowserActionRequest): Promise<BrowserActionResult> {
-    return this.browserTest.upload(request);
-  }
-
-  browserPress(key: string): Promise<BrowserActionResult> {
-    return this.browserTest.press(key);
-  }
-
-  browserSnapshot(): Promise<BrowserActionResult> {
-    return this.browserTest.snapshot();
-  }
-
-  browserScreenshot(): Promise<BrowserActionResult> {
-    return this.browserTest.screenshot();
-  }
-
-  browserConsole(): Promise<BrowserActionResult> {
-    return this.browserTest.consoleDump();
-  }
-
-  browserNetwork(): Promise<BrowserActionResult> {
-    return this.browserTest.networkDump();
-  }
-
-  browserDevtools(request?: BrowserDevToolsRequest): Promise<BrowserActionResult> {
-    return this.browserTest.devtools(request || {});
-  }
-
-  browserClose(): Promise<BrowserActionResult> {
-    return this.browserTest.close();
-  }
-
-  liveTest(request: LiveTestRequest): Promise<LiveTestResult> {
-    return this.browserTest.liveTest(request);
   }
 
   async clineRun(request: ClineEngineRunRequest): Promise<ClineEngineRunState> {
@@ -596,6 +540,14 @@ export class OlkilAiNodeService implements IOlkilAiNodeService {
         ''
       ).trim();
     }
+    if (provider === 'openrouter') {
+      return (
+        process.env.OPENROUTER_API_KEY ||
+        this.env.OPENROUTER_API_KEY ||
+        EMBEDDED_OPENROUTER_API_KEY ||
+        ''
+      ).trim();
+    }
     return (
       process.env.POOLSIDE_API_KEY ||
       this.env.POOLSIDE_API_KEY ||
@@ -618,6 +570,14 @@ export class OlkilAiNodeService implements IOlkilAiNodeService {
     return raw.replace(/\/$/, '');
   }
 
+  private get openrouterBase(): string {
+    const raw =
+      process.env.OPENROUTER_BASE_URL ||
+      this.env.OPENROUTER_BASE_URL ||
+      DEFAULT_OPENROUTER_BASE;
+    return raw.replace(/\/$/, '');
+  }
+
   private chatCompletionsUrl(provider: AiProviderId, modelId?: string): string {
     if (provider === 'custom') {
       const base = customEndpointFor(modelId || '')?.baseUrl || '';
@@ -629,6 +589,9 @@ export class OlkilAiNodeService implements IOlkilAiNodeService {
     if (provider === 'deepseek') {
       // DeepSeek accepts both /chat/completions and /v1/chat/completions
       return `${this.deepseekBase}/chat/completions`;
+    }
+    if (provider === 'openrouter') {
+      return `${this.openrouterBase}/chat/completions`;
     }
     return POOLSIDE_URL;
   }
@@ -1029,15 +992,30 @@ export class OlkilAiNodeService implements IOlkilAiNodeService {
   }
 
   async listModels() {
-    return AI_MODELS.map((m) => ({
-      id: m.id,
-      provider: m.provider,
-      model: m.model,
-      label: m.label,
-      displayName: m.displayName,
-      badge: m.badge,
-      approxSizeGb: m.approxSizeGb,
-    }));
+    const key = this.getKey('openrouter');
+    if (key) {
+      await refreshOpenRouterCatalog(key, this.openrouterBase);
+    }
+    const extras = openRouterExtraModels();
+    const seen = new Set<string>();
+    const out = [];
+    for (const m of [...AI_MODELS, ...extras]) {
+      if (seen.has(m.id)) {
+        continue;
+      }
+      seen.add(m.id);
+      out.push({
+        id: m.id,
+        provider: m.provider,
+        model: m.model,
+        label: m.label,
+        displayName: m.displayName,
+        badge: m.badge,
+        approxSizeGb: m.approxSizeGb,
+        group: m.group,
+      });
+    }
+    return out;
   }
 
   async getLocalModelStatus(modelId?: string) {
@@ -1093,11 +1071,14 @@ export class OlkilAiNodeService implements IOlkilAiNodeService {
     if (provider === 'deepseek') {
       return Boolean(this.getKey('deepseek'));
     }
+    if (provider === 'openrouter') {
+      return Boolean(this.getKey('openrouter'));
+    }
     // Any usable backend
     if (await this.isOllamaReachable()) {
       return true;
     }
-    return Boolean(this.getKey('deepseek') || this.getKey('poolside'));
+    return Boolean(this.getKey('openrouter') || this.getKey('deepseek') || this.getKey('poolside'));
   }
 
   async getModelName(modelId?: string): Promise<string> {
@@ -1111,7 +1092,13 @@ export class OlkilAiNodeService implements IOlkilAiNodeService {
 
   async chatCompletion(request: ChatCompletionRequest): Promise<ChatCompletionResult> {
     applyCustomModelEndpoints(request.customModels);
-    const option = findModel(request.modelId || DEFAULT_MODEL_ID);
+    const routedId = routeOpenRouterModel({
+      modelId: request.modelId || DEFAULT_MODEL_ID,
+      optimizeFor: request.autoOptimizeFor,
+      userText: lastUserText(request.messages || []),
+      messageCount: request.messages?.length || 0,
+    });
+    const option = findModel(routedId);
     await assertOlkilWallet(option.provider);
     const apiKey = this.getKey(option.provider, option.id);
 
@@ -1137,9 +1124,9 @@ export class OlkilAiNodeService implements IOlkilAiNodeService {
         );
       }
       throw new Error(
-        `${providerLabel(option.provider)} is not configured. Add ${
-          option.provider === 'deepseek' ? 'DEEPSEEK_API_KEY' : 'POOLSIDE_API_KEY'
-        } to ide-electron/.env and rebuild (yarn stage-olkil-env).`,
+        option.provider === 'custom'
+          ? 'This custom model has no API key. Open Settings → Models and add one.'
+          : 'This model is not configured in this OLKIL build. Reinstall the latest app from olkil.com.',
       );
     }
 
@@ -1179,7 +1166,15 @@ export class OlkilAiNodeService implements IOlkilAiNodeService {
       if (useStream) {
         body.stream_options = { include_usage: true };
       }
-      // Steer away from DSML text dumps when tools are present.
+      if (request.tools?.length && request.toolChoice !== 'none') {
+        body.tool_choice = request.toolChoice || 'auto';
+      }
+    }
+
+    if (option.provider === 'openrouter') {
+      if (useStream) {
+        body.stream_options = { include_usage: true };
+      }
       if (request.tools?.length && request.toolChoice !== 'none') {
         body.tool_choice = request.toolChoice || 'auto';
       }
@@ -1232,6 +1227,8 @@ export class OlkilAiNodeService implements IOlkilAiNodeService {
     if (option.provider === 'ollama') {
       // OpenAI-compat shim accepts a dummy bearer; some builds omit it.
       headers.Authorization = `Bearer ${apiKey || 'ollama'}`;
+    } else if (option.provider === 'openrouter') {
+      Object.assign(headers, openRouterHeaders(apiKey));
     } else {
       headers.Authorization = `Bearer ${apiKey}`;
     }
@@ -1313,6 +1310,7 @@ export class OlkilAiNodeService implements IOlkilAiNodeService {
       tool_calls: message.tool_calls,
       finish_reason: choice?.finish_reason,
       usage: data?.usage && typeof data.usage === 'object' ? data.usage : undefined,
+      generationId: typeof data?.id === 'string' ? data.id : undefined,
     };
   }
 
@@ -1321,10 +1319,29 @@ export class OlkilAiNodeService implements IOlkilAiNodeService {
     _request: ChatCompletionRequest,
     result: ChatCompletionResult,
   ): Promise<void> {
-    const usage = parseProviderUsage(result.usage);
+    let usage = parseProviderUsage(result.usage);
+    if (option.provider === 'openrouter') {
+      const actual = await actualOpenRouterUsage({
+        apiKey: this.getKey('openrouter'),
+        baseUrl: this.openrouterBase,
+        generationId: result.generationId,
+        fallback: result.usage,
+      });
+      usage = actual;
+      if (actual) {
+        result.usage = {
+          ...(result.usage || {}),
+          prompt_tokens: actual.promptTokens,
+          completion_tokens: actual.completionTokens,
+          total_tokens: actual.totalTokens,
+          native_tokens_prompt: actual.promptTokens,
+          native_tokens_completion: actual.completionTokens,
+        };
+      }
+    }
     if (!usage) {
-      if (option.provider === 'deepseek') {
-        console.warn('[olkil-wallet] skip charge: DeepSeek response had no usage');
+      if (option.provider === 'deepseek' || option.provider === 'openrouter') {
+        console.warn('[olkil-wallet] skip charge: cloud response had no usage');
       }
       return;
     }
@@ -1364,6 +1381,7 @@ export class OlkilAiNodeService implements IOlkilAiNodeService {
 
     let buffer = '';
     let usage: ChatCompletionResult['usage'];
+    let generationId: string | undefined;
     await new Promise<void>((resolve, reject) => {
       body.on('data', (chunk: Buffer) => {
         buffer += chunk.toString('utf8');
@@ -1380,6 +1398,9 @@ export class OlkilAiNodeService implements IOlkilAiNodeService {
           }
           try {
             const json = JSON.parse(payload);
+            if (typeof json?.id === 'string' && json.id) {
+              generationId = json.id;
+            }
             if (json?.usage && typeof json.usage === 'object') {
               usage = json.usage;
             }
@@ -1475,6 +1496,7 @@ export class OlkilAiNodeService implements IOlkilAiNodeService {
         : undefined,
       finish_reason: finishReason,
       usage,
+      generationId,
     };
   }
 

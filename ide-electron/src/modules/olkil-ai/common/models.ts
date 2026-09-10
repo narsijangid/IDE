@@ -1,4 +1,6 @@
-export type AiProviderId = 'ollama' | 'poolside' | 'deepseek' | 'custom';
+import { AUTO_MODEL_ID } from './auto-router';
+
+export type AiProviderId = 'ollama' | 'poolside' | 'deepseek' | 'openrouter' | 'custom';
 
 export interface AiModelOption {
   /** Unique UI id, e.g. ollama:qwen2.5-coder:7b */
@@ -16,6 +18,8 @@ export interface AiModelOption {
   publicName?: string;
   /** Approximate download size for Ollama models (shown before pull). */
   approxSizeGb?: number;
+  /** Cursor-style picker grouping */
+  group?: 'auto' | 'featured' | 'local' | 'more';
 }
 
 /** User-added OpenAI-compatible endpoint (BYOK). Secrets stay on the run payload. */
@@ -29,83 +33,87 @@ export interface CustomModelEndpoint {
 
 let customCatalog: AiModelOption[] = [];
 const customSecrets = new Map<string, { baseUrl: string; apiKey: string }>();
+/** Live OpenRouter catalog (not in the static featured list). */
+let openRouterExtra: AiModelOption[] = [];
+
+function orModel(slug: string, displayName: string): AiModelOption {
+  return {
+    id: `openrouter:${slug}`,
+    provider: 'openrouter',
+    model: slug,
+    label: displayName,
+    displayName,
+    publicName: displayName,
+    group: 'featured',
+  };
+}
 
 /**
- * Cloud (DeepSeek / Dazzlone) + local Ollama models.
- * Pull Ollama models with: `ollama pull <model>`
+ * Default picker: Auto + Grok / Claude / GPT Sol / Opus / DeepSeek Flash + local.
  */
 export const AI_MODELS: AiModelOption[] = [
   {
-    id: 'deepseek:deepseek-v4-flash',
-    provider: 'deepseek',
-    model: 'deepseek-v4-flash',
-    label: 'DeepSeek V4 Flash',
-    displayName: 'DeepSeek V4 Flash',
-    badge: 'CLOUD',
-    publicName: 'DeepSeek V4 Flash',
+    id: AUTO_MODEL_ID,
+    provider: 'openrouter',
+    model: 'auto',
+    label: 'Auto',
+    displayName: 'Auto',
+    publicName: 'OLKIL Auto',
+    group: 'auto',
   },
-  {
-    id: 'deepseek:deepseek-v4-pro',
-    provider: 'deepseek',
-    model: 'deepseek-v4-pro',
-    label: 'DeepSeek V4 Pro',
-    displayName: 'DeepSeek V4 Pro',
-    badge: 'CLOUD',
-    publicName: 'DeepSeek V4 Pro',
-  },
-  {
-    id: 'poolside:poolside/laguna-s-2.1',
-    provider: 'poolside',
-    model: 'poolside/laguna-s-2.1',
-    label: 'Dazzlone (FREE)',
-    displayName: 'Dazzlone',
-    badge: 'FREE',
-    publicName: 'Dazzlone',
-  },
+  orModel('x-ai/grok-4.6', 'Grok 4.6'),
+  orModel('anthropic/claude-sonnet-5', 'Claude Sonnet 5'),
+  orModel('openai/gpt-5.6-sol', 'GPT-5.6 Sol'),
+  orModel('anthropic/claude-opus-5', 'Claude Opus 5'),
+  orModel('deepseek/deepseek-v4-flash', 'DeepSeek V4 Flash'),
   {
     id: 'ollama:qwen2.5-coder:7b',
     provider: 'ollama',
     model: 'qwen2.5-coder:7b',
-    label: 'Ollama · Qwen2.5 Coder 7B (local)',
+    label: 'Qwen2.5 Coder 7B (local)',
     displayName: 'Qwen2.5 Coder 7B',
     badge: 'LOCAL',
-    publicName: 'Qwen2.5 Coder 7B (Ollama)',
+    publicName: 'Qwen2.5 Coder 7B',
     approxSizeGb: 4.7,
+    group: 'local',
   },
   {
     id: 'ollama:llama3.2',
     provider: 'ollama',
     model: 'llama3.2',
-    label: 'Ollama · Llama 3.2 (local, light)',
+    label: 'Llama 3.2 (local)',
     displayName: 'Llama 3.2',
     badge: 'LOCAL',
-    publicName: 'Llama 3.2 (Ollama)',
+    publicName: 'Llama 3.2',
     approxSizeGb: 2.0,
+    group: 'local',
   },
   {
     id: 'ollama:llama3.1',
     provider: 'ollama',
     model: 'llama3.1',
-    label: 'Ollama · Llama 3.1 (local)',
+    label: 'Llama 3.1 (local)',
     displayName: 'Llama 3.1',
     badge: 'LOCAL',
-    publicName: 'Llama 3.1 (Ollama)',
+    publicName: 'Llama 3.1',
     approxSizeGb: 4.7,
+    group: 'local',
   },
   {
     id: 'ollama:mistral',
     provider: 'ollama',
     model: 'mistral',
-    label: 'Ollama · Mistral (local)',
+    label: 'Mistral (local)',
     displayName: 'Mistral',
     badge: 'LOCAL',
-    publicName: 'Mistral (Ollama)',
+    publicName: 'Mistral',
     approxSizeGb: 4.1,
+    group: 'local',
   },
 ];
 
-/** Default = DeepSeek V4 Flash (fast, low-cost cloud) */
-export const DEFAULT_MODEL_ID = 'deepseek:deepseek-v4-flash';
+/** Default = Auto (Cursor-style router over OpenRouter). */
+export const DEFAULT_MODEL_ID = AUTO_MODEL_ID;
 
 export function customModelCatalogId(id: string): string {
   const raw = String(id || '').trim();
@@ -117,6 +125,53 @@ export function customModelCatalogId(id: string): string {
 
 export function isCustomProvider(provider: string | undefined): boolean {
   return provider === 'custom';
+}
+
+export function isOpenRouterProvider(provider?: string): boolean {
+  return (provider || '').toLowerCase() === 'openrouter';
+}
+
+export function isMeteredCloudProvider(provider?: string): boolean {
+  const p = (provider || '').toLowerCase();
+  return p === 'deepseek' || p === 'openrouter';
+}
+
+export function openrouterCatalogId(modelOrId: string): string {
+  const raw = String(modelOrId || '').trim();
+  if (!raw) {
+    return '';
+  }
+  return raw.startsWith('openrouter:') ? raw : `openrouter:${raw}`;
+}
+
+export function applyOpenRouterExtraModels(models: AiModelOption[] | undefined): AiModelOption[] {
+  const featured = new Set(AI_MODELS.map((m) => m.id));
+  const next: AiModelOption[] = [];
+  const seen = new Set<string>();
+  for (const m of models || []) {
+    const id = openrouterCatalogId(m.id || m.model);
+    if (!id || featured.has(id) || seen.has(id) || id === AUTO_MODEL_ID) {
+      continue;
+    }
+    seen.add(id);
+    next.push({
+      ...m,
+      id,
+      provider: 'openrouter',
+      model: String(m.model || id.replace(/^openrouter:/, '')).trim(),
+      label: m.label || m.displayName || m.model,
+      displayName: m.displayName || m.label || m.model,
+      badge: m.badge && !/openrouter|premium|cloud/i.test(m.badge) ? m.badge : undefined,
+      publicName: m.publicName || m.displayName || m.label,
+      group: 'more',
+    });
+  }
+  openRouterExtra = next;
+  return next;
+}
+
+export function openRouterExtraModels(): AiModelOption[] {
+  return openRouterExtra;
 }
 
 /**
@@ -142,6 +197,7 @@ export function applyCustomModelEndpoints(endpoints: CustomModelEndpoint[] | und
       displayName: label,
       badge: 'CUSTOM',
       publicName: label,
+      group: 'more',
     };
     next.push(option);
     customSecrets.set(id, { baseUrl, apiKey: String(ep.apiKey || '').trim() });
@@ -155,7 +211,35 @@ export function customEndpointFor(modelId: string): { baseUrl: string; apiKey: s
 }
 
 export function findModel(id: string): AiModelOption {
-  return AI_MODELS.find((m) => m.id === id) || customCatalog.find((m) => m.id === id) || AI_MODELS[0];
+  const key = String(id || '').trim();
+  return (
+    AI_MODELS.find((m) => m.id === key) ||
+    openRouterExtra.find((m) => m.id === key) ||
+    customCatalog.find((m) => m.id === key) ||
+    synthesizeOpenRouter(key) ||
+    AI_MODELS[0]
+  );
+}
+
+function synthesizeOpenRouter(id: string): AiModelOption | undefined {
+  if (!id.startsWith('openrouter:')) {
+    return undefined;
+  }
+  const slug = id.slice('openrouter:'.length).trim();
+  if (!slug || slug === 'auto') {
+    return undefined;
+  }
+  const name = slug.split('/').pop() || slug;
+  return {
+    id,
+    provider: 'openrouter',
+    model: slug,
+    label: name,
+    displayName: name,
+    badge: undefined,
+    publicName: name,
+    group: 'more',
+  };
 }
 
 /** Name the product should use when referring to itself in chat. */

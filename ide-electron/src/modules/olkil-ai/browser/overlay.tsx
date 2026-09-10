@@ -88,7 +88,6 @@ export const OlkilAiOverlay = () => {
   const [expanded, setExpanded] = useState(ui.expanded);
   const [pinned, setPinned] = useState(ui.pinned);
   const [busy, setBusy] = useState(chat.busy);
-  const [liveTesting, setLiveTesting] = useState(chat.liveTesting);
   const [liveStatus, setLiveStatus] = useState(chat.status);
   const [pendingCount, setPendingCount] = useState(chat.pendingChanges.length);
   const [history, setHistory] = useState(chat.chatHistory || []);
@@ -116,7 +115,6 @@ export const OlkilAiOverlay = () => {
   useEffect(() => {
     const d = chat.onDidChange(() => {
       setBusy(chat.busy);
-      setLiveTesting(chat.liveTesting);
       setLiveStatus(chat.status);
       setPendingCount(chat.pendingChanges.length);
       setHistory(chat.chatHistory || []);
@@ -226,7 +224,7 @@ export const OlkilAiOverlay = () => {
   );
 
   const workspaceRoot = useWorkspaceRoot();
-  const chromeBusy = busy || liveTesting;
+  const chromeBusy = busy;
   const busyStatusLabel = useLiveStatusLabel({
     active: chromeBusy,
     status: liveStatus,
@@ -267,7 +265,7 @@ export const OlkilAiOverlay = () => {
         tabIndex={state === 'closed' ? 0 : -1}
       >
         <AiSparkIcon size={18} className={styles.chipGlyph} />
-        {busy || liveTesting || pendingCount > 0 ? (
+        {busy || pendingCount > 0 ? (
           <span className={cx(styles.chipDot, chromeBusy && styles.chipDotBusy)} />
         ) : null}
       </button>

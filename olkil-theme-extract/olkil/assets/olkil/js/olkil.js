@@ -16,7 +16,7 @@
 		initOsDownload();
 		initSmoothAnchors();
 		initDemoVideo();
-		initLoopVideos();
+		initHeroVideo();
 		initCliPage();
 		initThemeToggle();
 	});
@@ -277,116 +277,40 @@
 		);
 	}
 
-	function initLoopVideos() {
-		var stages = document.querySelectorAll('[data-olkil-loop-video]');
-		if (!stages.length) return;
-		var reduced = prefersReducedMotion();
+	function initHeroVideo() {
+		var video = document.querySelector('.olkil-hero-agent__video');
+		if (!video) return;
 
-		stages.forEach(function (stage) {
-			var videos = Array.prototype.slice.call(stage.querySelectorAll('video'));
-			if (!videos.length) return;
+		video.muted = true;
+		video.defaultMuted = true;
+		video.playsInline = true;
+		video.setAttribute('playsinline', '');
+		video.setAttribute('webkit-playsinline', '');
+		try { video.disablePictureInPicture = true; } catch (e) {}
 
-			videos.forEach(function (v) {
-				v.muted = true;
-				v.defaultMuted = true;
-				v.playsInline = true;
-				v.setAttribute('playsinline', '');
-				v.setAttribute('webkit-playsinline', '');
-				try { v.disablePictureInPicture = true; } catch (e) {}
-			});
+		if (prefersReducedMotion()) {
+			video.removeAttribute('autoplay');
+			video.loop = false;
+			try { video.pause(); video.currentTime = 0; } catch (err) {}
+			return;
+		}
 
-			if (reduced) {
-				videos.forEach(function (v) {
-					v.pause();
-					v.loop = false;
-					v.removeAttribute('autoplay');
-				});
-				try { videos[0].currentTime = 0; } catch (e) {}
-				videos[0].classList.add('is-active');
-				return;
-			}
+		video.loop = true;
 
-			var primary = videos[0];
-			var secondary = videos[1];
+		function tryPlay() {
+			playSafe(video);
+		}
 
-			if (!secondary) {
-				primary.loop = true;
-				playSafe(primary);
-				return;
-			}
+		if (video.readyState >= 2) tryPlay();
+		else {
+			video.addEventListener('loadeddata', tryPlay, { once: true });
+			video.addEventListener('canplay', tryPlay, { once: true });
+		}
 
-			var active = 0;
-			var switching = false;
-			var raf = 0;
-			var lead = 0.14;
-
-			function current() {
-				return videos[active];
-			}
-
-			function next() {
-				return videos[1 - active];
-			}
-
-			function switchToNext() {
-				if (switching) return;
-				var cur = current();
-				var nxt = next();
-				if (!nxt) return;
-				switching = true;
-				try { nxt.currentTime = 0; } catch (e) {}
-				playSafe(nxt);
-				nxt.classList.add('is-active');
-				cur.classList.remove('is-active');
-				active = 1 - active;
-				window.setTimeout(function () {
-					try {
-						cur.pause();
-						cur.currentTime = 0;
-					} catch (e) {}
-					switching = false;
-				}, 70);
-			}
-
-			function tick() {
-				var cur = current();
-				if (!switching && cur.duration && isFinite(cur.duration) && cur.currentTime >= Math.max(0, cur.duration - lead)) {
-					switchToNext();
-				}
-				raf = window.requestAnimationFrame(tick);
-			}
-
-			primary.loop = false;
-			secondary.loop = false;
-			primary.removeAttribute('loop');
-			secondary.removeAttribute('loop');
-
-			primary.addEventListener('ended', function () {
-				if (!switching) switchToNext();
-			});
-			secondary.addEventListener('ended', function () {
-				if (!switching) switchToNext();
-			});
-
-			function start() {
-				playSafe(primary);
-				if (raf) window.cancelAnimationFrame(raf);
-				raf = window.requestAnimationFrame(tick);
-			}
-
-			if (primary.readyState >= 2) start();
-			else primary.addEventListener('loadeddata', start, { once: true });
-
-			document.addEventListener('visibilitychange', function () {
-				if (document.hidden) {
-					if (raf) window.cancelAnimationFrame(raf);
-					raf = 0;
-					return;
-				}
-				if (current().paused) playSafe(current());
-				if (!raf) raf = window.requestAnimationFrame(tick);
-			});
+		document.addEventListener('visibilitychange', function () {
+			if (!document.hidden && video.paused) tryPlay();
 		});
+		window.addEventListener('pageshow', tryPlay);
 	}
 
 	function resolveTheme(pref) {

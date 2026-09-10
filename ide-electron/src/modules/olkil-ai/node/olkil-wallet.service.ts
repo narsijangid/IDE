@@ -36,10 +36,10 @@ export function isLocalProvider(provider: AiProviderId): boolean {
 /**
  * Cloud inference that spends the user's OLKIL plan tokens.
  * Dazzlone (Poolside) and local Ollama are always free — even for paid users.
- * Only billed cloud models (DeepSeek) debit the plan wallet.
+ * Only billed cloud models (OpenRouter / DeepSeek) debit the plan wallet.
  */
 export function isMeteredProvider(provider: AiProviderId, _isPaid = false): boolean {
-  return provider === 'deepseek';
+  return provider === 'deepseek' || provider === 'openrouter';
 }
 
 /** Free-plan DeepSeek allowance (not Lite/Pro/Ultra). */
@@ -134,10 +134,18 @@ export function parseProviderUsage(raw: unknown): OlkilApiUsage | null {
   const cache = u.cache && typeof u.cache === 'object' ? u.cache : {};
 
   let promptTokens = num(
-    u.prompt_tokens ?? u.promptTokens ?? u.input,
+    u.native_tokens_prompt ??
+      u.tokens_prompt ??
+      u.prompt_tokens ??
+      u.promptTokens ??
+      u.input,
   );
   const completionTokens = num(
-    u.completion_tokens ?? u.completionTokens ?? u.output,
+    u.native_tokens_completion ??
+      u.tokens_completion ??
+      u.completion_tokens ??
+      u.completionTokens ??
+      u.output,
   );
   const cacheHitTokens = num(
     u.prompt_cache_hit_tokens ??
@@ -146,7 +154,10 @@ export function parseProviderUsage(raw: unknown): OlkilApiUsage | null {
   );
   let cacheMissTokens = num(u.prompt_cache_miss_tokens);
   const reasoningTokens = num(
-    details.reasoning_tokens ?? u.reasoning_tokens ?? u.reasoning,
+    details.reasoning_tokens ??
+      u.native_tokens_reasoning ??
+      u.reasoning_tokens ??
+      u.reasoning,
   );
 
   // OpenCode often stores uncached input separately from cache.read.
