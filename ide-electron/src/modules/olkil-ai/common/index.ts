@@ -308,6 +308,8 @@ export interface IOlkilAiNodeService {
     limit: number;
     remaining: number;
     locked: boolean;
+    cloudLocked?: boolean;
+    message?: string;
   }>;
   listModels(): Promise<
     Array<{

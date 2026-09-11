@@ -495,7 +495,7 @@ function AccountPane() {
                 <div className={styles.nameRow}>
                   <div className={styles.name}>{user.displayName || 'OLKIL user'}</div>
                   <span className={styles.planBadge}>
-                    {sub?.plan_name || (subLoading ? 'Loading' : 'Dazzlone')}
+                    {sub?.plan_name || (subLoading ? 'Loading' : 'Free')}
                   </span>
                 </div>
                 <div className={styles.email}>{user.email || 'No email on account'}</div>
@@ -583,7 +583,7 @@ function PlanPane() {
                 ? 'Loading your plan…'
                 : sub?.is_paid
                   ? `${sub.percent_left_label || `${pctLeft}%`} included usage remaining`
-                  : 'Free Dazzlone — local models, no cloud usage cap'}
+                  : 'Free plan — local Ollama, no cloud included'}
             </p>
             {sub?.is_paid && sub.drawing_plan && sub.drawing_plan !== sub.plan ? (
               <p className={styles.planHint}>
@@ -620,12 +620,12 @@ function PlanPane() {
                     </a>
                   </>
                 ) : null}
-                . Dazzlone stays free.
+                .
               </p>
             ) : null}
             <div className={styles.meta}>
               <div className={styles.metaLabel}>Plan</div>
-              <div className={styles.metaValue}>{sub?.plan_name || (waitingForPlan ? 'Loading…' : 'Dazzlone')}</div>
+              <div className={styles.metaValue}>{sub?.plan_name || (waitingForPlan ? 'Loading…' : 'Free')}</div>
               <div className={styles.metaLabel}>Expires</div>
               <div className={styles.metaValue}>
                 {sub?.expires_label || (waitingForPlan ? '—' : 'Never (free local)')}

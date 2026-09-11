@@ -18,7 +18,7 @@ import {
   EMBEDDED_OPENROUTER_API_KEY,
   EMBEDDED_POOLSIDE_API_KEY,
 } from './embedded-secrets';
-import { assertOlkilWallet, chargeOlkilWallet, addApiUsage, parseProviderUsage, type OlkilApiUsage } from './olkil-wallet.service';
+import { OlkilWalletError, assertOlkilWallet, chargeOlkilWallet, addApiUsage, parseProviderUsage, type OlkilApiUsage } from './olkil-wallet.service';
 import { opencodeAgentForMode, opencodeModelRef, toOpencodeMcp } from './opencode/config';
 import { OpencodeSidecar } from './opencode/sidecar';
 import { startOpencodeDownload } from './opencode/binary';
@@ -473,6 +473,9 @@ export class OlkilOpencodeRuntimeHost {
       this.usage.delete(runId);
       return state;
     } catch (error: any) {
+      if (error instanceof OlkilWalletError) {
+        throw error;
+      }
       const live = this.lives.get(runId);
       if (live && !state.done) {
         live.finish(error?.message || String(error));

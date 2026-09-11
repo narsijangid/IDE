@@ -91,7 +91,7 @@ function olkil_payu_plan_display_name( $plan ) {
 	if ( isset( $plans[ $plan ] ) ) {
 		return str_replace( 'OLKIL ', '', $plans[ $plan ]['name'] );
 	}
-	return 'dazzlone' === $plan ? 'Dazzlone' : ucfirst( $plan );
+	return 'dazzlone' === $plan ? 'Free' : ucfirst( $plan );
 }
 
 /**
@@ -104,7 +104,7 @@ function olkil_payu_default_subscription( $email = '' ) {
 	return array(
 		'email'           => olkil_payu_email_key( $email ),
 		'plan'            => 'dazzlone',
-		'plan_name'       => 'Dazzlone',
+		'plan_name'       => 'Free',
 		'status'          => 'active',
 		'tokens_total'    => 0,
 		'tokens_used'     => 0,
@@ -507,7 +507,7 @@ function olkil_payu_enrich_subscription( array $sub ) {
 	}
 
 	$quota_reason = 'ok';
-	if ( $spendable <= 0 ) {
+	if ( $spendable <= 0 || $pct_left < 0.05 ) {
 		$quota_reason = 'quota_exceeded';
 	}
 

@@ -135,8 +135,9 @@ function olkil_payu_authenticated_email( WP_REST_Request $request ) {
 }
 
 function olkil_payu_quota_reason( array $sub ) {
-	$spendable = (int) ( $sub['spendable_left'] ?? $sub['tokens_left'] ?? 0 );
-	if ( $spendable > 0 ) {
+	$spendable = (int) ( $sub['spendable_left'] ?? 0 );
+	$percent   = isset( $sub['percent_left'] ) ? (float) $sub['percent_left'] : 100;
+	if ( $spendable > 0 && $percent >= 0.05 ) {
 		return 'ok';
 	}
 	if ( ! empty( $sub['is_paid'] ) || ! empty( $sub['held_plans'] ) ) {
@@ -146,7 +147,7 @@ function olkil_payu_quota_reason( array $sub ) {
 }
 
 function olkil_payu_quota_message( $reason, array $sub ) {
-	$plan      = (string) ( $sub['plan_name'] ?? 'Dazzlone' );
+	$plan      = (string) ( $sub['plan_name'] ?? 'Free' );
 	$next      = (string) ( $sub['next_plan_name'] ?? 'Pro' );
 	$next_slug = (string) ( $sub['next_plan'] ?? 'pro' );
 	if ( 'ok' === $reason ) {
@@ -161,9 +162,9 @@ function olkil_payu_quota_message( $reason, array $sub ) {
 		return $msg;
 	}
 	if ( 'expired' === $reason ) {
-		return 'Your paid plan has expired. You are on free Dazzlone (local models). Renew or upgrade at olkil.com/pricing.';
+		return 'Your paid plan has expired. Cloud models are paused. Renew or upgrade at olkil.com/pricing, or use local Ollama.';
 	}
-	return 'Cloud models need an OLKIL Lite, Pro, or Ultra plan. You are on ' . $plan . '. Upgrade at olkil.com/pricing, or use Dazzlone / local Ollama.';
+	return 'Cloud models need an OLKIL Lite, Pro, or Ultra plan. You are on ' . $plan . '. Upgrade at olkil.com/pricing, or use local Ollama.';
 }
 
 function olkil_payu_usage_lock( $email ) {

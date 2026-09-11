@@ -188,7 +188,7 @@
           (sub.percent_left_label || Math.round(sub.percent_left || 0) + '%') +
           ' remaining · resets ' +
           (sub.expires_on || '—')
-        : 'Free Dazzlone — local models have no cloud usage cap.';
+        : 'Free plan — local Ollama, no cloud included.';
     }
   }
 
@@ -241,9 +241,9 @@
     if (planBox) setHidden(planBox, false);
     if (badge) setHidden(badge, false);
     if (!sub) return;
-    if (badge) badge.textContent = sub.plan_name || 'Dazzlone';
+    if (badge) badge.textContent = sub.plan_name || 'Free';
     var pn = $('#olkil-profile-plan-name');
-    if (pn) pn.textContent = sub.plan_name || 'Dazzlone';
+    if (pn) pn.textContent = sub.plan_name || 'Free';
     var ex = $('#olkil-profile-plan-expiry');
     if (ex) ex.textContent = sub.expires_label || '—';
     var pct = $('#olkil-profile-credits-pct');
@@ -258,7 +258,7 @@
           ' included usage remaining this period';
       } else {
         tok.textContent = sub.is_expired
-          ? 'Plan ended — back on free Dazzlone'
+          ? 'Plan ended — back on the free plan'
           : 'Free local models · no cloud token cap';
       }
     }
@@ -326,7 +326,7 @@
     if (uname) uname.textContent = n;
     if (!sub) return;
 
-    var planName = sub.plan_name || 'Dazzlone';
+    var planName = sub.plan_name || 'Free';
     var uplan = $('#olkil-dash-user-plan');
     if (uplan) uplan.textContent = planName;
     var plan = $('#olkil-dash-plan');
@@ -338,7 +338,7 @@
       } else if (sub.is_paid) {
         note.textContent = 'Active · included usage this period';
       } else if (sub.is_expired) {
-        note.textContent = 'Previous plan ended — you are on free Dazzlone';
+        note.textContent = 'Previous plan ended — you are on the free plan';
       } else {
         note.textContent = 'Free local models · upgrade anytime';
       }
@@ -377,7 +377,7 @@
         }
         meta.textContent = text;
       } else {
-        meta.textContent = 'Free Dazzlone plan — upgrade anytime for cloud Agent usage.';
+        meta.textContent = 'Free plan — upgrade anytime for cloud Agent usage.';
       }
     }
     paintPlanCards(sub);

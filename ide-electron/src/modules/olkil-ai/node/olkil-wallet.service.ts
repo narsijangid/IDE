@@ -35,8 +35,7 @@ export function isLocalProvider(provider: AiProviderId): boolean {
 
 /**
  * Cloud inference that spends the user's OLKIL plan credit.
- * Dazzlone (Poolside) and local Ollama are always free — even for paid users.
- * Only billed cloud models (OpenRouter / DeepSeek) debit the plan wallet.
+ * Local Ollama is always free. Only OpenRouter / DeepSeek debit the plan wallet.
  */
 export function isMeteredProvider(provider: AiProviderId, _isPaid = false): boolean {
   return provider === 'deepseek' || provider === 'openrouter';
@@ -52,6 +51,9 @@ export interface DeepseekAccess {
   limit: number;
   remaining: number;
   locked: boolean;
+  /** Paid Lite/Pro/Ultra included usage is gone. */
+  cloudLocked: boolean;
+  message: string;
 }
 
 function isPaidPlanName(plan?: string): boolean {
@@ -425,11 +427,11 @@ type QuotaDecision = {
 let quotaCache: QuotaDecision | null = null;
 
 function signInMessage(): string {
-  return 'Sign in to OLKIL to use cloud models. Dazzlone (free) and local Ollama still work.';
+  return 'Sign in to OLKIL to use cloud models. Local Ollama still works.';
 }
 
 function usedUpMessage(): string {
-  return 'Your OLKIL model credit is used up. Buy the same plan again for a fresh 30 days, or upgrade.';
+  return 'Your included cloud usage is used up. Buy Lite, Pro, or Ultra again, or upgrade.';
 }
 
 function applyCache(next: QuotaDecision): QuotaDecision {
@@ -445,15 +447,19 @@ function decisionFromSubscription(sub: {
   upgrade_url?: string;
   plan?: string;
   plan_name?: string;
+  percent_left?: number;
 } | null): QuotaDecision | null {
   if (!sub) {
     return null;
   }
   const plan = String(sub.plan || sub.plan_name || '');
-  const spendable = Number(sub.spendable_left ?? sub.tokens_left ?? 0);
-  const isPaid =
-    Boolean(sub.is_paid) || isPaidPlanName(plan) || spendable > 0 || sub.quota_reason === 'ok';
-  const allowed = sub.quota_reason === 'ok' || (isPaid && spendable > 0);
+  const spendable = Number(sub.spendable_left ?? 0);
+  const percent = Number(sub.percent_left);
+  const isPaid = Boolean(sub.is_paid) || isPaidPlanName(plan) || spendable > 0;
+  const allowed =
+    spendable > 0 &&
+    sub.quota_reason !== 'quota_exceeded' &&
+    !(Number.isFinite(percent) && percent < 0.05);
   const reason = String(sub.quota_reason || (allowed ? 'ok' : isPaid ? 'quota_exceeded' : 'plan_required'));
   return {
     at: Date.now(),
@@ -497,6 +503,10 @@ async function fetchQuotaDecision(idToken: string): Promise<QuotaDecision> {
     body,
   });
 
+  if (data && (status === 200 || status === 402 || status === 403)) {
+    return decisionFromApiBody(data);
+  }
+
   if (status === 401 || status === 403) {
     const fallback = await quotaFromEmailFallback();
     if (fallback) {
@@ -511,32 +521,34 @@ async function fetchQuotaDecision(idToken: string): Promise<QuotaDecision> {
     };
   }
 
-  if (status < 200 || status >= 300 || !data) {
-    const fallback = await quotaFromEmailFallback();
-    if (fallback) {
-      return fallback;
-    }
-    return {
-      at: Date.now(),
-      allowed: false,
-      isPaid: false,
-      message: 'Could not verify your OLKIL plan. Check the network, then retry. Dazzlone and local Ollama still work.',
-      reason: 'quota_unavailable',
-    };
+  const fallback = await quotaFromEmailFallback();
+  if (fallback) {
+    return fallback;
   }
+  return {
+    at: Date.now(),
+    allowed: false,
+    isPaid: false,
+    message: 'Could not verify your OLKIL plan. Check the network, then retry. Local Ollama still works.',
+    reason: 'quota_unavailable',
+  };
+}
 
+function decisionFromApiBody(data: Record<string, unknown>): QuotaDecision {
   const sub = (data.subscription && typeof data.subscription === 'object'
     ? (data.subscription as Record<string, unknown>)
     : data) as QuotaPayload['subscription'] & Record<string, unknown>;
-  const spendable = Number(sub?.spendable_left ?? sub?.tokens_left ?? 0);
+  const spendable = Number(sub?.spendable_left ?? 0);
+  const percent = Number(sub?.percent_left);
   const plan = String(sub?.plan || sub?.plan_name || data.plan || '');
   const allowed =
-    data.allowed === true ||
-    data.cloud_allowed === true ||
-    data.reason === 'ok' ||
-    spendable > 0;
+    spendable > 0 &&
+    data.reason !== 'quota_exceeded' &&
+    !(Number.isFinite(percent) && percent < 0.05);
   const isPaid = Boolean(sub?.is_paid) || isPaidPlanName(plan) || spendable > 0;
-  const reason = String(data.reason || (allowed ? 'ok' : 'quota_exceeded'));
+  const reason = String(
+    data.reason || (allowed ? 'ok' : isPaid ? 'quota_exceeded' : 'plan_required'),
+  );
   const fromApi = typeof data.message === 'string' ? String(data.message).trim() : '';
   return {
     at: Date.now(),
@@ -556,30 +568,36 @@ export async function getDeepseekAccess(): Promise<DeepseekAccess> {
   const email = session?.user?.email || '';
   const signedIn = Boolean(email);
 
+  const used = signedIn ? await readFreeTokens(email) : 0;
+  const remaining = Math.max(0, FREE_DEEPSEEK_TOKENS - used);
   let isPaid = false;
-  if (quotaCache && Date.now() - quotaCache.at < 30_000) {
-    isPaid = quotaCache.isPaid || isPaidPlanName(quotaCache.plan);
-  } else {
-    const fromEmail = await quotaFromEmailFallback();
-    if (fromEmail) {
-      applyCache(fromEmail);
-      isPaid = fromEmail.isPaid || isPaidPlanName(fromEmail.plan);
+  let cloudLocked = false;
+  let message = '';
+
+  const fromEmail = await quotaFromEmailFallback();
+  if (fromEmail) {
+    applyCache(fromEmail);
+    isPaid = fromEmail.isPaid || isPaidPlanName(fromEmail.plan);
+    if (!fromEmail.allowed && (isPaid || fromEmail.reason === 'quota_exceeded')) {
+      cloudLocked = true;
+      message = fromEmail.message || usedUpMessage();
     }
-    if (!isPaid) {
-      const token = await validIdToken();
-      if (token) {
-        try {
-          const decision = applyCache(await fetchQuotaDecision(token));
-          isPaid = decision.isPaid || isPaidPlanName(decision.plan);
-        } catch {
-          // keep email fallback
+  } else {
+    const token = await validIdToken();
+    if (token) {
+      try {
+        const decision = applyCache(await fetchQuotaDecision(token));
+        isPaid = decision.isPaid || isPaidPlanName(decision.plan);
+        if (!decision.allowed && (isPaid || decision.reason === 'quota_exceeded')) {
+          cloudLocked = true;
+          message = decision.message || usedUpMessage();
         }
+      } catch {
+        // keep defaults
       }
     }
   }
 
-  const used = signedIn ? await readFreeTokens(email) : 0;
-  const remaining = Math.max(0, FREE_DEEPSEEK_TOKENS - used);
   return {
     signedIn,
     isPaid,
@@ -587,6 +605,8 @@ export async function getDeepseekAccess(): Promise<DeepseekAccess> {
     limit: FREE_DEEPSEEK_TOKENS,
     remaining,
     locked: signedIn && !isPaid && used >= FREE_DEEPSEEK_TOKENS,
+    cloudLocked,
+    message,
   };
 }
 
@@ -599,59 +619,48 @@ export async function assertOlkilWallet(provider: AiProviderId): Promise<void> {
   if (!access.signedIn) {
     throw new OlkilWalletError(signInMessage(), 'auth_required');
   }
+
+  // Unpaid: local Ollama only. Auto is OpenRouter — never free.
   if (!access.isPaid) {
-    if (access.locked) {
-      throw new OlkilWalletError(freeTokensExhaustedMessage(), 'free_tokens_exhausted');
+    if (provider === 'deepseek') {
+      if (access.locked) {
+        throw new OlkilWalletError(freeTokensExhaustedMessage(), 'free_tokens_exhausted');
+      }
+      return;
     }
-    return;
+    throw new OlkilWalletError(
+      'Cloud Auto models need an OLKIL Lite, Pro, or Ultra plan with remaining credit. Local Ollama still works.',
+      'plan_required',
+    );
   }
 
-  if (quotaCache?.allowed && Date.now() - quotaCache.at < 5_000) {
-    return;
-  }
-
-  // Paid Lite/Pro/Ultra — olkil.com wallet is the source of truth.
   const fromEmail = await quotaFromEmailFallback();
-  if (fromEmail?.allowed) {
+  if (fromEmail) {
     applyCache(fromEmail);
-    return;
+    if (fromEmail.allowed) {
+      return;
+    }
+    throw new OlkilWalletError(fromEmail.message || usedUpMessage(), fromEmail.reason, fromEmail.upgradeUrl);
   }
 
   const token = await validIdToken();
-  if (token) {
-    try {
-      const decision = applyCache(await fetchQuotaDecision(token));
-      if (decision.allowed) {
-        return;
-      }
-      if (fromEmail?.allowed) {
-        applyCache(fromEmail);
-        return;
-      }
-      if (decision.reason === 'quota_exceeded' && isMeteredProvider(provider, decision.isPaid)) {
-        throw new OlkilWalletError(decision.message || usedUpMessage(), decision.reason, decision.upgradeUrl);
-      }
-      if (decision.reason === 'auth_required') {
-        throw new OlkilWalletError(signInMessage(), 'auth_required');
-      }
-      return;
-    } catch (err) {
-      if (err instanceof OlkilWalletError) {
-        throw err;
-      }
-      if (fromEmail?.allowed) {
-        applyCache(fromEmail);
-        return;
-      }
-      return;
-    }
-  }
-
-  if (!fromEmail) {
+  if (!token) {
     throw new OlkilWalletError(signInMessage(), 'auth_required');
   }
-  if (!fromEmail.allowed && isMeteredProvider(provider, fromEmail.isPaid)) {
-    throw new OlkilWalletError(fromEmail.message, fromEmail.reason, fromEmail.upgradeUrl);
+  try {
+    const decision = applyCache(await fetchQuotaDecision(token));
+    if (decision.allowed) {
+      return;
+    }
+    throw new OlkilWalletError(decision.message || usedUpMessage(), decision.reason, decision.upgradeUrl);
+  } catch (err) {
+    if (err instanceof OlkilWalletError) {
+      throw err;
+    }
+    throw new OlkilWalletError(
+      'Could not verify your OLKIL credit. Retry, or use local Ollama.',
+      'quota_unavailable',
+    );
   }
 }
 
@@ -743,10 +752,10 @@ export async function chargeOlkilWallet(opts: {
     const sub = (data.subscription && typeof data.subscription === 'object'
       ? (data.subscription as Record<string, unknown>)
       : {}) as QuotaPayload['subscription'] & Record<string, unknown>;
-    const spendable = Number(sub?.spendable_left ?? sub?.tokens_left ?? 0);
+    const spendable = Number(sub?.spendable_left ?? 0);
     quotaCache = {
       at: Date.now(),
-      allowed: data.allowed === true || data.cloud_allowed === true || data.ok === true || spendable > 0,
+      allowed: spendable > 0,
       isPaid: Boolean(sub?.is_paid ?? quotaCache?.isPaid) || spendable > 0 || isPaidPlanName(String(sub?.plan || '')),
       message: String(data.message || ''),
       reason: String(data.reason || 'ok'),

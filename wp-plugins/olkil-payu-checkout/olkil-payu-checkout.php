@@ -2,7 +2,7 @@
 /**
  * Plugin Name: OLKIL PayU Checkout
  * Description: Professional PayU checkout — Firebase-held KEY/SALT, webhook, invoices, receipts, email.
- * Version: 2.7.2
+ * Version: 2.7.3
  * Author: OLKIL
  */
 
@@ -10,7 +10,7 @@ if ( ! defined( 'ABSPATH' ) ) {
 	exit;
 }
 
-define( 'OLKIL_PAYU_CHECKOUT_VERSION', '2.7.2' );
+define( 'OLKIL_PAYU_CHECKOUT_VERSION', '2.7.3' );
 define( 'OLKIL_PAYU_CHECKOUT_DIR', plugin_dir_path( __FILE__ ) );
 define( 'OLKIL_PAYU_CHECKOUT_URL', plugin_dir_url( __FILE__ ) );
 
@@ -1408,7 +1408,7 @@ function olkil_payu_dashboard_html() {
 				<div class="olkil-app__user-avatar" aria-hidden="true"></div>
 				<div class="olkil-app__user-info">
 					<strong id="olkil-dash-user-name">Account</strong>
-					<span id="olkil-dash-user-plan">Dazzlone</span>
+					<span id="olkil-dash-user-plan">Free</span>
 				</div>
 			</div>
 		</aside>
@@ -1444,7 +1444,7 @@ function olkil_payu_dashboard_html() {
 							<div class="olkil-app__metrics">
 								<div class="olkil-app__metric">
 									<span class="olkil-app__metric-label"><?php esc_html_e( 'Current plan', 'olkil' ); ?></span>
-									<span class="olkil-app__metric-value" id="olkil-dash-plan">Dazzlone</span>
+									<span class="olkil-app__metric-value" id="olkil-dash-plan">Free</span>
 									<span class="olkil-app__metric-hint" id="olkil-dash-plan-note"><?php esc_html_e( 'Free local models', 'olkil' ); ?></span>
 								</div>
 								<div class="olkil-app__metric">

@@ -195,6 +195,7 @@ export class OlkilChatService extends Disposable implements IOlkilChatService {
   chatMode: ChatMode = DEFAULT_CHAT_MODE;
   /** Free-plan DeepSeek 50k token cap used up. */
   deepseekLocked = false;
+  cloudQuotaMessage = '';
   chatHistory: ChatHistorySummary[] = [];
   private sessionId = nextSessionId();
   private sessionCreatedAt = Date.now();
@@ -771,8 +772,10 @@ export class OlkilChatService extends Disposable implements IOlkilChatService {
   private async refreshDeepseekAccess() {
     try {
       const access = await this.aiNode.getDeepseekAccess();
-      this.deepseekLocked = Boolean(access.locked);
-      if (this.deepseekLocked && !this.busy && isMeteredCloudProvider(findModel(this.modelId).provider)) {
+      const cloudLocked = Boolean(access.cloudLocked);
+      this.deepseekLocked = Boolean(access.locked) || cloudLocked;
+      this.cloudQuotaMessage = String(access.message || '').trim();
+      if (access.locked && !cloudLocked && !this.busy && isMeteredCloudProvider(findModel(this.modelId).provider)) {
         const next =
           this.models.find((m) => m.provider === 'ollama' && !isRetiredOlkilModel(m))?.id ||
           this.models.find((m) => !isMeteredCloudProvider(m.provider) && !isRetiredOlkilModel(m))?.id;
@@ -1164,7 +1167,8 @@ export class OlkilChatService extends Disposable implements IOlkilChatService {
       if (this.deepseekLocked) {
         this.pushUi(
           'status',
-          'Your 50,000 free cloud tokens are used up. Upgrade your plan to keep using Auto.',
+          this.cloudQuotaMessage ||
+            'Your included cloud usage is used up. Buy Lite, Pro, or Ultra again to keep using Auto.',
         );
         return;
       }
@@ -2873,6 +2877,24 @@ Read the highest-scoring evidence in trail order. For a bug, trace UI → handle
       }
     };
 
+    const throwIfRunFailed = (err?: string, text?: string) => {
+      if (!err) {
+        return;
+      }
+      if (
+        /exceeded maxIterations/i.test(err) &&
+        (this.pendingChanges.length > 0)
+      ) {
+        return;
+      }
+      if (
+        !text ||
+        /quota|used up|included cloud|plan_required|Cloud Auto|credit is used/i.test(err)
+      ) {
+        throw new Error(err);
+      }
+    };
+
     let lastPollStatus = '';
     try {
       while (!this.cancelRequested) {
@@ -2890,6 +2912,7 @@ Read the highest-scoring evidence in trail order. For a bug, trace UI → handle
             }
             throw new Error(st.error);
           }
+          throwIfRunFailed(st.error, st.text);
           return (st.text || lastText || '').trim();
         }
         const pollMs = st.status && st.status === lastPollStatus ? 280 : 160;
@@ -2909,6 +2932,7 @@ Read the highest-scoring evidence in trail order. For a bug, trace UI → handle
             }
             throw new Error(raced.r!.error);
           }
+          throwIfRunFailed(raced.r!.error, raced.r!.text);
           return (raced.r!.text || lastText || '').trim();
         }
       }

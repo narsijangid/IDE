@@ -1,35 +1,13 @@
 /**
- * Cursor-style Auto router: score the turn, then pick a strong model
- * that still stays cheap when the work is simple.
+ * Auto picker: always DeepSeek V4 Flash on OpenRouter (cheap, low tokens).
+ * Pinned models in the catalog still pass through unchanged.
  */
 export type AutoOptimizeFor = 'cost' | 'balanced' | 'intelligence';
 
 export const AUTO_MODEL_ID = 'openrouter:auto';
 
-/** Price-efficient coding models (OpenRouter slugs). */
-const COST_POOL = [
-  'openai/gpt-5.6-luna',
-  'google/gemini-3.8-flash',
-  'deepseek/deepseek-v4-flash',
-  'google/gemini-3.5-flash',
-] as const;
-
-/** Daily-driver quality. */
-const BALANCE_POOL = [
-  'anthropic/claude-sonnet-5',
-  'openai/gpt-5.6-sol',
-  'x-ai/grok-4.6',
-  'google/gemini-3.5-flash',
-  'moonshotai/kimi-k2.7-code',
-] as const;
-
-/** Frontier when the turn is hard. */
-const INTEL_POOL = [
-  'anthropic/claude-opus-5',
-  'openai/gpt-5.6-sol',
-  'x-ai/grok-4.6',
-  'anthropic/claude-sonnet-5',
-] as const;
+/** Background model for Auto — not shown as the picker label. */
+export const AUTO_ROUTED_SLUG = 'deepseek/deepseek-v4-flash';
 
 const HARD_RE =
   /\b(architect|refactor|migrate|rewrite|redesign|multi-?file|race condition|deadlock|security|auth|oauth|jwt|schema|database|performance|optimiz|concurren|distribut|algorithm|type.?error|webpack|vite|electron|opencode)\b/i;
@@ -74,8 +52,7 @@ export function scoreTurnComplexity(text: string, messageCount: number): number 
 }
 
 /**
- * Resolve Auto → a concrete OpenRouter catalog id.
- * Pinned models pass through unchanged.
+ * Resolve Auto → DeepSeek V4 Flash. Any other catalog id is left as-is.
  */
 export function routeOpenRouterModel(input: {
   modelId?: string;
@@ -87,40 +64,7 @@ export function routeOpenRouterModel(input: {
   if (!isAutoModelId(requested)) {
     return requested;
   }
-  const mode = input.optimizeFor || 'balanced';
-  const score = scoreTurnComplexity(input.userText || '', input.messageCount || 1);
-  const slug = pickSlug(mode, score, input.userText || '');
-  return `openrouter:${slug}`;
-}
-
-function pickSlug(mode: AutoOptimizeFor, score: number, text: string): string {
-  const ui = /\b(css|layout|ui|ux|button|modal|style|tailwind|less|scss|frontend|react|tsx)\b/i.test(text);
-  if (mode === 'cost') {
-    if (score >= 0.72) {
-      return BALANCE_POOL[0];
-    }
-    if (ui) {
-      return 'google/gemini-3.8-flash';
-    }
-    return COST_POOL[Math.min(COST_POOL.length - 1, score > 0.4 ? 1 : 0)];
-  }
-  if (mode === 'intelligence') {
-    if (score < 0.28) {
-      return BALANCE_POOL[0];
-    }
-    if (score < 0.55) {
-      return INTEL_POOL[1];
-    }
-    return INTEL_POOL[0];
-  }
-  // Balance — Cursor default: cheap when simple, Sonnet-class when not.
-  if (score < 0.34) {
-    return ui ? 'google/gemini-3.8-flash' : COST_POOL[0];
-  }
-  if (score < 0.68) {
-    return ui ? BALANCE_POOL[3] : BALANCE_POOL[0];
-  }
-  return INTEL_POOL[0];
+  return `openrouter:${AUTO_ROUTED_SLUG}`;
 }
 
 function contentToText(content: unknown): string {
