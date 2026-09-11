@@ -100,7 +100,7 @@ function olkil_payu_receipt_html( array $inv ) {
 	$b    = olkil_payu_biz_invoice();
 	$name = (string) ( $inv['firstname'] ?? 'there' );
 	$body = '<p style="margin:0 0 16px;font-size:15px">Hi ' . esc_html( $name ) . ',</p>
-<p style="margin:0 0 16px;font-size:14px;line-height:1.55">We received your payment for <strong>' . esc_html( (string) ( $inv['plan_name'] ?? 'OLKIL' ) ) . '</strong>. Your plan is active and tokens are ready to use.</p>
+<p style="margin:0 0 16px;font-size:14px;line-height:1.55">We received your payment for <strong>' . esc_html( (string) ( $inv['plan_name'] ?? 'OLKIL' ) ) . '</strong>. Your plan is active and model credit is ready to use.</p>
 <table style="width:100%;border-collapse:collapse;font-size:13px;background:#fafafa;border-radius:12px">
 <tr><td style="padding:10px 14px;color:#71717a">Amount paid</td><td style="padding:10px 14px;text-align:right"><strong>' . esc_html( olkil_payu_inr( $inv['amount'] ?? 0 ) ) . '</strong></td></tr>
 <tr><td style="padding:10px 14px;color:#71717a">Receipt no.</td><td style="padding:10px 14px;text-align:right">' . esc_html( (string) ( $inv['receipt_no'] ?? '' ) ) . '</td></tr>
@@ -160,7 +160,7 @@ function olkil_payu_invoice_screen_html( array $inv, $with_receipt = true ) {
 		. '<header class="olkil-inv-head"><span class="olkil-inv-brand">OLKIL</span><h1>Payment receipt</h1><p>Thank you for your purchase</p></header>'
 		. '<div class="olkil-inv-body">'
 		. '<p>Hi ' . esc_html( $name ) . ',</p>'
-		. '<p>We received your payment for <strong>' . esc_html( (string) ( $inv['plan_name'] ?? 'OLKIL' ) ) . '</strong>. Your plan is active and tokens are ready to use.</p>'
+		. '<p>We received your payment for <strong>' . esc_html( (string) ( $inv['plan_name'] ?? 'OLKIL' ) ) . '</strong>. Your plan is active and model credit is ready to use.</p>'
 		. '<table class="olkil-inv-lines olkil-inv-lines--compact"><tbody>'
 		. '<tr><td>Amount paid</td><td><strong>' . esc_html( olkil_payu_inr( $inv['amount'] ?? 0 ) ) . '</strong></td></tr>'
 		. '<tr><td>Receipt no.</td><td>' . esc_html( (string) ( $inv['receipt_no'] ?? '' ) ) . '</td></tr>'

@@ -2,7 +2,7 @@
 /**
  * Plugin Name: OLKIL SEO Brand
  * Description: Advanced OLKIL SEO + syncs Dazzlone pricing UI into the OLKIL theme.
- * Version: 1.5.9
+ * Version: 1.7.1
  * Author: OLKIL
  */
 
@@ -11,7 +11,7 @@ if ( ! defined( 'ABSPATH' ) ) {
 }
 
 define( 'OLKIL_SEO_BRAND_NAME', 'OLKIL' );
-define( 'OLKIL_SEO_BRAND_VERSION', '1.5.9' );
+define( 'OLKIL_SEO_BRAND_VERSION', '1.7.1' );
 define( 'OLKIL_SEO_BRAND_DIR', plugin_dir_path( __FILE__ ) );
 define( 'OLKIL_SEO_BRAND_URL', plugin_dir_url( __FILE__ ) );
 
@@ -32,6 +32,22 @@ function olkil_seo_brand_sync_theme_files() {
 		'theme-overrides/template-parts/olkil/sections/hero.php'    => 'template-parts/olkil/sections/hero.php',
 		'theme-overrides/template-parts/olkil/sections/partners.php' => 'template-parts/olkil/sections/partners.php',
 		'theme-overrides/template-parts/olkil/sections/demo.php'    => 'template-parts/olkil/sections/demo.php',
+		'theme-overrides/assets/olkil/img/ai-logos/google.svg'      => 'assets/olkil/img/ai-logos/google.svg',
+		'theme-overrides/assets/olkil/img/ai-logos/openai.svg'      => 'assets/olkil/img/ai-logos/openai.svg',
+		'theme-overrides/assets/olkil/img/ai-logos/anthropic.svg'   => 'assets/olkil/img/ai-logos/anthropic.svg',
+		'theme-overrides/assets/olkil/img/ai-logos/xai.svg'         => 'assets/olkil/img/ai-logos/xai.svg',
+		'theme-overrides/assets/olkil/img/ai-logos/deepseek.svg'    => 'assets/olkil/img/ai-logos/deepseek.svg',
+		'theme-overrides/assets/olkil/img/ai-logos/meta.svg'        => 'assets/olkil/img/ai-logos/meta.svg',
+		'theme-overrides/assets/olkil/img/ai-logos/mistral.svg'     => 'assets/olkil/img/ai-logos/mistral.svg',
+		'theme-overrides/assets/olkil/img/ai-logos/alibaba.svg'     => 'assets/olkil/img/ai-logos/alibaba.svg',
+		'theme-overrides/assets/olkil/img/ai-logos/qwen.svg'        => 'assets/olkil/img/ai-logos/qwen.svg',
+		'theme-overrides/assets/olkil/img/ai-logos/poolside.svg'    => 'assets/olkil/img/ai-logos/poolside.svg',
+		'theme-overrides/assets/olkil/img/ai-logos/nvidia.svg'      => 'assets/olkil/img/ai-logos/nvidia.svg',
+		'theme-overrides/assets/olkil/img/ai-logos/microsoft.svg'   => 'assets/olkil/img/ai-logos/microsoft.svg',
+		'theme-overrides/assets/olkil/img/ai-logos/cohere.svg'      => 'assets/olkil/img/ai-logos/cohere.svg',
+		'theme-overrides/assets/olkil/img/ai-logos/perplexity.svg'  => 'assets/olkil/img/ai-logos/perplexity.svg',
+		'theme-overrides/assets/olkil/img/ai-logos/huggingface.svg' => 'assets/olkil/img/ai-logos/huggingface.svg',
+		'theme-overrides/assets/olkil/img/ai-logos/groq.svg'        => 'assets/olkil/img/ai-logos/groq.svg',
 		'theme-overrides/front-page.php'                            => 'front-page.php',
 		'theme-overrides/page.php'                                  => 'page.php',
 		'theme-overrides/home.php'                                  => 'home.php',
@@ -117,34 +133,31 @@ function olkil_seo_brand_plans() {
 			'price'    => '0',
 			'blurb'    => 'Start shipping with local AI.',
 			'tokens'   => '',
-			'features' => array( 'Free Local Models', 'Unlimited Browser Testing', 'Basic Autocomplete', 'Basic AI Chat', 'Basic Code Assistance' ),
+			'features' => array( 'Local models on your machine', 'Unlimited browser testing', 'Basic autocomplete', 'Basic AI chat', 'Basic code assistance' ),
 		),
 		array(
 			'slug'     => 'lite',
 			'name'     => 'Lite',
 			'price'    => '3',
 			'blurb'    => 'Everyday AI coding, unlocked.',
-			'tokens'   => '100M',
-			'requests' => '~3,500',
-			'features' => array( '100M tokens / mo', '~3,500 approx requests', 'Unlimited Autocomplete', 'Unlimited Browser Testing', 'AI Coding Agent', 'Project Context' ),
+			'tokens'   => '',
+			'features' => array( 'Cloud coding agent', 'Access to frontier models', 'Unlimited autocomplete', 'Project context', 'MCPs, skills, and hooks' ),
 		),
 		array(
 			'slug'     => 'pro',
 			'name'     => 'Pro',
 			'price'    => '10',
 			'blurb'    => 'Full project power for builders.',
-			'tokens'   => '350M',
-			'requests' => '~12,180',
-			'features' => array( '350M tokens / mo', '~12,180 approx requests', 'Unlimited Autocomplete', 'Unlimited Browser Testing', 'AI Coding Agent', 'Full Project Context' ),
+			'tokens'   => '',
+			'features' => array( 'Everything in Lite', 'Extended limits on Agent', 'Full project context', 'Longer cloud sessions', 'Priority on cloud models' ),
 		),
 		array(
 			'slug'     => 'ultra',
 			'name'     => 'Ultra',
 			'price'    => '49',
-			'blurb'    => 'Unlimited ceiling. Parallel agents.',
-			'tokens'   => '2B',
-			'requests' => '~68,460',
-			'features' => array( '2B tokens / mo', '~68,460 approx requests', 'Unlimited Autocomplete', 'Unlimited Browser Testing', 'Unlimited Agent Usage', 'Maximum Context', 'Parallel Agents', 'Priority Compute' ),
+			'blurb'    => 'Ship faster with parallel agents.',
+			'tokens'   => '',
+			'features' => array( 'Everything in Pro', 'Highest included Agent usage', 'Parallel agents', 'Maximum context', 'Priority compute' ),
 		),
 	);
 }
@@ -158,7 +171,7 @@ function olkil_seo_brand_activate() {
 	$opt['knowledgegraph_name'] = OLKIL_SEO_BRAND_NAME;
 	update_option( 'rank-math-options-titles', $opt, false );
 	update_option( 'blogname', OLKIL_SEO_BRAND_NAME );
-	update_option( 'blogdescription', 'Free AI code editor & IDE — Dazzlone free, Lite 100M, Pro 350M, Ultra 2B tokens' );
+	update_option( 'blogdescription', 'Free AI code editor & IDE — Dazzlone free, Lite $3, Pro $10, Ultra $49' );
 	delete_option( 'olkil_seo_brand_theme_sync_v130' );
 	olkil_seo_brand_sync_theme_files();
 }
@@ -212,7 +225,7 @@ function olkil_seo_brand_favicon_head() {
 add_action( 'wp_head', 'olkil_seo_brand_favicon_head', 2 );
 
 function olkil_seo_brand_head() {
-	$desc = 'OLKIL is a free AI code editor and AI IDE with multi-model AI, agents, autocomplete, unlimited browser testing, and chat. Plans (USD): Dazzlone free, Lite $3 (100M tokens), Pro $10 (350M), Ultra $49 (2B). Windows, macOS, and Linux.';
+	$desc = 'OLKIL is a free AI code editor and AI IDE with multi-model AI, agents, autocomplete, unlimited browser testing, and chat. Plans (USD): Dazzlone free, Lite $3, Pro $10, Ultra $49. Windows, macOS, and Linux.';
 	$url  = is_singular() ? get_permalink() : home_url( '/' );
 	$logo = olkil_seo_brand_asset( 'favicon-512.png' );
 
@@ -223,7 +236,7 @@ function olkil_seo_brand_head() {
 
 	$offers = array();
 	foreach ( olkil_seo_brand_plans() as $plan ) {
-		$token_bit = ! empty( $plan['tokens'] ) ? ( $plan['tokens'] . ' tokens/mo, ' . ( $plan['requests'] ?? '' ) . ' requests. ' ) : '';
+		$token_bit = '';
 		$offers[]  = array(
 			'@type'         => 'Offer',
 			'name'          => 'OLKIL ' . $plan['name'],
@@ -314,10 +327,10 @@ function olkil_seo_brand_head() {
 				),
 				array(
 					'@type'          => 'Question',
-					'name'           => 'How many tokens do OLKIL plans include?',
+					'name'           => 'What do OLKIL paid plans include?',
 					'acceptedAnswer' => array(
 						'@type' => 'Answer',
-						'text'  => 'Lite ($3) includes 100M tokens (~3,500 requests). Pro ($10) includes 350M tokens (~12,180). Ultra ($49) includes 2B tokens (~68,460). All plans include Unlimited Browser Testing. Prices in USD.',
+						'text'  => 'Lite ($3) adds a cloud coding agent, frontier models, unlimited autocomplete, and project context. Pro ($10) extends agent limits and full project context. Ultra ($49) adds parallel agents, maximum context, and priority compute. All plans include unlimited browser testing. Prices in USD.',
 					),
 				),
 				array(
@@ -325,7 +338,7 @@ function olkil_seo_brand_head() {
 					'name'           => 'What is the difference between Pro and Ultra?',
 					'acceptedAnswer' => array(
 						'@type' => 'Answer',
-						'text'  => 'Pro ($10 · 350M tokens) includes unlimited autocomplete, unlimited browser testing, AI coding agent, and full project context. Ultra ($49 · 2B tokens) adds unlimited agent usage, maximum context, parallel agents, and priority compute.',
+						'text'  => 'Pro ($10) includes everything in Lite plus extended agent limits, full project context, and longer cloud sessions. Ultra ($49) adds parallel agents, maximum context, and priority compute.',
 					),
 				),
 				array(

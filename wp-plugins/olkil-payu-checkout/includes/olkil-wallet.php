@@ -154,9 +154,9 @@ function olkil_payu_quota_message( $reason, array $sub ) {
 	}
 	if ( 'quota_exceeded' === $reason ) {
 		$again = (string) ( $sub['plan_name'] ?? 'Lite' );
-		$msg   = 'You have used all ' . ( $sub['tokens_total_label'] ?? '' ) . ' tokens on ' . $plan . ' this period. Buy ' . $again . ' again for a fresh allowance and a new 30-day window from today.';
+		$msg   = 'You have used all included usage on ' . $plan . ' this period. Buy ' . $again . ' again for a fresh 30-day window from today.';
 		if ( $next_slug ) {
-			$msg .= ' Or upgrade to ' . $next . ' for a larger quota.';
+			$msg .= ' Or upgrade to ' . $next . ' for more credit.';
 		}
 		return $msg;
 	}
@@ -237,30 +237,20 @@ function olkil_payu_check_quota( $email ) {
 }
 
 /**
- * Charge OLKIL tokens to one user account only.
+ * Charge model credit (USD micros) to one user account only.
  *
  * @param string              $email Email.
- * @param int                 $tokens Combined input+output OLKIL tokens.
- * @param array<string,mixed> $meta  request_id, model, provider, input_tokens, output_tokens.
+ * @param int                 $tokens Combined input+output tokens (hint only if cost missing).
+ * @param array<string,mixed> $meta  request_id, model, provider, cost_usd, input/output tokens.
  * @return array<string,mixed>
  */
 function olkil_payu_charge_user_tokens( $email, $tokens, array $meta = array() ) {
-	$tokens      = (int) $tokens;
 	$request_id  = sanitize_text_field( (string) ( $meta['request_id'] ?? '' ) );
 	$model       = sanitize_text_field( (string) ( $meta['model'] ?? '' ) );
 	$provider    = sanitize_key( (string) ( $meta['provider'] ?? '' ) );
 	$input_tok   = max( 0, (int) ( $meta['input_tokens'] ?? 0 ) );
 	$output_tok  = max( 0, (int) ( $meta['output_tokens'] ?? 0 ) );
-
-	if ( $tokens < 1 && ( $input_tok + $output_tok ) > 0 ) {
-		$tokens = $input_tok + $output_tok;
-	}
-	if ( $tokens < 0 ) {
-		$tokens = 0;
-	}
-	if ( $tokens > 50000000 ) {
-		$tokens = 50000000;
-	}
+	$tokens      = olkil_payu_usage_to_credit_units( $meta, (int) $tokens );
 
 	$lock = olkil_payu_usage_lock( $email );
 	$out  = null;
@@ -351,6 +341,7 @@ function olkil_payu_charge_user_tokens( $email, $tokens, array $meta = array() )
 			$log[] = array(
 				'at'            => gmdate( 'c' ),
 				'tokens'        => $tokens,
+				'cost_usd'      => $tokens / olkil_payu_usd_micros(),
 				'input_tokens'  => $input_tok,
 				'output_tokens' => $output_tok,
 				'cache_hit'     => max( 0, (int) ( $meta['prompt_cache_hit_tokens'] ?? 0 ) ),
@@ -416,6 +407,7 @@ function olkil_payu_rest_usage( WP_REST_Request $request ) {
 	$cache_hit   = (int) olkil_payu_request_value( $request, 'prompt_cache_hit_tokens', 0 );
 	$cache_miss  = (int) olkil_payu_request_value( $request, 'prompt_cache_miss_tokens', 0 );
 	$reasoning   = (int) olkil_payu_request_value( $request, 'reasoning_tokens', 0 );
+	$cost_usd    = (float) olkil_payu_request_value( $request, 'cost_usd', 0 );
 
 	if ( $tokens < 1 ) {
 		$tokens = $input_tok + $output_tok;
@@ -428,6 +420,7 @@ function olkil_payu_rest_usage( WP_REST_Request $request ) {
 			'model'                     => (string) olkil_payu_request_value( $request, 'model' ),
 			'provider'                  => (string) olkil_payu_request_value( $request, 'provider' ),
 			'request_id'                => (string) olkil_payu_request_value( $request, 'request_id' ),
+			'cost_usd'                  => $cost_usd,
 			'input_tokens'              => $input_tok,
 			'output_tokens'             => $output_tok,
 			'prompt_cache_hit_tokens'   => $cache_hit,

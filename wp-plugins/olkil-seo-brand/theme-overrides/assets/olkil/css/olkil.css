@@ -1260,6 +1260,13 @@ html[data-olkil-theme="light"] .olkil-hero-agent__video {
 	min-height: 2.6em;
 }
 
+.olkil-price-card__includes {
+	margin: 0 0 0.2rem;
+	font-size: 0.84rem;
+	font-weight: 650;
+	color: var(--olkil-white);
+}
+
 .olkil-price-card__features {
 	list-style: none;
 	margin: 0 0 1.25rem;

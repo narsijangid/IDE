@@ -1,7 +1,6 @@
 import type { AiModelOption, AiProviderId, CustomModelEndpoint } from '../../common/models';
-import { AI_MODELS, customEndpointFor, opencodeCustomProviderId, openRouterExtraModels } from '../../common/models';
+import { AI_MODELS, customEndpointFor, isRetiredOlkilModel, opencodeCustomProviderId, openRouterExtraModels } from '../../common/models';
 
-const POOLSIDE_URL = 'https://inference.poolside.ai/v1';
 const DEFAULT_DEEPSEEK_BASE = 'https://api.deepseek.com';
 const DEFAULT_OLLAMA_BASE = 'http://127.0.0.1:11434';
 const DEFAULT_OPENROUTER_BASE = 'https://openrouter.ai/api/v1';
@@ -16,9 +15,6 @@ export interface OpencodeProviderSecrets {
 }
 
 export function opencodeModelRef(option: AiModelOption): { providerID: string; modelID: string } {
-  if (option.provider === 'poolside') {
-    return { providerID: 'poolside', modelID: option.model };
-  }
   if (option.provider === 'ollama') {
     return { providerID: 'ollama', modelID: option.model };
   }
@@ -36,7 +32,7 @@ function modelsFor(provider: AiProviderId): Record<string, unknown> {
   const extras = provider === 'openrouter' ? openRouterExtraModels() : [];
   const list = provider === 'openrouter' ? [...AI_MODELS, ...extras] : AI_MODELS;
   for (const model of list) {
-    if (model.provider !== provider) {
+    if (model.provider !== provider || isRetiredOlkilModel(model)) {
       continue;
     }
     if (provider === 'openrouter' && (model.model === 'auto' || model.id.endsWith(':auto'))) {
@@ -112,7 +108,7 @@ export function buildOpencodeConfigContent(
   const ollamaBase = withV1(secrets.ollamaBase || DEFAULT_OLLAMA_BASE);
   const openrouterBase = withV1(secrets.openrouterBase || DEFAULT_OPENROUTER_BASE);
   const customProviders = customProviderBlock(extras?.customModels);
-  const enabled = ['openrouter', 'deepseek', 'poolside', 'ollama', ...Object.keys(customProviders)];
+  const enabled = ['openrouter', 'deepseek', 'ollama', ...Object.keys(customProviders)];
   const config: Record<string, unknown> = {
     $schema: 'https://opencode.ai/config.json',
     username: 'OLKIL',
@@ -155,16 +151,6 @@ export function buildOpencodeConfigContent(
           timeout: 300000,
         },
         models: modelsFor('deepseek'),
-      },
-      poolside: {
-        npm: '@ai-sdk/openai-compatible',
-        name: 'Dazzlone',
-        options: {
-          baseURL: POOLSIDE_URL,
-          apiKey: secrets.poolsideKey,
-          timeout: 300000,
-        },
-        models: modelsFor('poolside'),
       },
       ollama: {
         npm: '@ai-sdk/openai-compatible',

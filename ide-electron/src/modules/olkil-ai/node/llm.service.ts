@@ -23,7 +23,7 @@ import {
   RepositorySymbolResult,
   DiscoveredMcpServer,
 } from '../common';
-import { AI_MODELS, DEFAULT_MODEL_ID, findModel, applyCustomModelEndpoints, customEndpointFor, normalizeOpenAiBaseUrl, AiProviderId, openRouterExtraModels } from '../common/models';
+import { AI_MODELS, DEFAULT_MODEL_ID, findModel, applyCustomModelEndpoints, customEndpointFor, normalizeOpenAiBaseUrl, AiProviderId, openRouterExtraModels, isRetiredOlkilModel } from '../common/models';
 import { lastUserText, routeOpenRouterModel } from '../common/auto-router';
 import { AGENT_TOOLS, selectAgentTools, stripLocalThinkTags } from '../common/tools';
 import { getSharedRepositoryIndex } from './repository-index.service';
@@ -1000,7 +1000,7 @@ export class OlkilAiNodeService implements IOlkilAiNodeService {
     const seen = new Set<string>();
     const out = [];
     for (const m of [...AI_MODELS, ...extras]) {
-      if (seen.has(m.id)) {
+      if (seen.has(m.id) || isRetiredOlkilModel(m)) {
         continue;
       }
       seen.add(m.id);

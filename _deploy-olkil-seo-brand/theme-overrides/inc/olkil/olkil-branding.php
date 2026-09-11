@@ -10,7 +10,7 @@ if ( ! defined( 'ABSPATH' ) ) {
 	exit;
 }
 
-define( 'OLKIL_VERSION', '1.5.9' );
+define( 'OLKIL_VERSION', '1.6.2' );
 /** Desktop installer version (matches ide-electron/product.json). */
 define( 'OLKIL_APP_VERSION', '1.3.26' );
 define( 'OLKIL_DIR', trailingslashit( get_template_directory() ) );
@@ -215,7 +215,7 @@ function olkil_product_catalog() {
 			),
 			'steps'    => array(
 				array( __( 'Download', 'olkil' ), __( 'Install the build for your OS. No account required to open the app.', 'olkil' ) ),
-				array( __( 'Sign in', 'olkil' ), __( 'Continue with Google. Dazzlone is free; Lite, Pro, and Ultra unlock cloud tokens.', 'olkil' ) ),
+				array( __( 'Sign in', 'olkil' ), __( 'Continue with Google. Dazzlone is free; Lite, Pro, and Ultra unlock the cloud agent.', 'olkil' ) ),
 				array( __( 'Ship', 'olkil' ), __( 'Open a folder, pick a model, and let the agent work beside you.', 'olkil' ) ),
 			),
 		),
@@ -304,7 +304,7 @@ function olkil_product_catalog() {
 		'cloud'        => array(
 			'eyebrow'  => __( 'Product · Cloud', 'olkil' ),
 			'title'    => __( 'Cloud models. One quota. Desktop and CLI.', 'olkil' ),
-			'lead'     => __( 'Lite, Pro, and Ultra add cloud tokens on top of the free local Dazzlone plan. Sign in once — the same wallet follows you from the IDE to the terminal.', 'olkil' ),
+			'lead'     => __( 'Lite, Pro, and Ultra add the cloud agent on top of the free local Dazzlone plan. Sign in once — the same account follows you from the IDE to the terminal.', 'olkil' ),
 			'cta'      => array(
 				'label' => __( 'Compare plans', 'olkil' ),
 				'url'   => $pricing,
@@ -317,7 +317,7 @@ function olkil_product_catalog() {
 				array(
 					'icon'  => '◈',
 					'title' => __( 'Shared quota', 'olkil' ),
-					'desc'  => __( 'Tokens are on your OLKIL account. Use them in the desktop agent or run olkil in a project folder.', 'olkil' ),
+					'desc'  => __( 'Model credit is on your OLKIL account. Use it in the desktop agent or run olkil in a project folder.', 'olkil' ),
 				),
 				array(
 					'icon'  => '✦',
@@ -337,7 +337,7 @@ function olkil_product_catalog() {
 			),
 			'steps'    => array(
 				array( __( 'Start free', 'olkil' ), __( 'Download OLKIL and sign in. Dazzlone is enough to learn the workflow.', 'olkil' ) ),
-				array( __( 'Upgrade when you need tokens', 'olkil' ), __( 'Pick Lite, Pro, or Ultra from Pricing. Checkout is in USD.', 'olkil' ) ),
+				array( __( 'Upgrade when you need cloud models', 'olkil' ), __( 'Pick Lite, Pro, or Ultra from Pricing. Checkout is in USD.', 'olkil' ) ),
 				array( __( 'Use it anywhere', 'olkil' ), __( 'The same Google account powers the IDE and the CLI.', 'olkil' ) ),
 			),
 		),

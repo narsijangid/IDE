@@ -20,7 +20,7 @@ import {
 } from '../common/virtual-office';
 import { MarkdownMessage } from './markdown';
 import { LiveStatusBar, shouldShowLiveStatusBar, useLiveStatusLabel, useWorkspaceRoot } from './live-status-rotator';
-import { CheckIcon, CopyIcon, RefreshIcon, SendIcon, StopIcon } from './icons';
+import { CheckIcon, CopyIcon, SendIcon, StopIcon } from './icons';
 import styles from './chat.view.module.less';
 import logoUrl from './olkil-logo.png';
 import { OLKIL_AUTH_OPEN_ACCOUNT, rememberOlkilSettingsSection } from '../../olkil-auth/browser/commands';
@@ -64,6 +64,29 @@ async function copyText(text: string) {
   } catch {
     // ignore
   }
+}
+
+function CopyMessageButton({ text }: { text: string }) {
+  const [copied, setCopied] = useState(false);
+  const onCopy = async () => {
+    try {
+      await navigator.clipboard.writeText(text);
+      setCopied(true);
+      window.setTimeout(() => setCopied(false), 1600);
+    } catch {
+      // ignore
+    }
+  };
+  return (
+    <button
+      type="button"
+      className={`${styles.msgActionBtn} ${copied ? styles.msgActionBtnCopied : ''}`}
+      title={copied ? 'Copied' : 'Copy'}
+      onClick={() => void onCopy()}
+    >
+      {copied ? <span className={styles.copiedLabel}>Copied</span> : <CopyIcon size={12} />}
+    </button>
+  );
 }
 
 type ChatRow =
@@ -926,15 +949,6 @@ export const OlkilAiChatView = ({ dormant = false }: OlkilAiChatViewProps) => {
   // While busy: Enter queues; Stop button stays primary
   const canSend = canCompose && (!busy || true);
   const sendMode = busy ? 'stop' : turnDone && !canCompose ? 'done' : 'send';
-  const lastAssistantId = useMemo(() => {
-    for (let i = messages.length - 1; i >= 0; i--) {
-      if (messages[i].role === 'assistant' && !messages[i].pending && messages[i].content) {
-        return messages[i].id;
-      }
-    }
-    return null;
-  }, [messages]);
-
   const workspaceRoot = useWorkspaceRoot();
   const liveActivityLabel = useMemo(() => {
     const live = [...messages]
@@ -1439,56 +1453,9 @@ export const OlkilAiChatView = ({ dormant = false }: OlkilAiChatViewProps) => {
                     ))}
                   </div>
                 ) : null}
-                {m.suggestions?.length ? (
-                  <div className={styles.suggestRow}>
-                    {m.suggestions.map((s) => (
-                      <button
-                        key={s}
-                        type="button"
-                        className={styles.suggestChip}
-                        disabled={busy}
-                        onClick={() => void chat.send(s)}
-                      >
-                        {s}
-                      </button>
-                    ))}
-                  </div>
-                ) : null}
                 {showActions ? (
                   <div className={styles.msgActions}>
-                    <button
-                      type="button"
-                      className={styles.msgActionBtn}
-                      title="Copy"
-                      onClick={() => void copyText(m.content || '')}
-                    >
-                      <CopyIcon size={12} />
-                    </button>
-                    {!isUser && m.id === lastAssistantId && !busy ? (
-                      <button
-                        type="button"
-                        className={styles.msgActionBtn}
-                        title="Regenerate"
-                        onClick={() => void chat.regenerate()}
-                      >
-                        <RefreshIcon size={12} />
-                      </button>
-                    ) : null}
-                    {isUser && !busy ? (
-                      <button
-                        type="button"
-                        className={styles.msgActionBtn}
-                        title="Edit & resend"
-                        onClick={() => {
-                          const next = window.prompt('Edit message', m.content || '');
-                          if (next != null && next.trim()) {
-                            void chat.editAndResend(m.id, next.trim());
-                          }
-                        }}
-                      >
-                        ✎
-                      </button>
-                    ) : null}
+                    <CopyMessageButton text={m.content || ''} />
                   </div>
                 ) : null}
               </div>

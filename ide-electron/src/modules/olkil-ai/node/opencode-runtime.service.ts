@@ -1015,7 +1015,7 @@ export class OlkilOpencodeRuntimeHost {
     runId: string,
     billed?: OlkilApiUsage | null,
   ): Promise<void> {
-    if (!billed || billed.totalTokens < 1) {
+    if (!billed || (billed.totalTokens < 1 && !(billed.costUsd && billed.costUsd > 0))) {
       if (provider === 'deepseek' || provider === 'openrouter') {
         console.warn('[olkil-wallet] skip charge: OpenCode run had no usage');
       }

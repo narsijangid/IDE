@@ -1,8 +1,8 @@
 /**
- * OLKIL token meter — per signed-in user, not the shared provider API pack.
+ * OLKIL usage meter — per signed-in user, not the shared provider API pack.
  *
- * Company DeepSeek/Poolside keys may have billions of tokens for everyone.
- * This module only subtracts from the user's Lite/Pro/Ultra wallet on olkil.com.
+ * Company keys may have large provider balances. This module only subtracts
+ * from the user's Lite/Pro/Ultra model credit on olkil.com.
  */
 import * as path from 'path';
 import * as http from 'http';
@@ -34,7 +34,7 @@ export function isLocalProvider(provider: AiProviderId): boolean {
 }
 
 /**
- * Cloud inference that spends the user's OLKIL plan tokens.
+ * Cloud inference that spends the user's OLKIL plan credit.
  * Dazzlone (Poolside) and local Ollama are always free — even for paid users.
  * Only billed cloud models (OpenRouter / DeepSeek) debit the plan wallet.
  */
@@ -111,11 +111,50 @@ export interface OlkilApiUsage {
   cacheHitTokens: number;
   cacheMissTokens: number;
   reasoningTokens: number;
+  costUsd?: number;
 }
 
 function num(value: unknown): number {
   const n = Number(value);
   return Number.isFinite(n) && n > 0 ? Math.floor(n) : 0;
+}
+
+function costNum(value: unknown): number {
+  const n = Number(value);
+  return Number.isFinite(n) && n > 0 && n < 25 ? n : 0;
+}
+
+const MODEL_USD_PER_MILLION: Record<string, [number, number, number]> = {
+  'anthropic/claude-sonnet-5': [2, 10, 0.2],
+  'anthropic/claude-opus-5': [5, 25, 0.5],
+  'openai/gpt-5.6-sol': [2, 10, 0.2],
+  'openai/gpt-5.6-luna': [0.2, 1.2, 0.02],
+  'x-ai/grok-4.6': [2, 6, 0.5],
+  'deepseek/deepseek-v4-flash': [0.09, 0.18, 0.018],
+  'google/gemini-3.8-flash': [0.75, 3.75, 0.075],
+  'google/gemini-3.5-flash': [1.5, 9, 0.15],
+  'moonshotai/kimi-k2.7-code': [0.71, 3.5, 0.15],
+};
+
+export function estimateOlkilCostUsd(model: string, usage: OlkilApiUsage | null): number {
+  if (usage?.costUsd && usage.costUsd > 0) {
+    return usage.costUsd;
+  }
+  if (!usage || usage.totalTokens < 1) {
+    return 0;
+  }
+  const slug = String(model || '')
+    .replace(/^openrouter:/i, '')
+    .trim()
+    .toLowerCase();
+  const prices =
+    MODEL_USD_PER_MILLION[slug] ||
+    Object.entries(MODEL_USD_PER_MILLION).find(([id]) => slug && id.includes(slug))?.[1] ||
+    ([2, 10, 0.2] as [number, number, number]);
+  const hit = usage.cacheHitTokens;
+  const miss = usage.cacheMissTokens > 0 ? usage.cacheMissTokens : Math.max(0, usage.promptTokens - hit);
+  const usd = (miss / 1_000_000) * prices[0] + (hit / 1_000_000) * prices[2] + (usage.completionTokens / 1_000_000) * prices[1];
+  return Math.min(8, Math.max(0, usd));
 }
 
 /**
@@ -128,24 +167,30 @@ export function parseProviderUsage(raw: unknown): OlkilApiUsage | null {
     return null;
   }
   const u = raw as Record<string, any>;
+  const nested = u.usage && typeof u.usage === 'object' ? u.usage : {};
   const details = u.completion_tokens_details && typeof u.completion_tokens_details === 'object'
     ? u.completion_tokens_details
     : {};
   const cache = u.cache && typeof u.cache === 'object' ? u.cache : {};
+  const costUsd = costNum(
+    u.total_cost ?? u.totalCost ?? u.cost ?? nested.cost ?? nested.total_cost ?? nested.cost_usd,
+  );
 
   let promptTokens = num(
     u.native_tokens_prompt ??
       u.tokens_prompt ??
       u.prompt_tokens ??
       u.promptTokens ??
-      u.input,
+      u.input ??
+      nested.prompt_tokens,
   );
   const completionTokens = num(
     u.native_tokens_completion ??
       u.tokens_completion ??
       u.completion_tokens ??
       u.completionTokens ??
-      u.output,
+      u.output ??
+      nested.completion_tokens,
   );
   const cacheHitTokens = num(
     u.prompt_cache_hit_tokens ??
@@ -170,10 +215,10 @@ export function parseProviderUsage(raw: unknown): OlkilApiUsage | null {
     cacheMissTokens = promptTokens;
   }
 
-  const reportedTotal = num(u.total_tokens ?? u.total);
+  const reportedTotal = num(u.total_tokens ?? u.total ?? nested.total_tokens);
   const summed = promptTokens + completionTokens;
   const totalTokens = summed > 0 ? summed : reportedTotal;
-  if (totalTokens < 1) {
+  if (totalTokens < 1 && !(costUsd > 0)) {
     return null;
   }
   return {
@@ -183,6 +228,7 @@ export function parseProviderUsage(raw: unknown): OlkilApiUsage | null {
     cacheHitTokens,
     cacheMissTokens,
     reasoningTokens,
+    costUsd: costUsd || undefined,
   };
 }
 
@@ -200,6 +246,7 @@ export function addApiUsage(a: OlkilApiUsage | null, b: OlkilApiUsage | null): O
     cacheHitTokens: a.cacheHitTokens + b.cacheHitTokens,
     cacheMissTokens: a.cacheMissTokens + b.cacheMissTokens,
     reasoningTokens: a.reasoningTokens + b.reasoningTokens,
+    costUsd: (a.costUsd || 0) + (b.costUsd || 0) || undefined,
   };
 }
 
@@ -382,7 +429,7 @@ function signInMessage(): string {
 }
 
 function usedUpMessage(): string {
-  return 'Your OLKIL token allowance is used up. Buy the same plan again for a fresh 30 days, or upgrade.';
+  return 'Your OLKIL model credit is used up. Buy the same plan again for a fresh 30 days, or upgrade.';
 }
 
 function applyCache(next: QuotaDecision): QuotaDecision {
@@ -616,14 +663,24 @@ export async function chargeOlkilWallet(opts: {
   requestId: string;
   usage?: OlkilApiUsage | null;
 }): Promise<boolean> {
-  const usage = opts.usage && opts.usage.totalTokens > 0 ? opts.usage : null;
-  const inputTokens = usage ? usage.promptTokens : Math.max(0, Math.floor(opts.inputTokens));
-  const outputTokens = usage ? usage.completionTokens : Math.max(0, Math.floor(opts.outputTokens));
-  const tokens = usage ? usage.totalTokens : inputTokens + outputTokens;
-  if (tokens < 1 || !isMeteredProvider(opts.provider)) {
+  const usage = opts.usage || null;
+  const inputTokens = usage && usage.promptTokens > 0 ? usage.promptTokens : Math.max(0, Math.floor(opts.inputTokens));
+  const outputTokens = usage && usage.completionTokens > 0 ? usage.completionTokens : Math.max(0, Math.floor(opts.outputTokens));
+  const tokens = usage && usage.totalTokens > 0 ? usage.totalTokens : inputTokens + outputTokens;
+  const costUsd = estimateOlkilCostUsd(opts.model, usage && usage.totalTokens > 0 ? usage : {
+    promptTokens: inputTokens,
+    completionTokens: outputTokens,
+    totalTokens: tokens,
+    cacheHitTokens: usage?.cacheHitTokens || 0,
+    cacheMissTokens: usage?.cacheMissTokens || 0,
+    reasoningTokens: usage?.reasoningTokens || 0,
+    costUsd: usage?.costUsd,
+  });
+  if ((!tokens && !(costUsd > 0)) || !isMeteredProvider(opts.provider)) {
     console.warn('[olkil-wallet] skip charge', {
       provider: opts.provider,
       tokens,
+      costUsd,
       metered: isMeteredProvider(opts.provider),
       source: usage ? 'api' : 'none',
     });
@@ -654,6 +711,7 @@ export async function chargeOlkilWallet(opts: {
   try {
     const body = JSON.stringify({
       tokens,
+      cost_usd: costUsd,
       input_tokens: inputTokens,
       output_tokens: outputTokens,
       prompt_cache_hit_tokens: usage?.cacheHitTokens || 0,

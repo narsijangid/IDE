@@ -3,8 +3,8 @@
  * OLKIL subscriptions / entitlements (email-keyed).
  *
  * Paid plans stack. Higher plan is current; lower unexpired plans stay on hold
- * with their remaining tokens. Each plan's 30-day window is independent — when
- * it ends, leftover tokens on that plan are gone. Spend highest leftover first.
+ * with leftover model credit. Each plan's 30-day window is independent — when
+ * it ends, leftover credit on that plan is gone. Spend highest leftover first.
  *
  * @package OLKIL
  */
@@ -14,17 +14,17 @@ if ( ! defined( 'ABSPATH' ) ) {
 }
 
 /**
- * Token budgets per plan.
+ * Model-credit budgets per plan (USD micros).
  *
  * @return array<string,int>
  */
 function olkil_payu_token_budgets() {
 	return array(
 		'dazzlone' => 0,
-		'lite'     => 100000000,
-		'pro'      => 350000000,
-		'max'      => 1000000000,
-		'ultra'    => 2000000000,
+		'lite'     => olkil_payu_ai_credit_micros( 'lite' ),
+		'pro'      => olkil_payu_ai_credit_micros( 'pro' ),
+		'max'      => olkil_payu_ai_credit_micros( 'max' ),
+		'ultra'    => olkil_payu_ai_credit_micros( 'ultra' ),
 	);
 }
 
@@ -36,34 +36,19 @@ function olkil_payu_email_key( $email ) {
 }
 
 /**
- * @param int $n Token count.
+ * @param int $n Credit micros.
  */
 function olkil_payu_format_tokens_exact( $n ) {
-	return number_format( max( 0, (int) $n ), 0, '.', ',' );
+	return olkil_payu_format_usd_micros( $n );
 }
 
 /**
- * Compact label (350M). Used alongside exact counts so small usage is still visible.
+ * Compact credit label (same as exact — values are dollars).
  *
- * @param int $n Token count.
+ * @param int $n Credit micros.
  */
 function olkil_payu_format_tokens( $n ) {
-	$n = (float) $n;
-	if ( $n <= 0 ) {
-		return '0';
-	}
-	if ( $n >= 1000000000 ) {
-		$v = $n / 1000000000;
-		return rtrim( rtrim( number_format( $v, 2, '.', '' ), '0' ), '.' ) . 'B';
-	}
-	if ( $n >= 1000000 ) {
-		$v = $n / 1000000;
-		return rtrim( rtrim( number_format( $v, 2, '.', '' ), '0' ), '.' ) . 'M';
-	}
-	if ( $n >= 1000 ) {
-		return rtrim( rtrim( number_format( $n / 1000, 1, '.', '' ), '0' ), '.' ) . 'K';
-	}
-	return (string) (int) $n;
+	return olkil_payu_format_usd_micros( $n );
 }
 
 function olkil_payu_format_percent_left( $used, $total ) {
@@ -180,7 +165,7 @@ function olkil_payu_prune_entitlements( array $ents, $now = 0 ) {
 		if ( olkil_payu_entitlement_expired( $ent, $now ) ) {
 			continue;
 		}
-		$keep[] = $ent;
+		$keep[] = olkil_payu_entitlement_to_ai_credits( $ent );
 	}
 	return array_values( $keep );
 }
@@ -205,7 +190,7 @@ function olkil_payu_highest_entitlement( array $ents ) {
 }
 
 /**
- * Highest plan that still has remaining tokens (what cloud requests spend).
+ * Highest plan that still has remaining credit (what cloud requests spend).
  *
  * @param array<int,array<string,mixed>> $ents Entitlements.
  * @return array<string,mixed>|null
@@ -472,11 +457,17 @@ function olkil_payu_enrich_subscription( array $sub ) {
 	$expires = (string) ( $current['expires_at'] ?? '' );
 	$exp_ts  = $expires ? strtotime( $expires ) : 0;
 	$spendable = 0;
+	$pool_total = 0;
+	$pool_used  = 0;
 	foreach ( $ents as $ent ) {
 		$spendable += olkil_payu_entitlement_left( $ent, $now );
+		$e_total    = (int) ( $ent['tokens_total'] ?? 0 );
+		$e_used     = max( 0, (int) ( $ent['tokens_used'] ?? 0 ) );
+		$pool_total += $e_total;
+		$pool_used  += min( $e_total, $e_used );
 	}
 
-	$pct_used = $total > 0 ? ( ( $used / $total ) * 100 ) : 0;
+	$pct_used = $pool_total > 0 ? ( ( $pool_used / $pool_total ) * 100 ) : 0;
 	$pct_left = max( 0, 100 - $pct_used );
 	$days     = null;
 	$label    = 'Never (free local)';
@@ -538,7 +529,7 @@ function olkil_payu_enrich_subscription( array $sub ) {
 		'tokens_used_label'   => olkil_payu_format_tokens_exact( $used ),
 		'tokens_left_label'   => olkil_payu_format_tokens_exact( $left ),
 		'tokens_total_compact'=> olkil_payu_format_tokens( $total ),
-		'percent_left_label'  => olkil_payu_format_percent_left( $used, $total ),
+		'percent_left_label'  => olkil_payu_format_percent_left( $pool_used, $pool_total ),
 		'requests_used'       => max( 0, (int) ( $sub['requests_used'] ?? 0 ) ),
 		'percent_used'        => $pct_used,
 		'percent_left'        => $pct_left,
@@ -599,8 +590,8 @@ function olkil_payu_get_subscription( $email ) {
 
 /**
  * Activate / renew a paid plan for 30 days from purchase.
- * Same plan again: reset that plan's tokens and start a new 30-day window.
- * Higher plan: becomes current; lower unexpired plans go on hold with leftover tokens.
+ * Same plan again: reset that plan's credit and start a new 30-day window.
+ * Higher plan: becomes current; lower unexpired plans go on hold with leftover credit.
  *
  * @param string $email Email.
  * @param string $plan  Plan slug.

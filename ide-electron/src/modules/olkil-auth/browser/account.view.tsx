@@ -10,7 +10,7 @@ import {
   IOlkilChatUiService,
   OlkilAiNodeServicePath,
 } from 'modules/olkil-ai/common';
-import { AI_MODELS, isMeteredCloudProvider } from 'modules/olkil-ai/common/models';
+import { AI_MODELS, isMeteredCloudProvider, isRetiredOlkilModel } from 'modules/olkil-ai/common/models';
 import logoUrl from '../../../browser/assets/olkil-logo.png';
 import { IOlkilAuthService, OlkilAuthUser } from '../common';
 import {
@@ -561,7 +561,7 @@ function PlanPane() {
         {!user ? (
           <div className={styles.block}>
             <p className={styles.rowTitle}>Sign in to see usage</p>
-            <p className={styles.rowDesc}>Plan and token remaining are tied to your olkil.com account.</p>
+            <p className={styles.rowDesc}>Plan and remaining included usage are tied to your olkil.com account.</p>
           </div>
         ) : (
           <div className={styles.planCard}>
@@ -582,12 +582,12 @@ function PlanPane() {
               {waitingForPlan
                 ? 'Loading your plan…'
                 : sub?.is_paid
-                  ? `${sub.tokens_left_label || '0'} remaining of ${sub.tokens_total_label || '0'} · ${sub.tokens_used_label || '0'} used`
-                  : 'Free Dazzlone — local models, no cloud token cap'}
+                  ? `${sub.percent_left_label || `${pctLeft}%`} included usage remaining`
+                  : 'Free Dazzlone — local models, no cloud usage cap'}
             </p>
             {sub?.is_paid && sub.drawing_plan && sub.drawing_plan !== sub.plan ? (
               <p className={styles.planHint}>
-                {sub.plan_name} tokens are used up for this window. Cloud requests now use held{' '}
+                {sub.plan_name} credit is used up for this window. Cloud requests now use held{' '}
                 {sub.drawing_plan_name || 'plan'}.
               </p>
             ) : null}
@@ -602,7 +602,7 @@ function PlanPane() {
             {sub?.is_paid &&
             (sub.quota_reason === 'quota_exceeded' || ((sub.spendable_left ?? 0) <= 0 && pctLeft <= 0)) ? (
               <p className={styles.planHint}>
-                This period’s tokens are used up.{' '}
+                This period’s included usage is used up.{' '}
                 <a
                   className={styles.link}
                   href={sub.renew_url || `https://olkil.com/checkout/?plan=${encodeURIComponent(sub.plan || 'lite')}`}
@@ -684,8 +684,9 @@ function ModelsPane({
   settings: OlkilSettings;
   patch: (partial: Partial<OlkilSettings>) => void;
 }) {
-  const catalogIds = AI_MODELS.map((model) => model.id);
-  const enabledCount = AI_MODELS.filter((model) => isModelEnabledInSettings(settings, model.id)).length;
+  const catalog = AI_MODELS.filter((model) => !isRetiredOlkilModel(model));
+  const catalogIds = catalog.map((model) => model.id);
+  const enabledCount = catalog.filter((model) => isModelEnabledInSettings(settings, model.id)).length;
   const chat = useInjectable<IOlkilChatService>(IOlkilChatService);
   const commands = useInjectable<CommandService>(CommandService);
   const [locked, setLocked] = useState(chat.deepseekLocked);
@@ -716,7 +717,7 @@ function ModelsPane({
       </p>
       <div className={styles.card}>
         <div className={styles.modelList}>
-          {AI_MODELS.map((model) => {
+          {catalog.map((model) => {
             const on = isModelEnabledInSettings(settings, model.id);
             const modelLocked = locked && isMeteredCloudProvider(model.provider);
             return (

@@ -238,10 +238,10 @@ export function mergeOlkilSettings(raw: unknown): OlkilSettings {
   if (next.autoOptimizeFor !== 'cost' && next.autoOptimizeFor !== 'balanced' && next.autoOptimizeFor !== 'intelligence') {
     next.autoOptimizeFor = 'balanced';
   }
-  if (next.enabledModelIds.some((id) => /^deepseek:|poolside:/.test(id))) {
+  if (next.enabledModelIds.some((id) => /^deepseek:|poolside:/.test(id) || /\bdazzlone\b/i.test(id))) {
     next.enabledModelIds = [];
   }
-  if (/^deepseek:|poolside:/.test(String(next.defaultModelId || ''))) {
+  if (/^deepseek:|poolside:/.test(String(next.defaultModelId || '')) || /\bdazzlone\b/i.test(String(next.defaultModelId || ''))) {
     next.defaultModelId = 'openrouter:auto';
   }
   return next;

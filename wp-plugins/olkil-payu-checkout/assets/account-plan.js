@@ -164,9 +164,9 @@
 
   function paintUsage(sub) {
     if (!sub) return;
-    var used = sub.is_paid ? sub.tokens_used_label || '0' : '0';
-    var left = sub.is_paid ? sub.tokens_left_label || '0' : 'Unlimited';
-    var total = sub.is_paid ? sub.tokens_total_label || '0' : 'Local';
+    var used = sub.is_paid ? Math.round(sub.percent_used || 0) + '%' : '0%';
+    var left = sub.is_paid ? (sub.percent_left_label || Math.round(sub.percent_left || 0) + '%') : 'Unlimited';
+    var total = sub.is_paid ? 'This period' : 'Local';
     var set = function (id, val) {
       var el = $(id);
       if (el) el.textContent = val;
@@ -183,14 +183,12 @@
     var note = $('#olkil-usage-note');
     if (note) {
       note.textContent = sub.is_paid
-        ? (sub.plan_name || 'Plan') +
+        ?           (sub.plan_name || 'Plan') +
           ' · ' +
-          (sub.tokens_used_label || '0') +
-          ' used · ' +
           (sub.percent_left_label || Math.round(sub.percent_left || 0) + '%') +
           ' remaining · resets ' +
           (sub.expires_on || '—')
-        : 'Free Dazzlone — local models have no cloud token cap.';
+        : 'Free Dazzlone — local models have no cloud usage cap.';
     }
   }
 
@@ -256,12 +254,8 @@
     if (tok) {
       if (sub.is_paid) {
         tok.textContent =
-          (sub.tokens_left_label || '0') +
-          ' remaining of ' +
-          (sub.tokens_total_label || '0') +
-          ' · ' +
-          (sub.tokens_used_label || '0') +
-          ' used';
+          (sub.percent_left_label || Math.round(sub.percent_left || 0) + '%') +
+          ' included usage remaining this period';
       } else {
         tok.textContent = sub.is_expired
           ? 'Plan ended — back on free Dazzlone'
@@ -340,9 +334,9 @@
     var note = $('#olkil-dash-plan-note');
     if (note) {
       if (sub.is_paid && sub.drawing_plan && sub.drawing_plan !== sub.plan) {
-        note.textContent = (sub.plan_name || 'Plan') + ' tokens used up · using held ' + (sub.drawing_plan_name || 'plan');
+        note.textContent = (sub.plan_name || 'Plan') + ' usage used up · using held ' + (sub.drawing_plan_name || 'plan');
       } else if (sub.is_paid) {
-        note.textContent = 'Active · ' + (sub.tokens_total_compact || sub.tokens_total_label || '') + ' tokens / month';
+        note.textContent = 'Active · included usage this period';
       } else if (sub.is_expired) {
         note.textContent = 'Previous plan ended — you are on free Dazzlone';
       } else {
@@ -369,11 +363,8 @@
     if (meta) {
       if (sub.is_paid) {
         var text =
-          (sub.tokens_used_label || '0') +
-          ' used · ' +
-          (sub.tokens_left_label || '0') +
-          ' left of ' +
-          (sub.tokens_total_label || '0') +
+          (sub.percent_left_label || Math.round(sub.percent_left || 0) + '%') +
+          ' included usage remaining' +
           (sub.expires_on ? ' · resets ' + sub.expires_on : '');
         if (sub.held_plans && sub.held_plans.length) {
           text +=
@@ -386,7 +377,7 @@
         }
         meta.textContent = text;
       } else {
-        meta.textContent = 'Free Dazzlone plan — upgrade anytime for cloud tokens.';
+        meta.textContent = 'Free Dazzlone plan — upgrade anytime for cloud Agent usage.';
       }
     }
     paintPlanCards(sub);
@@ -404,7 +395,7 @@
       el.innerHTML = '';
       el.appendChild(
         document.createTextNode(
-          'You have used your ' + name + ' tokens this period. Buy ' + name + ' again for a fresh allowance and a new 30-day window from today. '
+          'You have used your ' + name + ' included usage this period. Buy ' + name + ' again for a fresh window from today. '
         )
       );
       var a = document.createElement('a');

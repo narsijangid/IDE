@@ -16,14 +16,13 @@ $plans = array(
 		'period'   => __( 'forever', 'olkil' ),
 		'badge'    => __( 'Free', 'olkil' ),
 		'blurb'    => __( 'Start shipping with local AI.', 'olkil' ),
-		'tokens'   => '',
-		'requests' => '',
+		'includes' => '',
 		'features' => array(
-			__( 'Free Local Models', 'olkil' ),
-			__( 'Unlimited Browser Testing', 'olkil' ),
-			__( 'Basic Autocomplete', 'olkil' ),
-			__( 'Basic AI Chat', 'olkil' ),
-			__( 'Basic Code Assistance', 'olkil' ),
+			__( 'Local models on your machine', 'olkil' ),
+			__( 'Unlimited browser testing', 'olkil' ),
+			__( 'Basic autocomplete', 'olkil' ),
+			__( 'Basic AI chat', 'olkil' ),
+			__( 'Basic code assistance', 'olkil' ),
 		),
 		'cta'      => __( 'Start free', 'olkil' ),
 		'href'     => home_url( '/download/' ),
@@ -37,15 +36,13 @@ $plans = array(
 		'period'   => __( '/ mo', 'olkil' ),
 		'badge'    => __( 'Starter', 'olkil' ),
 		'blurb'    => __( 'Everyday AI coding, unlocked.', 'olkil' ),
-		'tokens'   => '100M',
-		'requests' => '~3,500',
+		'includes' => __( 'Everything in Dazzlone, plus:', 'olkil' ),
 		'features' => array(
-			__( '100M tokens / mo', 'olkil' ),
-			__( '~3,500 approx requests', 'olkil' ),
-			__( 'Unlimited Autocomplete', 'olkil' ),
-			__( 'Unlimited Browser Testing', 'olkil' ),
-			__( 'AI Coding Agent', 'olkil' ),
-			__( 'Project Context', 'olkil' ),
+			__( 'Cloud coding agent', 'olkil' ),
+			__( 'Access to frontier models', 'olkil' ),
+			__( 'Unlimited autocomplete', 'olkil' ),
+			__( 'Project context', 'olkil' ),
+			__( 'MCPs, skills, and hooks', 'olkil' ),
 		),
 		'cta'      => __( 'Get Lite', 'olkil' ),
 		'href'     => home_url( '/checkout/?plan=lite' ),
@@ -59,15 +56,12 @@ $plans = array(
 		'period'   => __( '/ mo', 'olkil' ),
 		'badge'    => __( 'Popular', 'olkil' ),
 		'blurb'    => __( 'Full project power for builders.', 'olkil' ),
-		'tokens'   => '350M',
-		'requests' => '~12,180',
+		'includes' => __( 'Everything in Lite, plus:', 'olkil' ),
 		'features' => array(
-			__( '350M tokens / mo', 'olkil' ),
-			__( '~12,180 approx requests', 'olkil' ),
-			__( 'Unlimited Autocomplete', 'olkil' ),
-			__( 'Unlimited Browser Testing', 'olkil' ),
-			__( 'AI Coding Agent', 'olkil' ),
-			__( 'Full Project Context', 'olkil' ),
+			__( 'Extended limits on Agent', 'olkil' ),
+			__( 'Full project context', 'olkil' ),
+			__( 'Longer cloud sessions', 'olkil' ),
+			__( 'Priority on cloud models', 'olkil' ),
 		),
 		'cta'      => __( 'Get Pro', 'olkil' ),
 		'href'     => home_url( '/checkout/?plan=pro' ),
@@ -80,18 +74,13 @@ $plans = array(
 		'price'    => '49',
 		'period'   => __( '/ mo', 'olkil' ),
 		'badge'    => __( 'Flagship', 'olkil' ),
-		'blurb'    => __( 'Unlimited ceiling. Parallel agents.', 'olkil' ),
-		'tokens'   => '2B',
-		'requests' => '~68,460',
+		'blurb'    => __( 'Ship faster with parallel agents.', 'olkil' ),
+		'includes' => __( 'Everything in Pro, plus:', 'olkil' ),
 		'features' => array(
-			__( '2B tokens / mo', 'olkil' ),
-			__( '~68,460 approx requests', 'olkil' ),
-			__( 'Unlimited Autocomplete', 'olkil' ),
-			__( 'Unlimited Browser Testing', 'olkil' ),
-			__( 'Unlimited Agent Usage*', 'olkil' ),
-			__( 'Maximum Context', 'olkil' ),
-			__( 'Parallel Agents', 'olkil' ),
-			__( 'Priority Compute', 'olkil' ),
+			__( 'Highest included Agent usage', 'olkil' ),
+			__( 'Parallel agents', 'olkil' ),
+			__( 'Maximum context', 'olkil' ),
+			__( 'Priority compute', 'olkil' ),
 		),
 		'cta'      => __( 'Get Ultra', 'olkil' ),
 		'href'     => home_url( '/checkout/?plan=ultra' ),
@@ -105,7 +94,7 @@ $plans = array(
 		<div class="olkil-section__head olkil-reveal">
 			<p class="olkil-pricing__kicker"><?php esc_html_e( 'Plans · Prices in USD', 'olkil' ); ?></p>
 			<h2 id="olkil-pricing-title"><?php esc_html_e( 'Choose your velocity.', 'olkil' ); ?></h2>
-			<p><?php esc_html_e( 'Digital AI coding subscriptions priced in US dollars (USD). Unlimited Browser Testing on every plan. No physical shipping.', 'olkil' ); ?></p>
+			<p><?php esc_html_e( 'Digital AI coding subscriptions priced in US dollars (USD). Unlimited browser testing on every plan. No physical shipping.', 'olkil' ); ?></p>
 		</div>
 
 		<div class="olkil-price-grid olkil-reveal" role="list">
@@ -123,19 +112,10 @@ $plans = array(
 						<span class="olkil-price-card__currency">$</span><?php echo esc_html( $plan['price'] ); ?>
 						<span class="olkil-price-card__period"><?php echo esc_html( $plan['period'] ); ?></span>
 					</p>
-					<?php if ( ! empty( $plan['tokens'] ) ) : ?>
-						<p class="olkil-price-card__tokens">
-							<strong><?php echo esc_html( $plan['tokens'] ); ?></strong>
-							<span><?php esc_html_e( 'tokens / mo', 'olkil' ); ?></span>
-							<span class="olkil-price-card__req"><?php echo esc_html( $plan['requests'] ); ?> <?php esc_html_e( 'requests', 'olkil' ); ?></span>
-						</p>
-					<?php else : ?>
-						<p class="olkil-price-card__tokens olkil-price-card__tokens--free">
-							<strong><?php esc_html_e( 'Local', 'olkil' ); ?></strong>
-							<span><?php esc_html_e( 'models · no cloud token cap', 'olkil' ); ?></span>
-						</p>
-					<?php endif; ?>
 					<p class="olkil-price-card__blurb"><?php echo esc_html( $plan['blurb'] ); ?></p>
+					<?php if ( ! empty( $plan['includes'] ) ) : ?>
+						<p class="olkil-price-card__includes"><?php echo esc_html( $plan['includes'] ); ?></p>
+					<?php endif; ?>
 					<ul class="olkil-price-card__features">
 						<?php foreach ( $plan['features'] as $feature ) : ?>
 							<li><?php echo esc_html( $feature ); ?></li>
@@ -151,6 +131,6 @@ $plans = array(
 				</article>
 			<?php endforeach; ?>
 		</div>
-		<p class="olkil-pricing__footnote olkil-reveal"><?php esc_html_e( '* Fair-use limits may apply on Unlimited Agent Usage. Token estimates are approximate. Prices in USD. Cancel anytime.', 'olkil' ); ?></p>
+		<p class="olkil-pricing__footnote olkil-reveal"><?php esc_html_e( 'Included cloud usage is billed against your plan this period. Prices in USD. Cancel anytime.', 'olkil' ); ?></p>
 	</div>
 </section>

@@ -2,6 +2,22 @@ import { AUTO_MODEL_ID } from './auto-router';
 
 export type AiProviderId = 'ollama' | 'poolside' | 'deepseek' | 'openrouter' | 'custom';
 
+/** Poolside/Dazzlone is retired from the picker — never show it as a selectable model. */
+export function isRetiredOlkilModel(model: {
+  id?: string;
+  provider?: string;
+  publicName?: string;
+  displayName?: string;
+  label?: string;
+  model?: string;
+}): boolean {
+  if ((model.provider || '').toLowerCase() === 'poolside') {
+    return true;
+  }
+  const blob = `${model.id || ''} ${model.publicName || ''} ${model.displayName || ''} ${model.label || ''} ${model.model || ''}`.toLowerCase();
+  return blob.startsWith('poolside:') || /\bpoolside:/.test(blob) || /\bdazzlone\b/.test(blob) || /\blaguna\b/.test(blob);
+}
+
 export interface AiModelOption {
   /** Unique UI id, e.g. ollama:qwen2.5-coder:7b */
   id: string;
@@ -150,7 +166,7 @@ export function applyOpenRouterExtraModels(models: AiModelOption[] | undefined):
   const seen = new Set<string>();
   for (const m of models || []) {
     const id = openrouterCatalogId(m.id || m.model);
-    if (!id || featured.has(id) || seen.has(id) || id === AUTO_MODEL_ID) {
+    if (!id || featured.has(id) || seen.has(id) || id === AUTO_MODEL_ID || isRetiredOlkilModel({ ...m, id })) {
       continue;
     }
     seen.add(id);

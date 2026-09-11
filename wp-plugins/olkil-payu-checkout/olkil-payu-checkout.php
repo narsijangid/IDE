@@ -2,7 +2,7 @@
 /**
  * Plugin Name: OLKIL PayU Checkout
  * Description: Professional PayU checkout — Firebase-held KEY/SALT, webhook, invoices, receipts, email.
- * Version: 2.6.6
+ * Version: 2.7.2
  * Author: OLKIL
  */
 
@@ -10,10 +10,11 @@ if ( ! defined( 'ABSPATH' ) ) {
 	exit;
 }
 
-define( 'OLKIL_PAYU_CHECKOUT_VERSION', '2.6.6' );
+define( 'OLKIL_PAYU_CHECKOUT_VERSION', '2.7.2' );
 define( 'OLKIL_PAYU_CHECKOUT_DIR', plugin_dir_path( __FILE__ ) );
 define( 'OLKIL_PAYU_CHECKOUT_URL', plugin_dir_url( __FILE__ ) );
 
+require_once OLKIL_PAYU_CHECKOUT_DIR . 'includes/ai-credits.php';
 require_once OLKIL_PAYU_CHECKOUT_DIR . 'includes/subscriptions.php';
 require_once OLKIL_PAYU_CHECKOUT_DIR . 'includes/firebase-backend.php';
 require_once OLKIL_PAYU_CHECKOUT_DIR . 'includes/olkil-wallet.php';
@@ -112,19 +113,19 @@ function olkil_payu_plans() {
 			'name'   => 'OLKIL Lite',
 			'amount' => '287.00',
 			'usd'    => '3',
-			'tokens' => '100M tokens / mo',
+			'tokens' => 'Cloud agent & frontier models',
 		),
 		'pro'   => array(
 			'name'   => 'OLKIL Pro',
 			'amount' => '957.00',
 			'usd'    => '10',
-			'tokens' => '350M tokens / mo',
+			'tokens' => 'Extended Agent limits',
 		),
 		'ultra' => array(
 			'name'   => 'OLKIL Ultra',
 			'amount' => '4692.00',
 			'usd'    => '49',
-			'tokens' => '2B tokens / mo',
+			'tokens' => 'Parallel agents & priority',
 		),
 	);
 }
@@ -1313,7 +1314,7 @@ function olkil_payu_success_html() {
 			<?php elseif ( $sub && ! empty( $sub['is_paid'] ) ) : ?>
 				<p class="olkil-payu__meta">
 					<strong><?php echo esc_html( $sub['plan_name'] ); ?></strong>
-					· <?php echo esc_html( $sub['tokens_total_label'] ); ?> tokens
+					· included usage
 					· <?php echo esc_html( $sub['expires_label'] ); ?>
 				</p>
 			<?php elseif ( $plan ) : ?>
@@ -1434,7 +1435,7 @@ function olkil_payu_dashboard_html() {
 							<div class="olkil-app__hero-top">
 								<div>
 									<h2><?php esc_html_e( 'Usage this period', 'olkil' ); ?></h2>
-									<p id="olkil-dash-credits-meta"><?php esc_html_e( 'Your OLKIL plan token allowance for cloud models.', 'olkil' ); ?></p>
+									<p id="olkil-dash-credits-meta"><?php esc_html_e( 'Included cloud usage for this billing period.', 'olkil' ); ?></p>
 								</div>
 								<p class="olkil-app__stat" id="olkil-dash-credits-left">—</p>
 							</div>
@@ -1457,7 +1458,7 @@ function olkil_payu_dashboard_html() {
 						<section class="olkil-app__section olkil-app__section--plans">
 							<div class="olkil-app__section-head">
 								<h2><?php esc_html_e( 'Available plans', 'olkil' ); ?></h2>
-								<p><?php esc_html_e( 'Upgrade anytime for cloud model tokens.', 'olkil' ); ?></p>
+								<p><?php esc_html_e( 'Upgrade anytime for more Agent usage and cloud models.', 'olkil' ); ?></p>
 							</div>
 							<div class="olkil-dash-plans" id="olkil-dash-plan-cards">
 								<?php foreach ( $plans as $slug => $p ) : ?>
@@ -1495,7 +1496,7 @@ function olkil_payu_dashboard_html() {
 					<div class="olkil-app__view" id="olkil-view-usage" hidden>
 						<header class="olkil-app__head">
 							<p class="olkil-app__kicker"><?php esc_html_e( 'Usage', 'olkil' ); ?></p>
-							<h1><?php esc_html_e( 'Token usage', 'olkil' ); ?></h1>
+							<h1><?php esc_html_e( 'Usage', 'olkil' ); ?></h1>
 						</header>
 						<section class="olkil-app__hero-card">
 							<div class="olkil-app__usage-grid">
@@ -1527,7 +1528,7 @@ function olkil_payu_dashboard_html() {
 								</thead>
 								<tbody>
 									<tr>
-										<td><?php esc_html_e( 'OLKIL tokens (this period)', 'olkil' ); ?></td>
+										<td><?php esc_html_e( 'Included usage (this period)', 'olkil' ); ?></td>
 										<td id="olkil-usage-row-used">—</td>
 										<td id="olkil-usage-row-left">—</td>
 										<td id="olkil-usage-row-total">—</td>

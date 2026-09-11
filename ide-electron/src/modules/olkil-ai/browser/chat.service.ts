@@ -23,7 +23,7 @@ import {
   QueuedChatMessage,
   UiChatMessage,
 } from '../common';
-import { AI_MODELS, DEFAULT_MODEL_ID, findModel, publicModelName, applyCustomModelEndpoints, applyOpenRouterExtraModels, customModelCatalogId, isCustomProvider, isMeteredCloudProvider } from '../common/models';
+import { AI_MODELS, DEFAULT_MODEL_ID, findModel, publicModelName, applyCustomModelEndpoints, applyOpenRouterExtraModels, customModelCatalogId, isCustomProvider, isMeteredCloudProvider, isRetiredOlkilModel } from '../common/models';
 import { isAutoModelId } from '../common/auto-router';
 import {
   buildSystemPrompt,
@@ -284,12 +284,12 @@ export class OlkilChatService extends Disposable implements IOlkilChatService {
       if (saved.defaultChatMode === 'agent' || saved.defaultChatMode === 'plan' || saved.defaultChatMode === 'ask') {
         this.chatMode = saved.defaultChatMode;
       }
-      if (saved.defaultModelId && isModelEnabledInSettings(saved, saved.defaultModelId)) {
+      if (saved.defaultModelId && isModelEnabledInSettings(saved, saved.defaultModelId) && !isRetiredOlkilModel(findModel(saved.defaultModelId))) {
         this.modelId = saved.defaultModelId;
         this.modelName = findModel(saved.defaultModelId).model;
       }
 
-      this.catalogModels = await this.aiNode.listModels();
+      this.catalogModels = (await this.aiNode.listModels()).filter((m) => !isRetiredOlkilModel(m));
       applyOpenRouterExtraModels(
         this.catalogModels
           .filter((m) => m.provider === 'openrouter' && m.id !== DEFAULT_MODEL_ID)
@@ -381,6 +381,9 @@ export class OlkilChatService extends Disposable implements IOlkilChatService {
   private applyVisibleModels() {
     const saved = this.settings.get();
     const filtered = this.catalogModels.filter((model) => {
+      if (isRetiredOlkilModel(model)) {
+        return false;
+      }
       if (model.provider === 'custom') {
         return true;
       }
@@ -771,8 +774,8 @@ export class OlkilChatService extends Disposable implements IOlkilChatService {
       this.deepseekLocked = Boolean(access.locked);
       if (this.deepseekLocked && !this.busy && isMeteredCloudProvider(findModel(this.modelId).provider)) {
         const next =
-          this.models.find((m) => m.provider === 'poolside')?.id ||
-          this.models.find((m) => !isMeteredCloudProvider(m.provider))?.id;
+          this.models.find((m) => m.provider === 'ollama' && !isRetiredOlkilModel(m))?.id ||
+          this.models.find((m) => !isMeteredCloudProvider(m.provider) && !isRetiredOlkilModel(m))?.id;
         if (next) {
           this.modelId = next;
           this.modelName = findModel(next).model;
@@ -780,7 +783,7 @@ export class OlkilChatService extends Disposable implements IOlkilChatService {
       }
       this.fire();
     } catch {
-      // ignore — Dazzlone/Ollama still work
+      // ignore — local Ollama still works
     }
   }
 
@@ -1316,9 +1319,7 @@ export class OlkilChatService extends Disposable implements IOlkilChatService {
       } else {
         this.stallAutoRetries = 0;
       }
-      const suggestions = this.extractSuggestions(finalText);
       await this.typeOut(pendingId, finalText);
-      this.patchUi(pendingId, { suggestions: suggestions.length ? suggestions : undefined });
       this.history.push({ role: 'assistant', content: finalText });
       this.setStatus('');
     } catch (e: any) {
@@ -1427,27 +1428,6 @@ export class OlkilChatService extends Disposable implements IOlkilChatService {
     const next = this.queuedMessages.shift()!;
     this.fire();
     await this.send(next.text, next.attachments);
-  }
-
-  private extractSuggestions(text: string): string[] {
-    const out: string[] = [];
-    const section = /(?:\*\*)?Suggested checks(?:\*\*)?\s*\n([\s\S]*?)(?:\n\n|\n(?=[A-Z])|$)/i.exec(
-      text || '',
-    );
-    const block = section?.[1] || text || '';
-    for (const line of block.split('\n')) {
-      const m = /^\s*(?:[-*•]|\d+[.)])\s+(.+)$/.exec(line);
-      if (m?.[1]) {
-        const s = m[1].replace(/\*\*/g, '').trim();
-        if (s.length > 4 && s.length < 160) {
-          out.push(s);
-        }
-      }
-      if (out.length >= 4) {
-        break;
-      }
-    }
-    return out;
   }
 
   /** Resolve @mentions / drag-drop into clipped file context for the model. */
@@ -1814,13 +1794,7 @@ export class OlkilChatService extends Disposable implements IOlkilChatService {
           (c.additions || c.deletions ? ` (+${c.additions}/−${c.deletions})` : '') +
           (c.summary ? ` — ${c.summary}` : ''),
       );
-      return (
-        `Done — here's what changed:\n${lines.join('\n')}\n\n` +
-        `**Suggested checks**\n` +
-        `• Review the diff cards above (Accept / Revert)\n` +
-        `• Open the edited files and sanity-check the surrounding code\n` +
-        `• Run your usual build/test if this touched runtime behavior`
-      );
+      return `Done — here's what changed:\n${lines.join('\n')}`;
     }
     if (this.chatMode !== 'agent' && this.chatMode !== 'ask') {
       return 'I do not have more to add yet — switch to Agent if you want me to apply the plan.';
@@ -3697,7 +3671,7 @@ Read the highest-scoring evidence in trail order. For a bug, trace UI → handle
             content:
               `POST-EDIT VERIFY (auto):\n${diag}\n` +
               `If these errors are from your edit, fix with search_replace now. ` +
-              `Otherwise write a short 1–3 sentence summary + Suggested checks. Do not invent new scope.`,
+              `Otherwise write a short 1–3 sentence summary. Do not invent new scope. No follow-up checklist.`,
           });
           this.pushActivity(pendingId, 'info', 'Checked diagnostics after edit');
         }
@@ -4024,8 +3998,7 @@ Read the highest-scoring evidence in trail order. For a bug, trace UI → handle
           role: 'user',
           content: questionIntent
             ? 'Write the final answer now: required documents/formats/fields + file paths. No tools.'
-            : 'Tools finished. Write a Cursor-style completion: (1) 1–3 sentences on what changed and why, ' +
-              '(2) a short **Suggested checks** list (2–3 concrete steps). Do not call tools. Never reply empty.',
+            : 'Tools finished. Write a short 1–3 sentence summary of what changed and why. Do not call tools. No follow-up checklist. Never reply empty.',
         });
         try {
           const summary = await this.invokeCompletionResilient(pendingId, {

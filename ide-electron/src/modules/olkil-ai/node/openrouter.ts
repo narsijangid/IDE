@@ -51,6 +51,9 @@ export async function refreshOpenRouterCatalog(apiKey: string, baseUrl?: string)
       if (/\bimage\b/i.test(output) && !/\btext\b/i.test(output)) {
         continue;
       }
+      if (/\bdazzlone\b|\blaguna\b|\bpoolside\b/i.test(`${slug} ${name}`)) {
+        continue;
+      }
       next.push({
         id: `openrouter:${slug}`,
         provider: 'openrouter',
