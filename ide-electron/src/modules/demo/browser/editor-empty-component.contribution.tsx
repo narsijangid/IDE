@@ -15,7 +15,7 @@ import { localize } from '@opensumi/ide-core-common';
 import { IKeymapService } from '@opensumi/ide-keymaps/lib/common/keymaps';
 
 import styles from './editor-empty-component.module.less';
-import logoUrl from '../../../browser/assets/olkil.mp4';
+import logoUrl from '../../../browser/assets/olkil-logo.png';
 
 /**
  * 单行快捷键信息
@@ -37,7 +37,6 @@ const ShortcutRow: FC<{
  * 编辑器空白页引导信息
  */
 export const EditorEmptyComponent = () => {
-  const [imgLoaded, setImgLoaded] = useState(true);
   const [keyMapLoaded, setKeyMapLoaded] = useState(false);
 
   const keybindingRegistry = useInjectable<KeybindingRegistry>(KeybindingRegistry);
@@ -63,7 +62,7 @@ export const EditorEmptyComponent = () => {
   }, []);
 
   const ShortcutView = useMemo(() => {
-    if (!imgLoaded || !keyMapLoaded) {
+    if (!keyMapLoaded) {
       return;
     }
 
@@ -100,21 +99,11 @@ export const EditorEmptyComponent = () => {
         ))}
       </div>
     );
-  }, [imgLoaded, keyMapLoaded]);
+  }, [keyMapLoaded]);
 
   return (
     <div className={styles.empty_component}>
-      <video
-        src={logoUrl}
-        autoPlay
-        loop
-        muted
-        playsInline
-        preload="auto"
-        disablePictureInPicture
-        draggable={false}
-        aria-label="OLKIL"
-      />
+      <img src={logoUrl} alt="" width={128} height={128} draggable={false} />
       <h1 className={styles.brand}>OLKIL</h1>
       {ShortcutView}
     </div>

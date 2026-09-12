@@ -39,12 +39,10 @@
         user-select: none;
       }
 
-      #loading video {
+      #loading .mark {
         width: 148px;
         height: 148px;
-        object-fit: contain;
-        display: block;
-        background: transparent;
+        flex-shrink: 0;
       }
 
       #loading .brand {
@@ -73,18 +71,7 @@
   </head>
   <body>
     <div id="loading" aria-label="Loading OLKIL">
-      <video
-        src="./assets/olkil.mp4"
-        width="148"
-        height="148"
-        autoplay
-        loop
-        muted
-        playsinline
-        preload="auto"
-        disablepictureinpicture
-        aria-hidden="true"
-      ></video>
+      <div class="mark" aria-hidden="true"></div>
       <p class="brand">OLKIL</p>
     </div>
     <div id="main"></div>

@@ -2,7 +2,7 @@
 /**
  * Plugin Name: OLKIL Download Links
  * Description: Sets Windows / macOS / Linux download URLs for OLKIL desktop installers. Mirrors installers into /downloads/.
- * Version: 1.3.26
+ * Version: 1.3.27
  * Author: OLKIL
  */
 
@@ -10,15 +10,22 @@ if ( ! defined( 'ABSPATH' ) ) {
 	exit;
 }
 
+if ( get_option( 'olkil_opcache_bust_1327c' ) !== '1' ) {
+	if ( function_exists( 'opcache_reset' ) ) {
+		@opcache_reset();
+	}
+	update_option( 'olkil_opcache_bust_1327c', '1', false );
+}
+
 function olkil_dl_app_version() {
-	return '1.3.26';
+	return '1.3.27';
 }
 
 /**
  * Hostinger-hosted Mac/Linux build. GitHub Releases are private.
  */
 function olkil_dl_maclin_version() {
-	return olkil_dl_app_version();
+	return '1.3.26';
 }
 
 /**
@@ -136,6 +143,7 @@ function olkil_dl_print_footer_script() {
 	(function () {
 		var downloads = <?php echo wp_json_encode( $map ); ?>;
 		window.olkilData = window.olkilData || {};
+		window.olkilData.appVersion = <?php echo wp_json_encode( olkil_dl_app_version() ); ?>;
 		window.olkilData.downloads = Object.assign({}, window.olkilData.downloads || {}, downloads);
 		function isAppleSilicon() {
 			try {
@@ -158,10 +166,19 @@ function olkil_dl_print_footer_script() {
 			}
 			return downloads[os] || '#';
 		}
+		function versionFromHref(href) {
+			var m = /OLKIL-(\d+\.\d+\.\d+)/.exec(href || '');
+			return m ? m[1] : '';
+		}
 		document.querySelectorAll('[data-olkil-os]').forEach(function (el) {
 			var key = el.getAttribute('data-olkil-os');
 			var href = hrefFor(key);
 			if (href) el.setAttribute('href', href);
+			var ver = versionFromHref(href);
+			if (!ver) return;
+			var meta = el.querySelector('.olkil-platform__meta');
+			if (meta) meta.textContent = String(meta.textContent || '').replace(/v\d+\.\d+\.\d+/, 'v' + ver);
+			if (el.hasAttribute('download')) el.setAttribute('download', 'OLKIL-' + ver + '.exe');
 		});
 		document.querySelectorAll('[data-olkil-download="auto"]').forEach(function (el) {
 			var ua = navigator.userAgent || '';

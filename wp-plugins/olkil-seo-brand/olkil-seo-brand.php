@@ -2,7 +2,7 @@
 /**
  * Plugin Name: OLKIL SEO Brand
  * Description: Advanced OLKIL SEO + syncs Dazzlone pricing UI into the OLKIL theme.
- * Version: 1.7.1
+ * Version: 1.7.3
  * Author: OLKIL
  */
 
@@ -11,7 +11,7 @@ if ( ! defined( 'ABSPATH' ) ) {
 }
 
 define( 'OLKIL_SEO_BRAND_NAME', 'OLKIL' );
-define( 'OLKIL_SEO_BRAND_VERSION', '1.7.1' );
+define( 'OLKIL_SEO_BRAND_VERSION', '1.7.3' );
 define( 'OLKIL_SEO_BRAND_DIR', plugin_dir_path( __FILE__ ) );
 define( 'OLKIL_SEO_BRAND_URL', plugin_dir_url( __FILE__ ) );
 
@@ -63,6 +63,7 @@ function olkil_seo_brand_sync_theme_files() {
 		'theme-overrides/template-parts/olkil/posts-loop.php'     => 'template-parts/olkil/posts-loop.php',
 		'theme-overrides/template-parts/olkil/sections/pricing.php' => 'template-parts/olkil/sections/pricing.php',
 		'theme-overrides/template-parts/olkil/sections/cta.php'     => 'template-parts/olkil/sections/cta.php',
+		'theme-overrides/template-parts/olkil/sections/download.php' => 'template-parts/olkil/sections/download.php',
 		'theme-overrides/template-parts/olkil/footer.php'           => 'template-parts/olkil/footer.php',
 		'theme-overrides/page-templates/template-pricing.php'       => 'page-templates/template-pricing.php',
 		'theme-overrides/page-templates/template-auth-ide.php'      => 'page-templates/template-auth-ide.php',

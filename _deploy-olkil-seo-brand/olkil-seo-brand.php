@@ -2,7 +2,7 @@
 /**
  * Plugin Name: OLKIL SEO Brand
  * Description: Advanced OLKIL SEO + syncs Dazzlone pricing UI into the OLKIL theme.
- * Version: 1.7.1
+ * Version: 1.7.2
  * Author: OLKIL
  */
 
@@ -11,7 +11,7 @@ if ( ! defined( 'ABSPATH' ) ) {
 }
 
 define( 'OLKIL_SEO_BRAND_NAME', 'OLKIL' );
-define( 'OLKIL_SEO_BRAND_VERSION', '1.7.1' );
+define( 'OLKIL_SEO_BRAND_VERSION', '1.7.2' );
 define( 'OLKIL_SEO_BRAND_DIR', plugin_dir_path( __FILE__ ) );
 define( 'OLKIL_SEO_BRAND_URL', plugin_dir_url( __FILE__ ) );
 
