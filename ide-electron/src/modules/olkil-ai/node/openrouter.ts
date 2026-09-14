@@ -85,34 +85,64 @@ export async function actualOpenRouterUsage(opts: {
   apiKey: string;
   baseUrl?: string;
   generationId?: string;
+  generationIds?: Iterable<string>;
   fallback?: unknown;
 }): Promise<OlkilApiUsage | null> {
   const fallback = parseProviderUsage(opts.fallback);
-  const id = String(opts.generationId || '').trim();
-  if (!id || !opts.apiKey) {
+  const ids = [
+    ...new Set(
+      [opts.generationId, ...(opts.generationIds || [])]
+        .map((id) => String(id || '').trim())
+        .filter(Boolean),
+    ),
+  ];
+  if (!ids.length || !opts.apiKey) {
     return fallback;
   }
   const base = normalizeOpenRouterBase(opts.baseUrl);
-  for (let i = 0; i < 4; i++) {
-    if (i > 0) {
-      await new Promise((r) => setTimeout(r, 350 * i));
-    }
-    try {
-      const res = await fetch(`${base}/generation?id=${encodeURIComponent(id)}`, {
-        headers: openRouterHeaders(opts.apiKey),
-      });
-      if (!res.ok) {
-        continue;
+  let found: OlkilApiUsage | null = null;
+  for (const id of ids) {
+    for (let i = 0; i < 4; i++) {
+      if (i > 0) {
+        await new Promise((r) => setTimeout(r, 350 * i));
       }
-      const json = (await res.json()) as { data?: Record<string, unknown> };
-      const data = json?.data && typeof json.data === 'object' ? json.data : json;
-      const usage = parseProviderUsage(data);
-      if (usage) {
-        return usage;
+      try {
+        const res = await fetch(`${base}/generation?id=${encodeURIComponent(id)}`, {
+          headers: openRouterHeaders(opts.apiKey),
+        });
+        if (!res.ok) {
+          continue;
+        }
+        const json = (await res.json()) as { data?: Record<string, unknown> };
+        const data = json?.data && typeof json.data === 'object' ? json.data : json;
+        const usage = parseProviderUsage(data);
+        if (usage && ((usage.costUsd || 0) > 0 || usage.totalTokens > 0)) {
+          found = found
+            ? {
+                promptTokens: found.promptTokens + usage.promptTokens,
+                completionTokens: found.completionTokens + usage.completionTokens,
+                totalTokens: found.totalTokens + usage.totalTokens,
+                cacheHitTokens: found.cacheHitTokens + usage.cacheHitTokens,
+                cacheMissTokens: found.cacheMissTokens + usage.cacheMissTokens,
+                reasoningTokens: found.reasoningTokens + usage.reasoningTokens,
+                costUsd: (found.costUsd || 0) + (usage.costUsd || 0) || undefined,
+              }
+            : usage;
+          break;
+        }
+      } catch {
+        // retry
       }
-    } catch {
-      // retry
     }
   }
-  return fallback;
+  if (found && (found.costUsd || 0) > 0) {
+    return found;
+  }
+  if (found && fallback) {
+    return {
+      ...found,
+      costUsd: fallback.costUsd || found.costUsd,
+    };
+  }
+  return found || fallback;
 }

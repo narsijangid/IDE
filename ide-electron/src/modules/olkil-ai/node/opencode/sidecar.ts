@@ -308,17 +308,54 @@ function writeStripGatewayPlugin(homeDir: string): string {
     `export default async function olkilStripGatewayParams() {
   const brand =
     "You are the coding agent inside OLKIL. Product and IDE name is OLKIL. Never say you are OpenCode, Cursor, Cline, ChatGPT, or Claude. If asked who you are, say you are OLKIL's coding agent.";
+  let lastProvider = "";
+  function isCustomProvider(id) {
+    const p = String(id || "");
+    return p && p !== "openrouter" && p !== "deepseek" && p !== "ollama" && p.charAt(0) === "c";
+  }
+  function stripReasoningFields(obj, depth) {
+    if (!obj || typeof obj !== "object" || depth > 8) return;
+    if (Array.isArray(obj)) {
+      for (const item of obj) stripReasoningFields(item, depth + 1);
+      return;
+    }
+    delete obj.reasoning_content;
+    delete obj.reasoning_details;
+    if (obj.providerOptions) stripReasoningFields(obj.providerOptions, depth + 1);
+    if (obj.native) stripReasoningFields(obj.native, depth + 1);
+    if (obj.metadata) stripReasoningFields(obj.metadata, depth + 1);
+    if (obj.openaiCompatible) stripReasoningFields(obj.openaiCompatible, depth + 1);
+  }
   return {
-    "chat.params": async function (_input, output) {
+    "chat.params": async function (input, output) {
+      lastProvider = String((input && input.model && (input.model.providerID || input.model.provider)) || "");
       if (!output || !output.options || typeof output.options !== "object") {
         return;
       }
       delete output.options.textVerbosity;
       delete output.options.verbosity;
       delete output.options.reasoningSummary;
+      if (isCustomProvider(lastProvider)) {
+        delete output.options.reasoning;
+      }
       const text = output.options.text;
       if (text && typeof text === "object" && !Array.isArray(text)) {
         delete text.verbosity;
+      }
+    },
+    "experimental.chat.messages.transform": async function (_input, output) {
+      if (!isCustomProvider(lastProvider) || !output || !Array.isArray(output.messages)) {
+        return;
+      }
+      for (const row of output.messages) {
+        if (Array.isArray(row.parts)) {
+          for (let i = row.parts.length - 1; i >= 0; i--) {
+            const t = String((row.parts[i] && row.parts[i].type) || "");
+            if (t === "reasoning" || t === "redacted_reasoning") row.parts.splice(i, 1);
+          }
+        }
+        stripReasoningFields(row.info, 0);
+        stripReasoningFields(row, 0);
       }
     },
     "permission.ask": async function (input, output) {

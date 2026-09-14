@@ -1,0 +1,187 @@
+{
+  "name": "olkil",
+  "displayName": "OLKIL",
+  "description": "AI-powered code editor for VS Code. Write, understand, debug, refactor, and improve code faster with OLKIL AI.",
+  "version": "1.0.22",
+  "publisher": "OLKIL",
+  "license": "UNLICENSED",
+  "icon": "media/icon.png",
+  "galleryBanner": {
+    "color": "#0A0A0B",
+    "theme": "dark"
+  },
+  "homepage": "https://olkil.com",
+  "bugs": {
+    "url": "https://olkil.com"
+  },
+  "qna": "https://olkil.com",
+  "engines": {
+    "vscode": "^1.96.0"
+  },
+  "categories": [
+    "AI",
+    "Chat",
+    "Machine Learning",
+    "Programming Languages"
+  ],
+  "keywords": [
+    "olkil",
+    "codex alternative",
+    "cursor alternative",
+    "claude code alternative",
+    "ai coding agent",
+    "coding assistant",
+    "ai pair programmer",
+    "powerful ide",
+    "vscode ai",
+    "agent chat",
+    "code editor ai",
+    "autocomplete",
+    "chatgpt",
+    "copilot alternative"
+  ],
+  "activationEvents": [
+    "onStartupFinished"
+  ],
+  "main": "./out/extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "olkil.chat.toggle",
+        "title": "OLKIL: Toggle Chat",
+        "icon": {
+          "light": "media/icon.png",
+          "dark": "media/icon.png"
+        }
+      },
+      {
+        "command": "olkil.chat.new",
+        "title": "New Chat",
+        "category": "OLKIL",
+        "icon": "$(add)"
+      },
+      {
+        "command": "olkil.askSelection",
+        "title": "OLKIL: Ask about Selection"
+      },
+      {
+        "command": "olkil.signIn",
+        "title": "OLKIL: Sign In"
+      },
+      {
+        "command": "olkil.signOut",
+        "title": "Sign out",
+        "category": "OLKIL"
+      },
+      {
+        "command": "olkil.openWebsite",
+        "title": "OLKIL: Open olkil.com"
+      },
+      {
+        "command": "olkil.openDesktop",
+        "title": "OLKIL: Open Desktop App"
+      }
+    ],
+    "keybindings": [
+      {
+        "command": "olkil.chat.toggle",
+        "key": "ctrl+l",
+        "mac": "cmd+l",
+        "when": "editorTextFocus && !terminalFocus"
+      },
+      {
+        "command": "olkil.chat.new",
+        "key": "ctrl+shift+l",
+        "mac": "cmd+shift+l"
+      }
+    ],
+    "menus": {
+      "editor/context": [
+        {
+          "command": "olkil.askSelection",
+          "when": "editorHasSelection",
+          "group": "olkil@1"
+        }
+      ],
+      "commandPalette": [
+        {
+          "command": "olkil.askSelection",
+          "when": "editorHasSelection"
+        }
+      ],
+      "view/title": [
+        {
+          "command": "olkil.chat.new",
+          "when": "view == olkil.sidebar && olkil.signedIn",
+          "group": "navigation@1"
+        },
+        {
+          "command": "olkil.signOut",
+          "when": "view == olkil.sidebar && olkil.signedIn",
+          "group": "navigation@2"
+        }
+      ],
+      "editor/title": [
+        {
+          "command": "olkil.chat.toggle",
+          "group": "navigation",
+          "when": "true"
+        }
+      ],
+      "layoutControl": [
+        {
+          "command": "olkil.chat.toggle",
+          "group": "navigation@0"
+        }
+      ],
+      "commandCenter": [
+        {
+          "command": "olkil.chat.toggle",
+          "group": "navigation@0"
+        }
+      ]
+    },
+    "viewsContainers": {
+      "secondarySidebar": [
+        {
+          "id": "olkil",
+          "title": "OLKIL",
+          "icon": "media/icon.png"
+        }
+      ]
+    },
+    "views": {
+      "olkil": [
+        {
+          "type": "webview",
+          "id": "olkil.sidebar",
+          "name": "OLKIL",
+          "icon": "media/icon.png"
+        }
+      ]
+    },
+    "configuration": {
+      "title": "OLKIL",
+      "properties": {
+        "olkil.authOrigin": {
+          "type": "string",
+          "default": "https://olkil.com",
+          "description": "OLKIL account origin used for sign-in and plan checks."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run compile",
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./",
+    "package": "vsce package --no-dependencies",
+    "publish": "vsce publish --no-dependencies"
+  },
+  "devDependencies": {
+    "@types/node": "^20.11.0",
+    "@types/vscode": "^1.96.0",
+    "@vscode/vsce": "^3.2.1",
+    "typescript": "^5.6.3"
+  }
+}

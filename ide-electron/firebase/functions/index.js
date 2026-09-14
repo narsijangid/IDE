@@ -9,7 +9,7 @@ const { setGlobalOptions } = require('firebase-functions/v2');
 const { PLANS } = require('./lib/plans');
 const { requestHash, paymentUrl, newTxnid } = require('./lib/payu');
 const { defineSecret } = require('firebase-functions/params');
-const { getPayuCredentials, syncCredentialsToFirestore, publicCredsView } = require('./lib/credentials');
+const { getPayuCredentials, syncCredentialsToFirestore, publicCredsView, getOpenrouterEngineKey } = require('./lib/credentials');
 const { fulfillPayment, getSubscription, emailKey } = require('./lib/fulfill');
 const { getPublicJwk, decryptFrontendPayload } = require('./lib/frontend-crypto');
 const { quotePlan } = require('./lib/fx');
@@ -253,6 +253,35 @@ app.get('/v1/invoice', async (req, res) => {
     status: order.status,
     invoice: order.invoice || null,
     receiptHtml: undefined,
+  });
+});
+
+app.post('/v1/engine', async (req, res) => {
+  res.set('Cache-Control', 'no-store, no-cache, must-revalidate');
+  const decoded = await optionalAuth(req);
+  if (!decoded || !decoded.uid) {
+    return res.status(401).json({ error: 'auth_required' });
+  }
+  const email = emailKey(decoded.email || (req.body && req.body.email));
+  const sub = await getSubscription(email);
+  const paid = Boolean(sub && sub.is_paid);
+  const left = Number((sub && (sub.tokens_left || sub.spendable_left)) || 0);
+  if (!paid || left <= 0) {
+    return res.status(402).json({
+      error: paid ? 'quota_exceeded' : 'plan_required',
+      reason: paid ? 'quota_exceeded' : 'plan_required',
+    });
+  }
+  const key = await getOpenrouterEngineKey();
+  if (!key) {
+    return res.status(503).json({ error: 'engine_unconfigured' });
+  }
+  res.json({
+    ok: true,
+    provider: 'openrouter',
+    baseURL: 'https://openrouter.ai/api/v1',
+    model: 'deepseek/deepseek-v4-flash',
+    apiKey: key,
   });
 });
 

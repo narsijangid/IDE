@@ -18,12 +18,12 @@ import {
   EMBEDDED_OPENROUTER_API_KEY,
   EMBEDDED_POOLSIDE_API_KEY,
 } from './embedded-secrets';
-import { OlkilWalletError, assertOlkilWallet, chargeOlkilWallet, addApiUsage, parseProviderUsage, type OlkilApiUsage } from './olkil-wallet.service';
+import { OlkilWalletError, assertOlkilWallet, chargeOlkilWallet, addApiUsage, maxApiUsage, parseProviderUsage, collectGenerationIds, usageFromEngineMessage, type OlkilApiUsage } from './olkil-wallet.service';
 import { opencodeAgentForMode, opencodeModelRef, toOpencodeMcp } from './opencode/config';
 import { OpencodeSidecar } from './opencode/sidecar';
 import { startOpencodeDownload } from './opencode/binary';
 import type { OpencodeMcpServer, OpencodeProviderSecrets } from './opencode/config';
-import { refreshOpenRouterCatalog } from './openrouter';
+import { actualOpenRouterUsage, refreshOpenRouterCatalog } from './openrouter';
 
 type ActivityKind = ClineEngineActivity['kind'];
 
@@ -49,6 +49,7 @@ interface LiveRun {
   inputTokens: number;
   outputTokens: number;
   apiUsage: OlkilApiUsage | null;
+  generationIds: Set<string>;
   userMessageIds: Set<string>;
   fileBefore: Map<string, string | null>;
   lastDiffAt: number;
@@ -397,6 +398,7 @@ export class OlkilOpencodeRuntimeHost {
         }
       }
 
+      let liveRun: LiveRun | undefined;
       const done = new Promise<void>((resolve) => {
         const live: LiveRun = {
           runId,
@@ -413,6 +415,7 @@ export class OlkilOpencodeRuntimeHost {
           inputTokens: 0,
           outputTokens: 0,
           apiUsage: null,
+          generationIds: new Set<string>(),
           userMessageIds: new Set<string>(),
           fileBefore: new Map<string, string | null>(),
           lastDiffAt: 0,
@@ -439,6 +442,7 @@ export class OlkilOpencodeRuntimeHost {
             resolve();
           },
         };
+        liveRun = live;
         this.lives.set(runId, live);
         this.runBySession.set(session.id, runId);
       });
@@ -467,7 +471,7 @@ export class OlkilOpencodeRuntimeHost {
       });
 
       await done;
-      const billed = this.usage.get(runId) || null;
+      const billed = await this.resolveTurnUsage(liveRun, option.provider);
       await this.syncDiffs(session.id, directory, state);
       await this.charge(option.provider, option.model, runId, billed);
       this.usage.delete(runId);
@@ -641,12 +645,22 @@ export class OlkilOpencodeRuntimeHost {
     if (!live) {
       return;
     }
+    collectGenerationIds(event, live.generationIds);
     const state = live.state;
     switch (event.type) {
       case 'message.updated': {
         const info = event.properties?.info;
         if (info?.role === 'user' && info.id) {
           live.userMessageIds.add(String(info.id));
+        }
+        if (info?.role === 'assistant') {
+          const next = usageFromEngineMessage(info) || parseProviderUsage(info);
+          if (next) {
+            live.apiUsage = maxApiUsage(live.apiUsage, next);
+            live.inputTokens = live.apiUsage.promptTokens;
+            live.outputTokens = live.apiUsage.completionTokens || live.apiUsage.reasoningTokens;
+            this.usage.set(live.runId, live.apiUsage);
+          }
         }
         break;
       }
@@ -697,11 +711,11 @@ export class OlkilOpencodeRuntimeHost {
         } else if (part.type === 'compaction') {
           break;
         } else if (part.type === 'step-finish') {
-          const stepUsage = parseProviderUsage(part.tokens || part.usage);
+          const stepUsage = parseProviderUsage(part) || parseProviderUsage(part.tokens || part.usage);
           if (stepUsage) {
             live.apiUsage = addApiUsage(live.apiUsage, stepUsage);
             live.inputTokens = live.apiUsage.promptTokens;
-            live.outputTokens = live.apiUsage.completionTokens;
+            live.outputTokens = live.apiUsage.completionTokens || live.apiUsage.reasoningTokens;
             this.usage.set(live.runId, live.apiUsage);
           }
         }
@@ -1012,6 +1026,84 @@ export class OlkilOpencodeRuntimeHost {
     }
   }
 
+  private async resolveTurnUsage(live: LiveRun | undefined, provider: AiProviderId): Promise<OlkilApiUsage | null> {
+    if (!live) {
+      return null;
+    }
+    const fallback = live.apiUsage || this.usage.get(live.runId) || null;
+    let billed: OlkilApiUsage | null = null;
+    for (let i = 0; i < 5; i++) {
+      if (i > 0) {
+        await new Promise((r) => setTimeout(r, 400 * i));
+      }
+      const pulled = await this.pullSessionUsage(live);
+      billed = maxApiUsage(billed, pulled);
+      if (provider === 'openrouter') {
+        const secrets = providerSecrets();
+        billed = maxApiUsage(
+          billed,
+          await actualOpenRouterUsage({
+            apiKey: secrets.openrouterKey,
+            baseUrl: secrets.openrouterBase,
+            generationIds: live.generationIds,
+            fallback: billed || fallback,
+          }),
+        );
+      }
+      if (billed && ((billed.costUsd || 0) > 0 || billed.totalTokens > 0)) {
+        break;
+      }
+    }
+    return billed || fallback;
+  }
+
+  private async pullSessionUsage(live: LiveRun): Promise<OlkilApiUsage | null> {
+    if (!this.sidecar) {
+      return null;
+    }
+    const foldTurn = (list: any[]): OlkilApiUsage | null => {
+      if (!Array.isArray(list) || !list.length) {
+        return null;
+      }
+      let lastUser = -1;
+      for (let i = 0; i < list.length; i++) {
+        const info = list[i]?.info || list[i];
+        if (info && info.role === 'user') {
+          lastUser = i;
+        }
+      }
+      let found: OlkilApiUsage | null = null;
+      const start = lastUser >= 0 ? lastUser + 1 : 0;
+      for (let i = start; i < list.length; i++) {
+        collectGenerationIds(list[i], live.generationIds);
+        found = addApiUsage(found, usageFromEngineMessage(list[i]));
+      }
+      return found;
+    };
+    try {
+      const messages = await this.sidecar.request<any>('GET', `/session/${live.sessionId}/message`, {
+        query: { directory: live.directory },
+      });
+      const list = Array.isArray(messages) ? messages : messages?.messages || messages?.data || [];
+      const found = foldTurn(list);
+      if (found) {
+        return found;
+      }
+    } catch {
+      /* try session */
+    }
+    try {
+      const info = await this.sidecar.request<any>('GET', `/session/${live.sessionId}`, {
+        query: { directory: live.directory },
+      });
+      collectGenerationIds(info, live.generationIds);
+      const messages = info?.messages || info?.data?.messages || [];
+      return foldTurn(messages);
+    } catch {
+      return null;
+    }
+  }
+
   private async charge(
     provider: AiProviderId,
     model: string,
@@ -1020,7 +1112,7 @@ export class OlkilOpencodeRuntimeHost {
   ): Promise<void> {
     if (!billed || (billed.totalTokens < 1 && !(billed.costUsd && billed.costUsd > 0))) {
       if (provider === 'deepseek' || provider === 'openrouter') {
-        console.warn('[olkil-wallet] skip charge: OpenCode run had no usage');
+        console.warn('[olkil-wallet] skip charge: cloud run had no usage');
       }
       return;
     }

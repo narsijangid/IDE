@@ -203,24 +203,17 @@ function olkil_payu_credentials() {
 	return $cached;
 }
 
-/**
- * Shared cloud-model key. Lives on Hostinger only (engine-secrets.php / option / env).
- * Never commit the value. CLI fetches it after a paid-plan login.
- *
- * @return string
- */
-function olkil_payu_engine_key() {
+function olkil_payu_engine_secret( $keys ) {
 	olkil_payu_load_dotenv();
-
-	if ( defined( 'OLKIL_DEEPSEEK_API_KEY' ) && OLKIL_DEEPSEEK_API_KEY ) {
-		return trim( (string) OLKIL_DEEPSEEK_API_KEY );
+	foreach ( $keys as $key ) {
+		if ( defined( $key ) && constant( $key ) ) {
+			return trim( (string) constant( $key ) );
+		}
+		$env = getenv( $key );
+		if ( $env ) {
+			return trim( (string) $env );
+		}
 	}
-
-	$env = getenv( 'DEEPSEEK_API_KEY' ) ?: getenv( 'OLKIL_DEEPSEEK_API_KEY' );
-	if ( $env ) {
-		return trim( (string) $env );
-	}
-
 	foreach ( array( 'engine-secrets.php', 'secrets.php' ) as $name ) {
 		$file = OLKIL_PAYU_CHECKOUT_DIR . $name;
 		if ( ! file_exists( $file ) || ! is_readable( $file ) ) {
@@ -230,14 +223,69 @@ function olkil_payu_engine_key() {
 		if ( ! is_array( $s ) ) {
 			continue;
 		}
-		foreach ( array( 'deepseek_key', 'DEEPSEEK_API_KEY', 'engine_key' ) as $k ) {
+		foreach ( $keys as $k ) {
+			$lower = strtolower( $k );
+			if ( ! empty( $s[ $k ] ) ) {
+				return trim( (string) $s[ $k ] );
+			}
+			if ( ! empty( $s[ $lower ] ) ) {
+				return trim( (string) $s[ $lower ] );
+			}
+		}
+	}
+	return '';
+}
+
+/**
+ * Shared cloud-model key. Lives on Hostinger only (engine-secrets.php / option / env).
+ * Never commit the value. CLI fetches it after a paid-plan login.
+ *
+ * @return string
+ */
+function olkil_payu_engine_key() {
+	$from_file = olkil_payu_engine_secret( array( 'OLKIL_DEEPSEEK_API_KEY', 'DEEPSEEK_API_KEY' ) );
+	if ( $from_file ) {
+		return $from_file;
+	}
+	foreach ( array( 'engine-secrets.php', 'secrets.php' ) as $name ) {
+		$file = OLKIL_PAYU_CHECKOUT_DIR . $name;
+		if ( ! file_exists( $file ) || ! is_readable( $file ) ) {
+			continue;
+		}
+		$s = include $file;
+		if ( ! is_array( $s ) ) {
+			continue;
+		}
+		foreach ( array( 'deepseek_key', 'engine_key' ) as $k ) {
 			if ( ! empty( $s[ $k ] ) ) {
 				return trim( (string) $s[ $k ] );
 			}
 		}
 	}
-
 	return trim( (string) get_option( 'olkil_deepseek_api_key', '' ) );
+}
+
+function olkil_payu_openrouter_engine_key() {
+	$from_file = olkil_payu_engine_secret( array( 'OLKIL_OPENROUTER_API_KEY', 'OPENROUTER_API_KEY' ) );
+	if ( $from_file ) {
+		return $from_file;
+	}
+	foreach ( array( 'engine-secrets.php', 'secrets.php' ) as $name ) {
+		$file = OLKIL_PAYU_CHECKOUT_DIR . $name;
+		if ( ! file_exists( $file ) || ! is_readable( $file ) ) {
+			continue;
+		}
+		$s = include $file;
+		if ( ! is_array( $s ) ) {
+			continue;
+		}
+		foreach ( array( 'openrouter_key', 'OPENROUTER_API_KEY' ) as $k ) {
+			if ( ! empty( $s[ $k ] ) ) {
+				return trim( (string) $s[ $k ] );
+			}
+		}
+	}
+	return trim( (string) get_option( 'olkil_openrouter_api_key', '' ) );
 }
 
 function olkil_payu_import_engine_secrets() {
@@ -272,20 +320,29 @@ function olkil_payu_rest_engine( WP_REST_Request $request ) {
 		);
 	}
 
-	$key = olkil_payu_engine_key();
+	$or  = olkil_payu_openrouter_engine_key();
+	$key = $or ? $or : olkil_payu_engine_key();
 	if ( '' === $key ) {
 		return new WP_Error( 'engine_unconfigured', 'engine_unconfigured', array( 'status' => 503 ) );
 	}
 
-	$response = new WP_REST_Response(
-		array(
+	$payload = $or
+		? array(
+			'ok'       => true,
+			'provider' => 'openrouter',
+			'baseURL'  => 'https://openrouter.ai/api/v1',
+			'model'    => 'deepseek/deepseek-v4-flash',
+			'apiKey'   => $key,
+		)
+		: array(
 			'ok'       => true,
 			'provider' => 'deepseek',
 			'baseURL'  => 'https://api.deepseek.com/v1',
+			'model'    => 'deepseek-v4-flash',
 			'apiKey'   => $key,
-		),
-		200
-	);
+		);
+
+	$response = new WP_REST_Response( $payload, 200 );
 	$response->header( 'Cache-Control', 'no-store, no-cache, must-revalidate, max-age=0' );
 	$response->header( 'X-LiteSpeed-Cache-Control', 'no-cache' );
 	$response->header( 'Pragma', 'no-cache' );

@@ -142,7 +142,12 @@ export function estimateOlkilCostUsd(model: string, usage: OlkilApiUsage | null)
   if (usage?.costUsd && usage.costUsd > 0) {
     return usage.costUsd;
   }
-  if (!usage || usage.totalTokens < 1) {
+  if (!usage) {
+    return 0;
+  }
+  const billedOut = usage.completionTokens > 0 ? usage.completionTokens : usage.reasoningTokens;
+  const total = usage.totalTokens > 0 ? usage.totalTokens : usage.promptTokens + billedOut;
+  if (total < 1) {
     return 0;
   }
   const slug = String(model || '')
@@ -151,18 +156,17 @@ export function estimateOlkilCostUsd(model: string, usage: OlkilApiUsage | null)
     .toLowerCase();
   const prices =
     MODEL_USD_PER_MILLION[slug] ||
-    Object.entries(MODEL_USD_PER_MILLION).find(([id]) => slug && id.includes(slug))?.[1] ||
+    Object.entries(MODEL_USD_PER_MILLION).find(([id]) => slug && (id.includes(slug) || slug.includes(id)))?.[1] ||
     ([2, 10, 0.2] as [number, number, number]);
   const hit = usage.cacheHitTokens;
   const miss = usage.cacheMissTokens > 0 ? usage.cacheMissTokens : Math.max(0, usage.promptTokens - hit);
-  const usd = (miss / 1_000_000) * prices[0] + (hit / 1_000_000) * prices[2] + (usage.completionTokens / 1_000_000) * prices[1];
+  const usd = (miss / 1_000_000) * prices[0] + (hit / 1_000_000) * prices[2] + (billedOut / 1_000_000) * prices[1];
   return Math.min(8, Math.max(0, usd));
 }
 
 /**
- * Parse DeepSeek / OpenAI-compatible `usage` (and OpenCode step token objects).
- * Never estimates from text. Reasoning is not added on top of completion —
- * DeepSeek already includes it in `completion_tokens`.
+ * Parse provider / sidecar usage. Prefer native `cost` when present.
+ * Reasoning-only blobs (GPT Astra etc.) still count if completion is 0.
  */
 export function parseProviderUsage(raw: unknown): OlkilApiUsage | null {
   if (!raw || typeof raw !== 'object') {
@@ -170,12 +174,21 @@ export function parseProviderUsage(raw: unknown): OlkilApiUsage | null {
   }
   const u = raw as Record<string, any>;
   const nested = u.usage && typeof u.usage === 'object' ? u.usage : {};
-  const details = u.completion_tokens_details && typeof u.completion_tokens_details === 'object'
-    ? u.completion_tokens_details
-    : {};
-  const cache = u.cache && typeof u.cache === 'object' ? u.cache : {};
+  const tokens = u.tokens && typeof u.tokens === 'object' ? u.tokens : u;
+  const details =
+    (nested.completion_tokens_details && typeof nested.completion_tokens_details === 'object'
+      ? nested.completion_tokens_details
+      : u.completion_tokens_details) || {};
+  const cache = (tokens.cache && typeof tokens.cache === 'object' ? tokens.cache : u.cache) || {};
   const costUsd = costNum(
-    u.total_cost ?? u.totalCost ?? u.cost ?? nested.cost ?? nested.total_cost ?? nested.cost_usd,
+    u.total_cost ??
+      u.totalCost ??
+      u.cost_usd ??
+      u.cost ??
+      nested.total_cost ??
+      nested.cost ??
+      nested.cost_usd ??
+      tokens.cost,
   );
 
   let promptTokens = num(
@@ -183,31 +196,37 @@ export function parseProviderUsage(raw: unknown): OlkilApiUsage | null {
       u.tokens_prompt ??
       u.prompt_tokens ??
       u.promptTokens ??
-      u.input ??
-      nested.prompt_tokens,
+      nested.prompt_tokens ??
+      tokens.input ??
+      tokens.prompt ??
+      u.input,
   );
   const completionTokens = num(
     u.native_tokens_completion ??
       u.tokens_completion ??
       u.completion_tokens ??
       u.completionTokens ??
-      u.output ??
-      nested.completion_tokens,
+      nested.completion_tokens ??
+      tokens.output ??
+      tokens.completion ??
+      u.output,
   );
   const cacheHitTokens = num(
-    u.prompt_cache_hit_tokens ??
-      u.prompt_tokens_details?.cached_tokens ??
+    u.native_tokens_cached ??
+      u.prompt_cache_hit_tokens ??
+      nested.prompt_tokens_details?.cached_tokens ??
       cache.read,
   );
-  let cacheMissTokens = num(u.prompt_cache_miss_tokens);
+  let cacheMissTokens = num(u.prompt_cache_miss_tokens ?? cache.write);
   const reasoningTokens = num(
     details.reasoning_tokens ??
       u.native_tokens_reasoning ??
       u.reasoning_tokens ??
+      tokens.reasoning ??
+      nested.completion_tokens_details?.reasoning_tokens ??
       u.reasoning,
   );
 
-  // OpenCode often stores uncached input separately from cache.read.
   if (cacheHitTokens > 0 && promptTokens > 0 && promptTokens < cacheHitTokens) {
     promptTokens += cacheHitTokens;
   }
@@ -217,16 +236,16 @@ export function parseProviderUsage(raw: unknown): OlkilApiUsage | null {
     cacheMissTokens = promptTokens;
   }
 
-  const reportedTotal = num(u.total_tokens ?? u.total ?? nested.total_tokens);
-  const summed = promptTokens + completionTokens;
-  const totalTokens = summed > 0 ? summed : reportedTotal;
-  if (totalTokens < 1 && !(costUsd > 0)) {
+  const billedOut = completionTokens > 0 ? completionTokens : reasoningTokens;
+  const reportedTotal = num(u.total_tokens ?? u.native_tokens_total ?? u.total ?? nested.total_tokens ?? tokens.total);
+  const totalTokens = reportedTotal || promptTokens + billedOut;
+  if (totalTokens < 1 && billedOut < 1 && promptTokens < 1 && !(costUsd > 0)) {
     return null;
   }
   return {
     promptTokens,
     completionTokens,
-    totalTokens,
+    totalTokens: totalTokens || promptTokens + billedOut,
     cacheHitTokens,
     cacheMissTokens,
     reasoningTokens,
@@ -250,6 +269,98 @@ export function addApiUsage(a: OlkilApiUsage | null, b: OlkilApiUsage | null): O
     reasoningTokens: a.reasoningTokens + b.reasoningTokens,
     costUsd: (a.costUsd || 0) + (b.costUsd || 0) || undefined,
   };
+}
+
+/** Same turn, different sources — keep the richer numbers. */
+export function maxApiUsage(a: OlkilApiUsage | null, b: OlkilApiUsage | null): OlkilApiUsage | null {
+  if (!a) {
+    return b;
+  }
+  if (!b) {
+    return a;
+  }
+  return {
+    promptTokens: Math.max(a.promptTokens, b.promptTokens),
+    completionTokens: Math.max(a.completionTokens, b.completionTokens),
+    totalTokens: Math.max(a.totalTokens, b.totalTokens),
+    cacheHitTokens: Math.max(a.cacheHitTokens, b.cacheHitTokens),
+    cacheMissTokens: Math.max(a.cacheMissTokens, b.cacheMissTokens),
+    reasoningTokens: Math.max(a.reasoningTokens, b.reasoningTokens),
+    costUsd: Math.max(a.costUsd || 0, b.costUsd || 0) || undefined,
+  };
+}
+
+export function collectGenerationIds(raw: unknown, into = new Set<string>()): Set<string> {
+  const walk = (value: unknown, depth: number) => {
+    if (depth > 8 || value == null) {
+      return;
+    }
+    if (typeof value === 'string') {
+      if (/^gen[-_][a-z0-9]/i.test(value)) {
+        into.add(value);
+      }
+      return;
+    }
+    if (Array.isArray(value)) {
+      for (const item of value) {
+        walk(item, depth + 1);
+      }
+      return;
+    }
+    if (typeof value !== 'object') {
+      return;
+    }
+    const o = value as Record<string, unknown>;
+    for (const key of ['generationId', 'generationID', 'generation_id', 'id']) {
+      const s = o[key];
+      if (typeof s === 'string' && /^gen[-_][a-z0-9]/i.test(s)) {
+        into.add(s);
+      }
+    }
+    walk(o.providerMetadata, depth + 1);
+    walk(o.metadata, depth + 1);
+    walk(o.info, depth + 1);
+    walk(o.tokens, depth + 1);
+    walk(o.usage, depth + 1);
+    walk(o.parts, depth + 1);
+    walk(o.part, depth + 1);
+  };
+  walk(raw, 0);
+  return into;
+}
+
+/** Sidecar message: `cost` on the parent, counts on `tokens`. */
+export function usageFromEngineMessage(row: unknown): OlkilApiUsage | null {
+  if (!row || typeof row !== 'object') {
+    return null;
+  }
+  const rec = row as Record<string, any>;
+  const info = rec.info && typeof rec.info === 'object' ? rec.info : rec;
+  if (info.role && info.role !== 'assistant') {
+    return null;
+  }
+  let found = maxApiUsage(parseProviderUsage(info), parseProviderUsage(info.tokens || info.usage));
+  if (info.tokens && typeof info.tokens === 'object') {
+    found = maxApiUsage(found, parseProviderUsage({ ...info.tokens, cost: info.cost, total_cost: info.cost }));
+  }
+  let steps: OlkilApiUsage | null = null;
+  for (const part of rec.parts || info.parts || []) {
+    if (!part || typeof part !== 'object') {
+      continue;
+    }
+    const t = String(part.type || '');
+    if (t !== 'step-finish' && t !== 'step_finish') {
+      continue;
+    }
+    steps = addApiUsage(steps, parseProviderUsage(part) || parseProviderUsage(part.tokens || part.usage));
+  }
+  if (found && (found.totalTokens > 0 || (found.costUsd || 0) > 0)) {
+    return {
+      ...found,
+      costUsd: Math.max(found.costUsd || 0, steps?.costUsd || 0) || found.costUsd,
+    };
+  }
+  return steps || found;
 }
 
 function parseJsonObject(text: string): Record<string, unknown> | null {
@@ -674,9 +785,14 @@ export async function chargeOlkilWallet(opts: {
 }): Promise<boolean> {
   const usage = opts.usage || null;
   const inputTokens = usage && usage.promptTokens > 0 ? usage.promptTokens : Math.max(0, Math.floor(opts.inputTokens));
-  const outputTokens = usage && usage.completionTokens > 0 ? usage.completionTokens : Math.max(0, Math.floor(opts.outputTokens));
+  const outputTokens =
+    usage && usage.completionTokens > 0
+      ? usage.completionTokens
+      : usage && usage.reasoningTokens > 0
+        ? usage.reasoningTokens
+        : Math.max(0, Math.floor(opts.outputTokens));
   const tokens = usage && usage.totalTokens > 0 ? usage.totalTokens : inputTokens + outputTokens;
-  const costUsd = estimateOlkilCostUsd(opts.model, usage && usage.totalTokens > 0 ? usage : {
+  const costUsd = estimateOlkilCostUsd(opts.model, {
     promptTokens: inputTokens,
     completionTokens: outputTokens,
     totalTokens: tokens,

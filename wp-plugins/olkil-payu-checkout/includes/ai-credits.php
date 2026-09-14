@@ -13,9 +13,9 @@ if ( ! defined( 'ABSPATH' ) ) {
 	exit;
 }
 
-/** Platform share of the payment (basis points). 1500 = 15%. */
+/** Platform share of the payment (basis points). 2500 = 25%. User wallet = 75%. */
 function olkil_payu_platform_fee_bps() {
-	return 1500;
+	return 2500;
 }
 
 function olkil_payu_usd_micros() {
@@ -66,9 +66,18 @@ function olkil_payu_legacy_token_budgets() {
 	return array( 100000000, 350000000, 1000000000, 2000000000 );
 }
 
-/** Prior 25%-fee credit totals — remap onto 15% fee keeping % used. */
+/** Prior fee credit totals — remap onto the current 25% fee, keeping % used. */
 function olkil_payu_previous_credit_budgets() {
-	return array( 2250000, 7500000, 15000000, 36750000 );
+	return array(
+		2250000,
+		7500000,
+		15000000,
+		36750000,
+		2550000,
+		8500000,
+		17000000,
+		41650000,
+	);
 }
 
 /**
