@@ -7,7 +7,7 @@ import {
   IOlkilChatService,
   IOlkilChatUiService,
 } from '../common';
-import { OlkilAiChatView } from './chat.view';
+import { ExtensionChatHost } from './extension-chat-host';
 import { useLiveStatusLabel, useWorkspaceRoot } from './live-status-rotator';
 import {
   AiSparkIcon,
@@ -413,7 +413,7 @@ export const OlkilAiOverlay = () => {
           </header>
 
           <div className={styles.panelBody}>
-            <OlkilAiChatView dormant={!open} />
+            <ExtensionChatHost />
           </div>
         </section>
       ) : null}

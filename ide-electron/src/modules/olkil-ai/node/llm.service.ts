@@ -1,8 +1,57 @@
+import { spawn, type ChildProcess } from 'child_process';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
-import { spawn } from 'child_process';
 import { Injectable } from '@opensumi/di';
+
+/** Holds a Windows display+system awake request until the process is killed. */
+const AWAKE_SCRIPT = `
+Add-Type -TypeDefinition @"
+using System.Runtime.InteropServices;
+public static class OlkilAwake {
+  [DllImport("kernel32.dll")]
+  public static extern uint SetThreadExecutionState(uint esFlags);
+}
+"@
+[OlkilAwake]::SetThreadExecutionState([uint32]2147483651) | Out-Null
+while ($true) { Start-Sleep -Seconds 3600 }
+`;
+
+let awakeChild: ChildProcess | null = null;
+
+function setWindowsKeepAwake(on: boolean): Promise<boolean> {
+  if (!on) {
+    const child = awakeChild;
+    awakeChild = null;
+    if (child && !child.killed) {
+      try {
+        child.kill();
+      } catch {
+        /* already gone */
+      }
+    }
+    return Promise.resolve(false);
+  }
+  if (process.platform !== 'win32') return Promise.resolve(false);
+  if (awakeChild && awakeChild.exitCode == null && !awakeChild.killed) return Promise.resolve(true);
+  const encoded = Buffer.from(AWAKE_SCRIPT, 'utf16le').toString('base64');
+  const child = spawn(
+    'powershell.exe',
+    ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-EncodedCommand', encoded],
+    { windowsHide: true, stdio: 'ignore' },
+  );
+  awakeChild = child;
+  child.on('exit', () => {
+    if (awakeChild === child) awakeChild = null;
+  });
+  return new Promise((resolve) => {
+    const timer = setTimeout(() => resolve(awakeChild === child && child.exitCode == null), 1200);
+    child.once('exit', () => {
+      clearTimeout(timer);
+      resolve(false);
+    });
+  });
+}
 import fetch from 'node-fetch';
 import {
   ChatCompletionRequest,
@@ -28,12 +77,8 @@ import { lastUserText, routeOpenRouterModel } from '../common/auto-router';
 import { AGENT_TOOLS, selectAgentTools, stripLocalThinkTags } from '../common/tools';
 import { getSharedRepositoryIndex } from './repository-index.service';
 import { ripgrepSearch } from './ripgrep';
-import {
-  EMBEDDED_DEEPSEEK_API_KEY,
-  EMBEDDED_ENV,
-  EMBEDDED_OPENROUTER_API_KEY,
-  EMBEDDED_POOLSIDE_API_KEY,
-} from './embedded-secrets';
+import { EMBEDDED_ENV } from './embedded-secrets';
+import { cachedBroker, ensureOpenRouterBroker } from './broker-creds';
 import { CommandRunner } from './command-runner';
 import { getOlkilAgentRuntime } from './agent-runtime';
 import type { ClineEngineRunRequest, ClineEngineRunState } from '../common';
@@ -46,7 +91,6 @@ import {
 } from './olkil-wallet.service';
 import {
   actualOpenRouterUsage,
-  DEFAULT_OPENROUTER_BASE,
   openRouterHeaders,
   refreshOpenRouterCatalog,
 } from './openrouter';
@@ -282,6 +326,9 @@ function loadDotEnv(): Record<string, string> {
       // try next
     }
   }
+  delete out.OPENROUTER_API_KEY;
+  delete out.DEEPSEEK_API_KEY;
+  delete out.POOLSIDE_API_KEY;
   return out;
 }
 
@@ -532,28 +579,13 @@ export class OlkilAiNodeService implements IOlkilAiNodeService {
     if (provider === 'ollama') {
       return process.env.OLLAMA_API_KEY || this.env.OLLAMA_API_KEY || 'ollama';
     }
-    if (provider === 'deepseek') {
-      return (
-        process.env.DEEPSEEK_API_KEY ||
-        this.env.DEEPSEEK_API_KEY ||
-        EMBEDDED_DEEPSEEK_API_KEY ||
-        ''
-      ).trim();
+    if (provider === 'deepseek' || provider === 'poolside') {
+      return '';
     }
     if (provider === 'openrouter') {
-      return (
-        process.env.OPENROUTER_API_KEY ||
-        this.env.OPENROUTER_API_KEY ||
-        EMBEDDED_OPENROUTER_API_KEY ||
-        ''
-      ).trim();
+      return cachedBroker()?.apiKey || '';
     }
-    return (
-      process.env.POOLSIDE_API_KEY ||
-      this.env.POOLSIDE_API_KEY ||
-      EMBEDDED_POOLSIDE_API_KEY ||
-      ''
-    );
+    return '';
   }
 
   private get ollamaBase(): string {
@@ -571,11 +603,10 @@ export class OlkilAiNodeService implements IOlkilAiNodeService {
   }
 
   private get openrouterBase(): string {
-    const raw =
-      process.env.OPENROUTER_BASE_URL ||
-      this.env.OPENROUTER_BASE_URL ||
-      DEFAULT_OPENROUTER_BASE;
-    return raw.replace(/\/$/, '');
+    return (
+      cachedBroker()?.baseURL ||
+      `${(process.env.OLKIL_BILLING_URL || 'https://olkil.com').replace(/\/$/, '')}/wp-json/olkil-payu/v1/broker/v1`
+    );
   }
 
   private chatCompletionsUrl(provider: AiProviderId, modelId?: string): string {
@@ -992,6 +1023,7 @@ export class OlkilAiNodeService implements IOlkilAiNodeService {
   }
 
   async listModels() {
+    await ensureOpenRouterBroker();
     const key = this.getKey('openrouter');
     if (key) {
       await refreshOpenRouterCatalog(key, this.openrouterBase);
@@ -1100,6 +1132,9 @@ export class OlkilAiNodeService implements IOlkilAiNodeService {
     });
     const option = findModel(routedId);
     await assertOlkilWallet(option.provider);
+    if (option.provider === 'openrouter') {
+      await ensureOpenRouterBroker();
+    }
     const apiKey = this.getKey(option.provider, option.id);
 
     if (option.provider === 'ollama') {
@@ -1126,7 +1161,7 @@ export class OlkilAiNodeService implements IOlkilAiNodeService {
       throw new Error(
         option.provider === 'custom'
           ? 'This custom model has no API key. Open Settings → Models and add one.'
-          : 'This model is not configured in this OLKIL build. Reinstall the latest app from olkil.com.',
+          : 'Sign in to OLKIL to use cloud models.',
       );
     }
 
@@ -1321,6 +1356,7 @@ export class OlkilAiNodeService implements IOlkilAiNodeService {
   ): Promise<void> {
     let usage = parseProviderUsage(result.usage);
     if (option.provider === 'openrouter') {
+      await ensureOpenRouterBroker();
       const actual = await actualOpenRouterUsage({
         apiKey: this.getKey('openrouter'),
         baseUrl: this.openrouterBase,
@@ -1518,5 +1554,9 @@ export class OlkilAiNodeService implements IOlkilAiNodeService {
       }
     }
     return msg;
+  }
+
+  async setKeepAwake(on: boolean): Promise<boolean> {
+    return setWindowsKeepAwake(on);
   }
 }

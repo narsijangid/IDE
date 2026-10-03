@@ -12,7 +12,7 @@ if ( ! defined( 'ABSPATH' ) ) {
 
 define( 'OLKIL_VERSION', '1.6.2' );
 /** Desktop installer version (matches ide-electron/product.json). */
-define( 'OLKIL_APP_VERSION', '1.3.27' ); // release 1.3.27
+define( 'OLKIL_APP_VERSION', '1.3.28' ); // release 1.3.28
 define( 'OLKIL_DIR', trailingslashit( get_template_directory() ) );
 define( 'OLKIL_URI', trailingslashit( get_template_directory_uri() ) );
 
@@ -322,7 +322,7 @@ function olkil_product_catalog() {
 				array(
 					'icon'  => '✦',
 					'title' => __( 'Clear plans', 'olkil' ),
-					'desc'  => __( 'Lite $3, Pro $10, Ultra $49 / month. Prices in USD. Cancel anytime.', 'olkil' ),
+					'desc'  => __( 'Free includes 30,000 tokens. Lite $10, Pro $20, Ultra $100 / month. Prices in USD. Cancel anytime.', 'olkil' ),
 				),
 				array(
 					'icon'  => '◎',

@@ -275,7 +275,7 @@ add_action( 'init', 'olkil_payu_sync_footer', 6 );
  * Keep long articles visible (from earlier reveal bug).
  */
 function olkil_payu_visibility_css() {
-	echo '<style id="olkil-payu-visibility">.olkil-article.olkil-reveal,.olkil-article,.olkil-article .entry-content{opacity:1!important;transform:none!important;visibility:visible!important}</style>';
+	echo '<style id="olkil-payu-visibility">.olkil-article.olkil-reveal,.olkil-article,.olkil-article .entry-content,.olkil-post.olkil-reveal,.olkil-post,.olkil-posts .olkil-post{opacity:1!important;transform:none!important;visibility:visible!important}</style>';
 }
 add_action( 'wp_head', 'olkil_payu_visibility_css', 99 );
 

@@ -2,7 +2,7 @@
 /**
  * Plugin Name: OLKIL PayU Checkout
  * Description: Professional PayU checkout — Firebase-held KEY/SALT, webhook, invoices, receipts, email.
- * Version: 2.7.3
+ * Version: 2.8.0
  * Author: OLKIL
  */
 
@@ -10,7 +10,7 @@ if ( ! defined( 'ABSPATH' ) ) {
 	exit;
 }
 
-define( 'OLKIL_PAYU_CHECKOUT_VERSION', '2.7.3' );
+define( 'OLKIL_PAYU_CHECKOUT_VERSION', '2.8.0' );
 define( 'OLKIL_PAYU_CHECKOUT_DIR', plugin_dir_path( __FILE__ ) );
 define( 'OLKIL_PAYU_CHECKOUT_URL', plugin_dir_url( __FILE__ ) );
 
@@ -22,6 +22,7 @@ require_once OLKIL_PAYU_CHECKOUT_DIR . 'includes/invoice.php';
 require_once OLKIL_PAYU_CHECKOUT_DIR . 'includes/mail.php';
 require_once OLKIL_PAYU_CHECKOUT_DIR . 'includes/fulfill.php';
 require_once OLKIL_PAYU_CHECKOUT_DIR . 'includes/fx.php';
+require_once OLKIL_PAYU_CHECKOUT_DIR . 'includes/broker.php';
 
 add_action( 'olkil_payu_expire_plans', 'olkil_payu_cron_expire_plans' );
 add_action( 'init', 'olkil_payu_schedule_expiry_cron', 20 );
@@ -103,7 +104,8 @@ function olkil_payu_load_dotenv() {
 
 /**
  * Plans catalog. Website prices are USD; PayU charges the country equivalent
- * (India: INR 287 / 957 / 4692). International cards use local currency via PayU.
+ * (India: INR 957 / 1914 / 9570). International cards use local currency via PayU.
+ * Included model usage is 75% of the price, spent at each model's OpenRouter rate.
  *
  * @return array<string, array{name:string,amount:string,usd:string,tokens:string}>
  */
@@ -111,21 +113,21 @@ function olkil_payu_plans() {
 	return array(
 		'lite'  => array(
 			'name'   => 'OLKIL Lite',
-			'amount' => '287.00',
-			'usd'    => '3',
-			'tokens' => 'Cloud agent & frontier models',
+			'amount' => '957.00',
+			'usd'    => '10',
+			'tokens' => 'Cloud agent and frontier models',
 		),
 		'pro'   => array(
 			'name'   => 'OLKIL Pro',
-			'amount' => '957.00',
-			'usd'    => '10',
-			'tokens' => 'Extended Agent limits',
+			'amount' => '1914.00',
+			'usd'    => '20',
+			'tokens' => 'Extended limits on Agent',
 		),
 		'ultra' => array(
 			'name'   => 'OLKIL Ultra',
-			'amount' => '4692.00',
-			'usd'    => '49',
-			'tokens' => 'Parallel agents & priority',
+			'amount' => '9570.00',
+			'usd'    => '100',
+			'tokens' => 'Parallel agents and priority',
 		),
 	);
 }
@@ -194,6 +196,22 @@ function olkil_payu_credentials() {
 	}
 
 	$mode = ( 'test' === strtolower( $mode ) ) ? 'test' : 'live';
+
+	/*
+	 * Production olkil.com was stuck in WP option mode=test while using the
+	 * live merchant key → PayU test.payu.in returns
+	 * "Pardon, Some Problem Occurred". Force live unless explicitly overridden.
+	 */
+	$force_test = (string) ( getenv( 'OLKIL_PAYU_FORCE_TEST' ) ?: ( defined( 'OLKIL_PAYU_FORCE_TEST' ) ? OLKIL_PAYU_FORCE_TEST : '' ) );
+	$host       = (string) wp_parse_url( home_url(), PHP_URL_HOST );
+	if (
+		'test' === $mode
+		&& $host
+		&& preg_match( '/(^|\.)olkil\.com$/i', $host )
+		&& ! in_array( strtolower( $force_test ), array( '1', 'true', 'yes' ), true )
+	) {
+		$mode = 'live';
+	}
 
 	$cached = array(
 		'key'  => $key,
@@ -299,7 +317,7 @@ function olkil_payu_import_engine_secrets() {
 }
 
 /**
- * Paid CLI / desktop session: return the shared pool key. Never log it.
+ * Paid session: broker URL plus a short-lived grant. Never the provider key.
  *
  * @param WP_REST_Request $request Request.
  * @return WP_REST_Response|WP_Error
@@ -310,43 +328,75 @@ function olkil_payu_rest_engine( WP_REST_Request $request ) {
 		return $email;
 	}
 
-	$quota = olkil_payu_check_quota( $email );
-	if ( empty( $quota['allowed'] ) && empty( $quota['cloud_allowed'] ) ) {
-		$code = ( 'quota_exceeded' === ( $quota['reason'] ?? '' ) ) ? 402 : 403;
-		return new WP_Error(
-			(string) ( $quota['reason'] ?? 'plan_required' ),
-			(string) ( $quota['message'] ?? 'plan_required' ),
-			array( 'status' => $code )
-		);
+	$allowed = olkil_broker_allow( $email );
+	if ( is_wp_error( $allowed ) ) {
+		return $allowed;
 	}
-
-	$or  = olkil_payu_openrouter_engine_key();
-	$key = $or ? $or : olkil_payu_engine_key();
-	if ( '' === $key ) {
+	if ( '' === olkil_broker_openrouter_key() ) {
+		return new WP_Error( 'engine_unconfigured', 'engine_unconfigured', array( 'status' => 503 ) );
+	}
+	$grant = olkil_broker_issue_grant( $email );
+	if ( '' === $grant || str_starts_with( $grant, 'sk-' ) ) {
 		return new WP_Error( 'engine_unconfigured', 'engine_unconfigured', array( 'status' => 503 ) );
 	}
 
-	$payload = $or
-		? array(
-			'ok'       => true,
-			'provider' => 'openrouter',
-			'baseURL'  => 'https://openrouter.ai/api/v1',
-			'model'    => 'deepseek/deepseek-v4-flash',
-			'apiKey'   => $key,
-		)
-		: array(
-			'ok'       => true,
-			'provider' => 'deepseek',
-			'baseURL'  => 'https://api.deepseek.com/v1',
-			'model'    => 'deepseek-v4-flash',
-			'apiKey'   => $key,
-		);
-
+	$payload  = array(
+		'ok'       => true,
+		'provider' => 'openrouter',
+		'baseURL'  => olkil_broker_base_url(),
+		'model'    => 'deepseek/deepseek-v4-flash',
+		'apiKey'   => $grant,
+	);
 	$response = new WP_REST_Response( $payload, 200 );
 	$response->header( 'Cache-Control', 'no-store, no-cache, must-revalidate, max-age=0' );
 	$response->header( 'X-LiteSpeed-Cache-Control', 'no-cache' );
 	$response->header( 'Pragma', 'no-cache' );
 	return $response;
+}
+
+/**
+ * PayU hosted checkout only accepts a fixed set of fields. Extra keys like
+ * currency / transactionCurrency / country (added for DCC experiments) make
+ * live/test gateways return "Pardon, Some Problem Occurred".
+ *
+ * @param array<string,mixed> $params Raw params (may include hash).
+ * @return array<string,string>
+ */
+function olkil_payu_sanitize_hosted_params( array $params ) {
+	$allowed = array(
+		'key',
+		'txnid',
+		'amount',
+		'productinfo',
+		'firstname',
+		'email',
+		'phone',
+		'surl',
+		'furl',
+		'notifyurl',
+		'udf1',
+		'udf2',
+		'udf3',
+		'udf4',
+		'udf5',
+		'hash',
+		'service_provider',
+	);
+	$out = array();
+	foreach ( $allowed as $key ) {
+		if ( ! array_key_exists( $key, $params ) ) {
+			continue;
+		}
+		$out[ $key ] = is_scalar( $params[ $key ] ) ? (string) $params[ $key ] : '';
+	}
+	if ( empty( $out['service_provider'] ) ) {
+		$out['service_provider'] = 'payu_paisa';
+	}
+	// Amount must be decimal with 2 places for PayU hash stability.
+	if ( isset( $out['amount'] ) && is_numeric( $out['amount'] ) ) {
+		$out['amount'] = number_format( (float) $out['amount'], 2, '.', '' );
+	}
+	return $out;
 }
 
 function olkil_payu_payment_url() {
@@ -724,6 +774,16 @@ function olkil_payu_register_routes() {
 			'permission_callback' => '__return_true',
 		)
 	);
+	// New path so LiteSpeed cannot keep serving a previously cached nonce blob.
+	register_rest_route(
+		'olkil-payu/v1',
+		'/checkout-boot',
+		array(
+			'methods'             => 'GET',
+			'callback'            => 'olkil_payu_rest_checkout_nonce',
+			'permission_callback' => '__return_true',
+		)
+	);
 	register_rest_route(
 		'olkil-payu/v1',
 		'/engine',
@@ -733,26 +793,117 @@ function olkil_payu_register_routes() {
 			'permission_callback' => '__return_true',
 		)
 	);
+	register_rest_route(
+		'olkil-payu/v1',
+		'/broker/v1/(?P<path>.*)',
+		array(
+			'methods'             => array( 'GET', 'POST' ),
+			'callback'            => 'olkil_broker_proxy',
+			'permission_callback' => '__return_true',
+		)
+	);
 }
 add_action( 'rest_api_init', 'olkil_payu_register_routes' );
 
 /**
- * Fresh checkout nonce — never cache. LiteSpeed HTML cache was serving
- * 12–24h-old wp_nonce values, which WordPress then dies on with
- * "The link you followed has expired."
+ * One-time checkout ticket (survives WP nonce / session mismatches).
+ *
+ * @return string
+ */
+function olkil_payu_issue_checkout_ticket() {
+	$ticket = wp_generate_password( 32, false, false );
+	set_transient(
+		'olkil_ckt_' . $ticket,
+		array(
+			't'   => time(),
+			'uid' => get_current_user_id(),
+		),
+		2 * HOUR_IN_SECONDS
+	);
+	return $ticket;
+}
+
+/**
+ * Consume a checkout ticket (one-time).
+ *
+ * @param string $ticket Ticket.
+ * @return bool
+ */
+function olkil_payu_consume_checkout_ticket( $ticket ) {
+	$ticket = preg_replace( '/[^a-zA-Z0-9]/', '', (string) $ticket );
+	if ( strlen( $ticket ) < 16 ) {
+		return false;
+	}
+	$key  = 'olkil_ckt_' . $ticket;
+	$data = get_transient( $key );
+	if ( ! is_array( $data ) ) {
+		return false;
+	}
+	delete_transient( $key );
+	return true;
+}
+
+/**
+ * Force LiteSpeed / intermediaries off for checkout auth endpoints.
+ */
+function olkil_payu_nocache_checkout_auth() {
+	if ( ! defined( 'DONOTCACHEPAGE' ) ) {
+		define( 'DONOTCACHEPAGE', true );
+	}
+	if ( ! defined( 'LSCACHE_NO_CACHE' ) ) {
+		define( 'LSCACHE_NO_CACHE', true );
+	}
+	do_action( 'litespeed_control_set_nocache', 'olkil checkout auth' );
+	if ( ! headers_sent() ) {
+		header( 'Cache-Control: private, no-store, no-cache, must-revalidate, max-age=0' );
+		header( 'Pragma: no-cache' );
+		header( 'Expires: 0' );
+		header( 'X-LiteSpeed-Cache-Control: no-cache' );
+		header( 'Vary: Cookie' );
+	}
+}
+
+/**
+ * Fresh checkout nonce + ticket — never cache.
+ * LiteSpeed was caching /checkout-nonce (X-LiteSpeed-Cache: hit) and the
+ * browser JS then overwrote a valid page nonce with a stale one →
+ * "Checkout session expired".
  */
 function olkil_payu_rest_checkout_nonce() {
+	olkil_payu_nocache_checkout_auth();
+	$ticket   = olkil_payu_issue_checkout_ticket();
 	$response = new WP_REST_Response(
 		array(
-			'nonce' => wp_create_nonce( 'olkil_payu_checkout' ),
+			'nonce'  => wp_create_nonce( 'olkil_payu_checkout' ),
+			'ticket' => $ticket,
+			'ts'     => time(),
 		),
 		200
 	);
-	$response->header( 'Cache-Control', 'no-store, no-cache, must-revalidate, max-age=0' );
+	$response->header( 'Cache-Control', 'private, no-store, no-cache, must-revalidate, max-age=0' );
 	$response->header( 'X-LiteSpeed-Cache-Control', 'no-cache' );
 	$response->header( 'Pragma', 'no-cache' );
+	$response->header( 'Expires', '0' );
+	$response->header( 'Vary', 'Cookie' );
 	return $response;
 }
+
+/**
+ * Mark olkil-payu REST auth routes non-cacheable before LiteSpeed decides.
+ *
+ * @param mixed           $result  Response.
+ * @param WP_REST_Server  $server  Server.
+ * @param WP_REST_Request $request Request.
+ * @return mixed
+ */
+function olkil_payu_rest_pre_dispatch_nocache( $result, $server, $request ) {
+	$route = (string) $request->get_route();
+	if ( str_contains( $route, '/olkil-payu/v1/checkout-nonce' ) || str_contains( $route, '/olkil-payu/v1/checkout-boot' ) ) {
+		olkil_payu_nocache_checkout_auth();
+	}
+	return $result;
+}
+add_filter( 'rest_pre_dispatch', 'olkil_payu_rest_pre_dispatch_nocache', 0, 3 );
 
 /**
  * Pay / result pages must never be LiteSpeed-cached: they embed WP nonces.
@@ -806,7 +957,14 @@ add_action( 'template_redirect', 'olkil_payu_never_cache_pay_pages', 0 );
 add_filter(
 	'litespeed_cache_is_cacheable',
 	static function ( $cacheable ) {
-		return olkil_payu_request_is_pay_flow() ? false : $cacheable;
+		if ( olkil_payu_request_is_pay_flow() ) {
+			return false;
+		}
+		$uri = isset( $_SERVER['REQUEST_URI'] ) ? (string) $_SERVER['REQUEST_URI'] : '';
+		if ( $uri && ( str_contains( $uri, '/olkil-payu/v1/checkout-nonce' ) || str_contains( $uri, '/olkil-payu/v1/checkout-boot' ) ) ) {
+			return false;
+		}
+		return $cacheable;
 	}
 );
 
@@ -1049,7 +1207,10 @@ function olkil_payu_maybe_start_payment() {
 
 	$plan_for_err = sanitize_key( wp_unslash( $_POST['plan'] ?? 'pro' ) ); // phpcs:ignore
 	$nonce        = isset( $_POST['olkil_payu_nonce'] ) ? sanitize_text_field( wp_unslash( $_POST['olkil_payu_nonce'] ) ) : ''; // phpcs:ignore
-	if ( ! $nonce || ! wp_verify_nonce( $nonce, 'olkil_payu_checkout' ) ) {
+	$ticket       = isset( $_POST['olkil_payu_ticket'] ) ? sanitize_text_field( wp_unslash( $_POST['olkil_payu_ticket'] ) ) : ''; // phpcs:ignore
+	$nonce_ok     = $nonce && wp_verify_nonce( $nonce, 'olkil_payu_checkout' );
+	$ticket_ok    = $ticket && olkil_payu_consume_checkout_ticket( $ticket );
+	if ( ! $nonce_ok && ! $ticket_ok ) {
 		wp_safe_redirect(
 			add_query_arg(
 				array(
@@ -1125,10 +1286,15 @@ function olkil_payu_maybe_start_payment() {
 	}
 
 	if ( ! is_wp_error( $fb ) && ! empty( $fb['params'] ) && ! empty( $fb['action'] ) ) {
-		$params = (array) $fb['params'];
+		$params = olkil_payu_sanitize_hosted_params( (array) $fb['params'] );
 		$action = (string) $fb['action'];
 		$mode   = (string) ( $fb['mode'] ?? $mode );
-		$txnid  = (string) ( $params['txnid'] ?? olkil_payu_new_txnid() );
+		// Production must never follow a stale Firebase "test" action URL.
+		if ( 'live' === olkil_payu_credentials()['mode'] ) {
+			$mode   = 'live';
+			$action = olkil_payu_payment_url();
+		}
+		$txnid = (string) ( $params['txnid'] ?? olkil_payu_new_txnid() );
 		if ( '' === $firstname ) {
 			$firstname = sanitize_text_field( (string) ( $params['firstname'] ?? '' ) );
 		}
@@ -1144,27 +1310,36 @@ function olkil_payu_maybe_start_payment() {
 		}
 		$txnid  = olkil_payu_new_txnid();
 		$params = array(
-			'key'                 => $creds['key'],
-			'txnid'               => $txnid,
-			'amount'              => $quote['amount'],
-			'productinfo'         => $plan['name'],
-			'firstname'           => $firstname,
-			'email'               => $email,
-			'phone'               => $phone,
-			'surl'                => home_url( '/payment-success/' ),
-			'furl'                => home_url( '/payment-failed/' ),
-			'notifyurl'           => rest_url( 'olkil-payu/v1/notify' ),
-			'udf1'                => $plan_slug,
-			'udf2'                => '',
-			'udf3'                => $mode,
-			'udf4'                => $quote['country'],
-			'udf5'                => $quote['transactionCurrency'],
-			'currency'            => $quote['currency'],
-			'transactionCurrency' => $quote['transactionCurrency'],
-			'country'             => $quote['country'],
+			'key'         => $creds['key'],
+			'txnid'       => $txnid,
+			'amount'      => $quote['amount'],
+			'productinfo' => $plan['name'],
+			'firstname'   => $firstname,
+			'email'       => $email,
+			'phone'       => $phone,
+			'surl'        => home_url( '/payment-success/' ),
+			'furl'        => home_url( '/payment-failed/' ),
+			'notifyurl'   => rest_url( 'olkil-payu/v1/notify' ),
+			'udf1'        => $plan_slug,
+			'udf2'        => '',
+			'udf3'        => $mode,
+			'udf4'        => $quote['country'],
+			'udf5'        => $quote['transactionCurrency'],
 		);
+		$params         = olkil_payu_sanitize_hosted_params( $params );
 		$params['hash'] = olkil_payu_request_hash( $params );
 		$action         = olkil_payu_payment_url();
+	}
+
+	// Final guard: never POST unknown fields to PayU; hash must match posted body.
+	$params = olkil_payu_sanitize_hosted_params( $params );
+	if ( '' !== $creds['key'] && '' !== $creds['salt'] ) {
+		$params['key']  = $creds['key'];
+		$params['hash'] = olkil_payu_request_hash( $params );
+		$action         = olkil_payu_payment_url();
+		$mode           = $creds['mode'];
+	} elseif ( empty( $params['hash'] ) ) {
+		wp_die( esc_html__( 'Payment gateway is not configured yet.', 'olkil' ) );
 	}
 
 	olkil_payu_save_order(
@@ -1209,7 +1384,6 @@ function olkil_payu_maybe_start_payment() {
 			<?php foreach ( $params as $k => $v ) : ?>
 				<input type="hidden" name="<?php echo esc_attr( $k ); ?>" value="<?php echo esc_attr( $v ); ?>" />
 			<?php endforeach; ?>
-			<input type="hidden" name="service_provider" value="payu_paisa" />
 		</form>
 		<script>document.getElementById('payu').submit();</script>
 	</body>
@@ -1293,6 +1467,7 @@ function olkil_payu_checkout_html() {
 				<input type="hidden" name="olkil_payu_action" value="pay" />
 				<input type="hidden" name="plan" value="<?php echo esc_attr( $plan_slug ); ?>" />
 				<input type="hidden" name="olkil_payu_enc" value="" />
+				<input type="hidden" name="olkil_payu_ticket" value="<?php echo esc_attr( olkil_payu_issue_checkout_ticket() ); ?>" />
 				<input type="hidden" name="olkil_country" value="<?php echo esc_attr( function_exists( 'olkil_payu_detect_country' ) ? olkil_payu_detect_country() : 'IN' ); ?>" />
 
 				<label>
@@ -1657,7 +1832,7 @@ function olkil_payu_enqueue_assets() {
 			'olkilPayuCheckout',
 			array(
 				'cryptoUrl' => olkil_payu_firebase_url() . '/v1/crypto/public',
-				'nonceUrl'  => rest_url( 'olkil-payu/v1/checkout-nonce' ),
+				'nonceUrl'  => rest_url( 'olkil-payu/v1/checkout-boot' ),
 			)
 		);
 	}

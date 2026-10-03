@@ -134,12 +134,12 @@ function olkil_seo_brand_plans() {
 			'price'    => '0',
 			'blurb'    => 'Start shipping with local AI.',
 			'tokens'   => '',
-			'features' => array( 'Local models on your machine', 'Unlimited browser testing', 'Basic autocomplete', 'Basic AI chat', 'Basic code assistance' ),
+			'features' => array( '30,000 cloud tokens', 'Bring your own API key', 'Local models on your machine', 'Unlimited browser testing', 'Basic autocomplete', 'Basic AI chat' ),
 		),
 		array(
 			'slug'     => 'lite',
 			'name'     => 'Lite',
-			'price'    => '3',
+			'price'    => '10',
 			'blurb'    => 'Everyday AI coding, unlocked.',
 			'tokens'   => '',
 			'features' => array( 'Cloud coding agent', 'Access to frontier models', 'Unlimited autocomplete', 'Project context', 'MCPs, skills, and hooks' ),
@@ -147,7 +147,7 @@ function olkil_seo_brand_plans() {
 		array(
 			'slug'     => 'pro',
 			'name'     => 'Pro',
-			'price'    => '10',
+			'price'    => '20',
 			'blurb'    => 'Full project power for builders.',
 			'tokens'   => '',
 			'features' => array( 'Everything in Lite', 'Extended limits on Agent', 'Full project context', 'Longer cloud sessions', 'Priority on cloud models' ),
@@ -155,7 +155,7 @@ function olkil_seo_brand_plans() {
 		array(
 			'slug'     => 'ultra',
 			'name'     => 'Ultra',
-			'price'    => '49',
+			'price'    => '100',
 			'blurb'    => 'Ship faster with parallel agents.',
 			'tokens'   => '',
 			'features' => array( 'Everything in Pro', 'Highest included Agent usage', 'Parallel agents', 'Maximum context', 'Priority compute' ),
@@ -172,7 +172,7 @@ function olkil_seo_brand_activate() {
 	$opt['knowledgegraph_name'] = OLKIL_SEO_BRAND_NAME;
 	update_option( 'rank-math-options-titles', $opt, false );
 	update_option( 'blogname', OLKIL_SEO_BRAND_NAME );
-	update_option( 'blogdescription', 'Free AI code editor & IDE — Dazzlone free, Lite $3, Pro $10, Ultra $49' );
+	update_option( 'blogdescription', 'Free AI code editor & IDE — 30,000 tokens free, Lite $10, Pro $20, Ultra $100' );
 	delete_option( 'olkil_seo_brand_theme_sync_v130' );
 	olkil_seo_brand_sync_theme_files();
 }
@@ -226,7 +226,7 @@ function olkil_seo_brand_favicon_head() {
 add_action( 'wp_head', 'olkil_seo_brand_favicon_head', 2 );
 
 function olkil_seo_brand_head() {
-	$desc = 'OLKIL is a free AI code editor and AI IDE with multi-model AI, agents, autocomplete, unlimited browser testing, and chat. Plans (USD): Dazzlone free, Lite $3, Pro $10, Ultra $49. Windows, macOS, and Linux.';
+	$desc = 'OLKIL is a free AI code editor and AI IDE with multi-model AI, agents, autocomplete, unlimited browser testing, and chat. Plans (USD): 30,000 tokens free, Lite $10, Pro $20, Ultra $100. Windows, macOS, and Linux.';
 	$url  = is_singular() ? get_permalink() : home_url( '/' );
 	$logo = olkil_seo_brand_asset( 'favicon-512.png' );
 
@@ -323,7 +323,7 @@ function olkil_seo_brand_head() {
 					'name'           => 'Is OLKIL free?',
 					'acceptedAnswer' => array(
 						'@type' => 'Answer',
-						'text'  => 'Yes. OLKIL Dazzlone is free forever with local models, unlimited browser testing, basic autocomplete, AI chat, and code assistance. Paid plans start at $3/mo.',
+						'text'  => 'Yes. A new OLKIL account includes 30,000 cloud tokens, plus local models, unlimited browser testing, basic autocomplete, AI chat, and code assistance. Paid plans start at $10/mo.',
 					),
 				),
 				array(
@@ -331,7 +331,7 @@ function olkil_seo_brand_head() {
 					'name'           => 'What do OLKIL paid plans include?',
 					'acceptedAnswer' => array(
 						'@type' => 'Answer',
-						'text'  => 'Lite ($3) adds a cloud coding agent, frontier models, unlimited autocomplete, and project context. Pro ($10) extends agent limits and full project context. Ultra ($49) adds parallel agents, maximum context, and priority compute. All plans include unlimited browser testing. Prices in USD.',
+						'text'  => 'Lite ($10) adds a cloud coding agent, frontier models, unlimited autocomplete, and project context. Pro ($20) extends agent limits, full project context, and longer cloud sessions. Ultra ($100) adds the highest included usage, parallel agents, maximum context, and priority compute. Prices in USD.',
 					),
 				),
 				array(
@@ -339,7 +339,7 @@ function olkil_seo_brand_head() {
 					'name'           => 'What is the difference between Pro and Ultra?',
 					'acceptedAnswer' => array(
 						'@type' => 'Answer',
-						'text'  => 'Pro ($10) includes everything in Lite plus extended agent limits, full project context, and longer cloud sessions. Ultra ($49) adds parallel agents, maximum context, and priority compute.',
+						'text'  => 'Pro ($20) includes everything in Lite plus extended agent limits, full project context, and longer cloud sessions. Ultra ($100) adds the highest included usage, parallel agents, maximum context, and priority compute.',
 					),
 				),
 				array(
@@ -430,7 +430,7 @@ function olkil_seo_brand_document_title( $title ) {
 		return 'OLKIL AI Code Editor – Free AI IDE with Multi-Model AI';
 	}
 	if ( is_page( 'pricing' ) ) {
-		return 'OLKIL Pricing – Dazzlone Free, Lite $3, Pro $10, Ultra $49';
+		return 'OLKIL Pricing – 30,000 tokens free, Lite $10, Pro $20, Ultra $100';
 	}
 	return $title;
 }

@@ -6,7 +6,8 @@ import * as os from 'os';
 import * as path from 'path';
 import { execSync } from 'child_process';
 import { OLKIL_HOME, type OlkilSession } from './auth';
-import { hydrateEngineKey, type EngineCreds } from './quota';
+import { FREE_TRIAL } from './free-trial';
+import { acceptBrokerCreds, hydrateEngineKey, isUpstreamProviderKey, type EngineCreds } from './quota';
 import {
   CLOUD_MODELS,
   extraCloudModels,
@@ -34,10 +35,17 @@ If asked who you are: I am OLKIL, the coding agent.
 If asked which model: I run on OLKIL's coding model.
 Never mention OpenCode, Cursor, Cline, ChatGPT, or a provider slug.
 
+Greetings and small talk (hi, hello, hellow, helo, hey, thanks, bye): reply in one or two short sentences. Do not read files, search the repo, list directories, or summarize the project. No tools.
+
 You only work in Agent mode. Never plan-only, never ask-only, never spawn explore/task subagents.
 When the user wants a change: grep/read the matching files, then immediately edit or write.
-Do not dump search findings, tables, or a report instead of editing.
-Do not ask for confirmation. After edits, 1–2 sentences on what changed.
+Do not dump search findings, tables, long explanations, or a report instead of editing.
+Do not narrate step-by-step while working. Prefer tools over talk.
+Do not ask for confirmation.
+Be accurate: make the correct change the first time; do not leave half-done work.
+Finish the FULL user request — every file and step — before you stop.
+Do not stop after a short progress note, outline, or partial edit. Keep using tools until the work is done.
+Only when everything is complete: briefly summarize what changed (2–4 short sentences max).
 Stay inside the workspace. Do not run npm/yarn/pnpm/vite/next build unless asked.
 `;
 
@@ -146,23 +154,24 @@ export async function ensureOpencodeBinary(): Promise<string> {
 
 function resolveStoredCreds(): EngineCreds | null {
   const auth = readJson<any>(AUTH_FILE, {});
-  if (auth.openrouter?.key) {
-    return {
-      provider: 'openrouter',
-      baseURL: String(auth.openrouter.baseURL || 'https://openrouter.ai/api/v1'),
-      apiKey: String(auth.openrouter.key),
-      model: String(auth.openrouter.model || 'deepseek/deepseek-v4-flash'),
-    };
+  let dirty = false;
+  for (const slot of ['openrouter', 'deepseek', 'poolside']) {
+    const key = String(auth[slot]?.key || '');
+    if (key && isUpstreamProviderKey(key)) {
+      delete auth[slot];
+      dirty = true;
+    }
   }
-  if (auth.deepseek?.key) {
-    return {
-      provider: 'deepseek',
-      baseURL: String(auth.deepseek.baseURL || 'https://api.deepseek.com/v1'),
-      apiKey: String(auth.deepseek.key),
-      model: String(auth.deepseek.model || 'deepseek-v4-flash'),
-    };
-  }
-  return null;
+  if (dirty) writeJson(AUTH_FILE, auth);
+  return acceptBrokerCreds(
+    auth.openrouter
+      ? {
+          apiKey: auth.openrouter.key,
+          baseURL: auth.openrouter.baseURL,
+          model: auth.openrouter.model,
+        }
+      : null,
+  );
 }
 
 function writeCompatPlugin() {
@@ -221,7 +230,7 @@ function modelFlags(id: string, name: string) {
     tool_call: true,
     temperature: true,
     reasoning: false,
-    limit: { context: 128000, output: 8192 },
+    limit: { context: 128000, output: 32768 },
   };
 }
 
@@ -230,11 +239,17 @@ function readyCustoms(list: CustomEndpoint[] | CustomEndpoint | null | undefined
   return rows.filter((c) => c && customEndpointReady(c) && c.id);
 }
 
+function cloudProviderId(cloud: EngineCreds): string {
+  if (cloud.provider === 'openrouter') return 'openrouter';
+  if (cloud.provider === 'trial') return FREE_TRIAL.providerId;
+  return 'deepseek';
+}
+
 function olkilConfig(cloud: EngineCreds | null, customs: CustomEndpoint[] | CustomEndpoint | null) {
   const provider: Record<string, unknown> = {};
   const enabled: string[] = [];
   if (cloud) {
-    const providerId = cloud.provider === 'openrouter' ? 'openrouter' : 'deepseek';
+    const providerId = cloudProviderId(cloud);
     enabled.push(providerId);
     const models: Record<string, unknown> = {};
     if (cloud.provider === 'openrouter') {
@@ -243,7 +258,7 @@ function olkilConfig(cloud: EngineCreds | null, customs: CustomEndpoint[] | Cust
         models[m.slug] = modelFlags(m.slug, m.label);
       }
     } else {
-      models[cloud.model] = modelFlags(cloud.model, 'OLKIL');
+      models[cloud.model] = modelFlags(cloud.model, cloud.provider === 'trial' ? 'OLKIL Free' : 'OLKIL');
     }
     provider[providerId] = {
       npm: '@ai-sdk/openai-compatible',
@@ -302,9 +317,8 @@ function olkilConfig(cloud: EngineCreds | null, customs: CustomEndpoint[] | Cust
       doom_loop: 'allow',
       external_directory: 'deny',
     },
-    compaction: { auto: false },
+    compaction: { auto: true, prune: true, reserved: 16000 },
     default_agent: 'build',
-    instructions: [IDENTITY_FILE.replace(/\\/g, '/')],
     agent: {
       build: {
         description: 'OLKIL coding agent',
@@ -342,21 +356,29 @@ function runtimeEnv(password: string, cloud: EngineCreds | null, customs: Custom
     OPENCODE_SERVER_PASSWORD: password,
     XDG_CONFIG_HOME: path.join(OLKIL_HOME, 'xdg-config'),
   };
-  if (cloud?.provider === 'openrouter') extra.OPENROUTER_API_KEY = cloud.apiKey;
-  else if (cloud) extra.DEEPSEEK_API_KEY = cloud.apiKey;
+  if (cloud?.provider === 'deepseek' && !isUpstreamProviderKey(cloud.apiKey)) {
+    extra.DEEPSEEK_API_KEY = cloud.apiKey;
+  }
   return Object.assign(env, extra);
+}
+
+function isCasualChat(text: string): boolean {
+  const t = String(text || '').trim();
+  if (!t || t.length > 80) return false;
+  return /^(hi|hello|hey|yo|sup|hola|namaste|thanks|thank you|ok|okay|cool|great|nice|good (morning|afternoon|evening))([\s!,.?]|$)/i.test(
+    t,
+  );
 }
 
 function wrapUserPrompt(user: string, directory: string, turns: number): string {
   const text = String(user || '').trim();
-  const mandate =
-    'Agent mode: edit or write the matching files now. Do not use task/explore. Do not write a findings report.';
-  if (turns > 1) return text + '\n\n' + mandate;
+  if (isCasualChat(text)) {
+    return text + '\n\nReply in 1–2 sentences. Do not use tools.';
+  }
+  if (/\[OLKIL Ask mode:/.test(text)) return text;
+  if (turns > 1) return text;
   const bits: string[] = [];
-  if (directory) bits.push('Workspace: ' + directory + '. Stay inside this folder.');
-  bits.push("You are OLKIL's coding agent. Never say you are OpenCode, Cursor, Cline, ChatGPT, or Claude.");
-  bits.push('Never run npm run build, yarn build, pnpm build, vite build, or next build unless asked.');
-  bits.push(mandate);
+  if (directory) bits.push('Workspace: ' + directory + '.');
   bits.push(text);
   return bits.join('\n\n');
 }
@@ -399,13 +421,16 @@ export class OlkilEngine {
     directory: string,
     custom?: CustomEndpoint | CustomEndpoint[] | null,
     useCloud = true,
+    trial: EngineCreds | null = null,
   ) {
     this.directory = directory;
     this.customs = readyCustoms(custom);
     mkdirp(OPENCODE_HOME_DIR);
     fs.writeFileSync(IDENTITY_FILE, OLKIL_IDENTITY);
     writeCompatPlugin();
-    if (useCloud) {
+    if (trial?.provider === 'trial') {
+      this.creds = trial;
+    } else if (useCloud) {
       const creds = (await hydrateEngineKey(session)) || resolveStoredCreds();
       if (creds) {
         this.creds = creds;
@@ -434,7 +459,7 @@ export class OlkilEngine {
       this.creds?.apiKey || '',
       this.customs.map((c) => [c.id, c.model, c.baseUrl, c.apiKey].join(':')).join(','),
       String(extraCloudModels().length),
-      'compat-reasoning-1',
+      'compact-prune-1',
     ].join('|');
   }
 
@@ -443,8 +468,9 @@ export class OlkilEngine {
     directory: string,
     custom?: CustomEndpoint | CustomEndpoint[] | null,
     useCloud = true,
+    trial: EngineCreds | null = null,
   ): Promise<void> {
-    await this.prepare(session, directory, custom, useCloud);
+    await this.prepare(session, directory, custom, useCloud, trial);
     const key = this.bootFingerprint();
     const same =
       this.url &&
@@ -641,6 +667,14 @@ export class OlkilEngine {
     return this.sessionId;
   }
 
+  /** Create an extra session without replacing the main chat sessionId (Virtual Office parallel). */
+  async createSession(title = 'OLKIL VO'): Promise<string> {
+    const created = await this.request<any>('POST', '/session', { title });
+    const id = created && (created.id || created.data?.id);
+    if (!id) throw new Error('Could not start a chat session.');
+    return String(id);
+  }
+
   currentCreds(): EngineCreds | null {
     return this.creds || resolveStoredCreds();
   }
@@ -652,6 +686,11 @@ export class OlkilEngine {
   async sendPrompt(text: string, modelId?: string) {
     if (!this.sessionId) await this.newSession();
     this.sessionTurns += 1;
+    await this.sendPromptTo(this.sessionId, text, modelId, this.sessionTurns);
+  }
+
+  async sendPromptTo(sessionId: string, text: string, modelId?: string, turnHint = 1) {
+    if (!sessionId) throw new Error('Missing session');
     const creds = this.creds || resolveStoredCreds();
     const cid = customIdFromModelId(modelId);
     const custom = cid ? this.customs.find((c) => c.id === cid) : undefined;
@@ -660,35 +699,56 @@ export class OlkilEngine {
     const model = useCustom && custom
       ? { providerID: customProviderId(custom.id), modelID: custom.model.trim() }
       : creds
-        ? { providerID: creds.provider, modelID: creds.provider === 'openrouter' ? slug : creds.model }
+        ? {
+            providerID: cloudProviderId(creds),
+            modelID: creds.provider === 'openrouter' ? slug : creds.model,
+          }
         : { providerID: 'openrouter', modelID: slug };
+    const ask = /\[OLKIL Ask mode:/.test(text);
     const body = {
       agent: 'build',
       model,
-      tools: {
-        write: true,
-        edit: true,
-        bash: true,
-        read: true,
-        grep: true,
-        glob: true,
-        patch: true,
-        task: false,
-        question: false,
-      },
-      parts: [{ type: 'text', text: wrapUserPrompt(text, this.directory, this.sessionTurns) }],
+      tools: ask
+        ? {
+            write: false,
+            edit: false,
+            bash: false,
+            read: false,
+            grep: false,
+            glob: false,
+            patch: false,
+            task: false,
+            question: false,
+          }
+        : {
+            write: true,
+            edit: true,
+            bash: true,
+            read: true,
+            grep: true,
+            glob: true,
+            patch: true,
+            task: false,
+            question: false,
+          },
+      parts: [{ type: 'text', text: wrapUserPrompt(text, this.directory, turnHint) }],
     };
     try {
-      await this.request('POST', '/session/' + this.sessionId + '/prompt_async', body, 20000);
+      await this.request('POST', '/session/' + sessionId + '/prompt_async', body, 20000);
     } catch {
-      await this.request('POST', '/session/' + this.sessionId + '/prompt', body, 180000);
+      await this.request('POST', '/session/' + sessionId + '/prompt', body, 180000);
     }
   }
 
   async abort() {
     if (!this.sessionId) return;
+    await this.abortSession(this.sessionId);
+  }
+
+  async abortSession(sessionId: string) {
+    if (!sessionId) return;
     try {
-      await this.request('POST', '/session/' + this.sessionId + '/abort');
+      await this.request('POST', '/session/' + sessionId + '/abort');
     } catch {
       /* ignore */
     }
@@ -698,6 +758,15 @@ export class OlkilEngine {
     if (!this.sessionId || !id) return;
     try {
       await this.request('POST', '/session/' + this.sessionId + '/permissions/' + id, { response });
+    } catch {
+      /* ignore */
+    }
+  }
+
+  async replyPermissionFor(sessionId: string, id: string, response: 'always' | 'reject' = 'always') {
+    if (!sessionId || !id) return;
+    try {
+      await this.request('POST', '/session/' + sessionId + '/permissions/' + id, { response });
     } catch {
       /* ignore */
     }

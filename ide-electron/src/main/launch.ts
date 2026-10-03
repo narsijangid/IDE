@@ -52,7 +52,13 @@ function hydrateEnvFromResources() {
         ) {
           value = value.slice(1, -1);
         }
-        if (key && value && !process.env[key]) {
+        const blocked =
+          key === 'OPENROUTER_API_KEY' ||
+          key === 'DEEPSEEK_API_KEY' ||
+          key === 'POOLSIDE_API_KEY' ||
+          /^sk-or-/i.test(value) ||
+          /^sky_/i.test(value);
+        if (key && value && !process.env[key] && !blocked) {
           process.env[key] = value;
         }
       }

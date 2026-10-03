@@ -9,7 +9,7 @@ const { setGlobalOptions } = require('firebase-functions/v2');
 const { PLANS } = require('./lib/plans');
 const { requestHash, paymentUrl, newTxnid } = require('./lib/payu');
 const { defineSecret } = require('firebase-functions/params');
-const { getPayuCredentials, syncCredentialsToFirestore, publicCredsView, getOpenrouterEngineKey } = require('./lib/credentials');
+const { getPayuCredentials, syncCredentialsToFirestore, publicCredsView } = require('./lib/credentials');
 const { fulfillPayment, getSubscription, emailKey } = require('./lib/fulfill');
 const { getPublicJwk, decryptFrontendPayload } = require('./lib/frontend-crypto');
 const { quotePlan } = require('./lib/fx');
@@ -272,16 +272,11 @@ app.post('/v1/engine', async (req, res) => {
       reason: paid ? 'quota_exceeded' : 'plan_required',
     });
   }
-  const key = await getOpenrouterEngineKey();
-  if (!key) {
-    return res.status(503).json({ error: 'engine_unconfigured' });
-  }
-  res.json({
-    ok: true,
-    provider: 'openrouter',
-    baseURL: 'https://openrouter.ai/api/v1',
-    model: 'deepseek/deepseek-v4-flash',
-    apiKey: key,
+  // Provider keys are not returned. Desktop and the extension use the
+  // WordPress broker, which holds the key encrypted on the server.
+  return res.status(410).json({
+    error: 'engine_moved',
+    broker: 'https://olkil.com/wp-json/olkil-payu/v1/engine',
   });
 });
 

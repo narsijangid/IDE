@@ -16,13 +16,14 @@ $plans = array(
 		'period'   => __( 'forever', 'olkil' ),
 		'badge'    => __( 'Free', 'olkil' ),
 		'blurb'    => __( 'Start shipping with local AI.', 'olkil' ),
-		'includes' => '',
+		'includes' => __( 'Includes:', 'olkil' ),
 		'features' => array(
+			__( '30,000 cloud tokens', 'olkil' ),
+			__( 'Bring your own API key', 'olkil' ),
 			__( 'Local models on your machine', 'olkil' ),
 			__( 'Unlimited browser testing', 'olkil' ),
 			__( 'Basic autocomplete', 'olkil' ),
 			__( 'Basic AI chat', 'olkil' ),
-			__( 'Basic code assistance', 'olkil' ),
 		),
 		'cta'      => __( 'Start free', 'olkil' ),
 		'href'     => home_url( '/download/' ),
@@ -32,7 +33,7 @@ $plans = array(
 	array(
 		'slug'     => 'lite',
 		'name'     => 'Lite',
-		'price'    => '3',
+		'price'    => '10',
 		'period'   => __( '/ mo', 'olkil' ),
 		'badge'    => __( 'Starter', 'olkil' ),
 		'blurb'    => __( 'Everyday AI coding, unlocked.', 'olkil' ),
@@ -52,7 +53,7 @@ $plans = array(
 	array(
 		'slug'     => 'pro',
 		'name'     => 'Pro',
-		'price'    => '10',
+		'price'    => '20',
 		'period'   => __( '/ mo', 'olkil' ),
 		'badge'    => __( 'Popular', 'olkil' ),
 		'blurb'    => __( 'Full project power for builders.', 'olkil' ),
@@ -71,7 +72,7 @@ $plans = array(
 	array(
 		'slug'     => 'ultra',
 		'name'     => 'Ultra',
-		'price'    => '49',
+		'price'    => '100',
 		'period'   => __( '/ mo', 'olkil' ),
 		'badge'    => __( 'Flagship', 'olkil' ),
 		'blurb'    => __( 'Ship faster with parallel agents.', 'olkil' ),
@@ -109,8 +110,12 @@ $plans = array(
 					<?php endif; ?>
 					<h3 class="olkil-price-card__name"><?php echo esc_html( $plan['name'] ); ?></h3>
 					<p class="olkil-price-card__amount">
-						<span class="olkil-price-card__currency">$</span><?php echo esc_html( $plan['price'] ); ?>
-						<span class="olkil-price-card__period"><?php echo esc_html( $plan['period'] ); ?></span>
+						<?php if ( '0' === (string) $plan['price'] ) : ?>
+							<?php esc_html_e( 'Free', 'olkil' ); ?>
+						<?php else : ?>
+							<span class="olkil-price-card__currency">$</span><?php echo esc_html( $plan['price'] ); ?>
+							<span class="olkil-price-card__period"><?php echo esc_html( $plan['period'] ); ?></span>
+						<?php endif; ?>
 					</p>
 					<p class="olkil-price-card__blurb"><?php echo esc_html( $plan['blurb'] ); ?></p>
 					<?php if ( ! empty( $plan['includes'] ) ) : ?>

@@ -128,7 +128,14 @@ function olkil_legal_pages_visibility_css() {
 		. '.olkil-article .entry-content,'
 		. '.olkil-article .olkil-prose,'
 		. 'body.page .entry-content.olkil-prose,'
-		. 'body.single .entry-content.olkil-prose{'
+		. 'body.single .entry-content.olkil-prose,'
+		// Blog listing cards — keep visible even if reveal JS fails
+		. '.olkil-post.olkil-reveal,'
+		. 'body.blog .olkil-post,'
+		. 'body.archive .olkil-post,'
+		. 'body.home .olkil-post,'
+		. '.olkil-posts .olkil-post.olkil-reveal,'
+		. '.olkil-posts .olkil-post{'
 		. 'opacity:1!important;transform:none!important;visibility:visible!important'
 		. '}'
 		. '</style>';
@@ -144,7 +151,7 @@ function olkil_legal_pages_visibility_js() {
 	<script id="olkil-long-content-fix-js">
 	(function () {
 		function showArticles() {
-			document.querySelectorAll('.olkil-article, .olkil-article.olkil-reveal, .entry-content.olkil-prose').forEach(function (el) {
+			document.querySelectorAll('.olkil-article, .olkil-article.olkil-reveal, .entry-content.olkil-prose, .olkil-post, .olkil-post.olkil-reveal').forEach(function (el) {
 				el.classList.add('is-visible');
 				el.style.opacity = '1';
 				el.style.transform = 'none';
@@ -157,6 +164,9 @@ function olkil_legal_pages_visibility_js() {
 			showArticles();
 		}
 		window.addEventListener('load', showArticles);
+		// Defensive: hide nothing if reveal JS never executes
+		setTimeout(showArticles, 400);
+		setTimeout(showArticles, 1200);
 	})();
 	</script>
 	<?php

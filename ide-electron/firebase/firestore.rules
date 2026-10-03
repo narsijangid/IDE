@@ -46,5 +46,16 @@ service cloud.firestore {
     match /mailLog/{id} {
       allow read, write: if false;
     }
+
+    // Phone connects by scanning a per-account QR. The document id is the secret.
+    match /links/{secret} {
+      allow read, write: if secret.size() == 64;
+      match /tasks/{taskId} {
+        allow read, write: if secret.size() == 64;
+      }
+      match /box/{docId} {
+        allow read, write: if secret.size() == 64;
+      }
+    }
   }
 }

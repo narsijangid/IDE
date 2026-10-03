@@ -7,3 +7,6 @@ tsconfig.json
 !out/**/*.js
 node_modules/**
 *.vsix
+media/demo.mp4
+media/demo-poster.jpg
+media/demo.gif

@@ -1,0 +1,55 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>OLKIL Pocket</title>
+  <style>
+    body { margin: 0; min-height: 100vh; display: grid; place-items: center; background: #0A0A0B; color: #EDEAF5; font-family: Segoe UI, system-ui, sans-serif; }
+    button { background: #FF2D8C; color: #fff; border: 0; border-radius: 999px; padding: 14px 22px; font-size: 16px; font-weight: 650; }
+    p { color: #8A8496; text-align: center; max-width: 280px; }
+  </style>
+  <script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-app-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-auth-compat.js"></script>
+</head>
+<body>
+  <div>
+    <h1 style="font-weight:600;letter-spacing:.04em">OLKIL</h1>
+    <p id="msg">Sign in with the same Google account you use on the computer.</p>
+    <button id="go" type="button">Continue with Google</button>
+  </div>
+  <script>
+    var firebaseConfig = {
+      apiKey: 'AIzaSyA3z0FDMJrfskddGj4Iair9D2XH3K_IS2k',
+      authDomain: 'olkil-2c8ac.firebaseapp.com',
+      projectId: 'olkil-2c8ac',
+      storageBucket: 'olkil-2c8ac.firebasestorage.app',
+      messagingSenderId: '781364120676',
+      appId: '1:781364120676:web:b95ff8f1839b3a0b0aa371'
+    };
+    firebase.initializeApp(firebaseConfig);
+    var auth = firebase.auth();
+    function send(user) {
+      user.getIdToken().then(function (idToken) {
+        var q = new URLSearchParams({
+          id_token: idToken,
+          refresh_token: user.refreshToken || '',
+          uid: user.uid,
+          email: user.email || '',
+          name: user.displayName || ''
+        });
+        location.href = 'olkilpocket://auth?' + q.toString();
+      });
+    }
+    auth.getRedirectResult().then(function (res) {
+      if (res && res.user) send(res.user);
+    }).catch(function (err) {
+      document.getElementById('msg').textContent = err.message || 'Sign-in failed';
+    });
+    document.getElementById('go').onclick = function () {
+      document.getElementById('msg').textContent = 'Opening Google…';
+      auth.signInWithRedirect(new firebase.auth.GoogleAuthProvider());
+    };
+  </script>
+</body>
+</html>

@@ -1,8 +1,8 @@
 {
   "name": "olkil",
-  "displayName": "OLKIL",
-  "description": "AI-powered code editor for VS Code. Write, understand, debug, refactor, and improve code faster with OLKIL AI.",
-  "version": "1.0.22",
+  "displayName": "OLKIL AI Code Editor",
+  "description": "OLKIL AI Code Editor for VS Code — AI coding agent, chat, autocomplete alternative, and pair programmer. Write, debug, refactor, and ship faster. Cursor alternative, Copilot alternative, Claude Code alternative, Codex alternative in Visual Studio Code.",
+  "version": "1.0.93",
   "publisher": "OLKIL",
   "license": "UNLICENSED",
   "icon": "media/icon.png",
@@ -25,20 +25,30 @@
     "Programming Languages"
   ],
   "keywords": [
+    "ai code editor",
     "olkil",
-    "codex alternative",
-    "cursor alternative",
-    "claude code alternative",
+    "olkil ai",
     "ai coding agent",
-    "coding assistant",
-    "ai pair programmer",
-    "powerful ide",
+    "ai coding assistant",
     "vscode ai",
-    "agent chat",
-    "code editor ai",
-    "autocomplete",
-    "chatgpt",
-    "copilot alternative"
+    "vs code ai",
+    "ai pair programmer",
+    "cursor alternative",
+    "github copilot alternative",
+    "copilot alternative",
+    "claude code alternative",
+    "codex alternative",
+    "chatgpt for vscode",
+    "ai code completion",
+    "ai autocomplete",
+    "code generator ai",
+    "ai debugger",
+    "ai refactor",
+    "agentic coding",
+    "ai chat vscode",
+    "llm code editor",
+    "powerful ide",
+    "virtual office"
   ],
   "activationEvents": [
     "onStartupFinished"
@@ -61,12 +71,20 @@
         "icon": "$(add)"
       },
       {
+        "command": "olkil.chat.history",
+        "title": "History",
+        "category": "OLKIL",
+        "icon": "$(history)"
+      },
+      {
         "command": "olkil.askSelection",
         "title": "OLKIL: Ask about Selection"
       },
       {
         "command": "olkil.signIn",
-        "title": "OLKIL: Sign In"
+        "title": "Sign In",
+        "category": "OLKIL",
+        "icon": "$(sign-in)"
       },
       {
         "command": "olkil.signOut",
@@ -80,6 +98,20 @@
       {
         "command": "olkil.openDesktop",
         "title": "OLKIL: Open Desktop App"
+      },
+      {
+        "command": "olkil.virtualOffice.toggle",
+        "title": "Vertual Office",
+        "shortTitle": "Vertual Office",
+        "icon": {
+          "light": "media/vo-tab-icon.png",
+          "dark": "media/vo-tab-icon.png"
+        }
+      },
+      {
+        "command": "olkil.pocket.toggle",
+        "title": "OLKIL: Toggle Pocket",
+        "category": "OLKIL"
       }
     ],
     "keybindings": [
@@ -116,25 +148,34 @@
           "group": "navigation@1"
         },
         {
-          "command": "olkil.signOut",
+          "command": "olkil.chat.history",
           "when": "view == olkil.sidebar && olkil.signedIn",
           "group": "navigation@2"
+        },
+        {
+          "command": "olkil.signOut",
+          "when": "view == olkil.sidebar && olkil.signedIn",
+          "group": "navigation@3"
         }
       ],
       "editor/title": [
         {
-          "command": "olkil.chat.toggle",
-          "group": "navigation",
+          "command": "olkil.virtualOffice.toggle",
+          "group": "navigation@0",
           "when": "true"
+        },
+        {
+          "command": "olkil.chat.toggle",
+          "group": "navigation@1",
+          "when": "true"
+        },
+        {
+          "command": "olkil.signIn",
+          "group": "navigation@2",
+          "when": "!olkil.signedIn"
         }
       ],
       "layoutControl": [
-        {
-          "command": "olkil.chat.toggle",
-          "group": "navigation@0"
-        }
-      ],
-      "commandCenter": [
         {
           "command": "olkil.chat.toggle",
           "group": "navigation@0"
@@ -146,7 +187,7 @@
         {
           "id": "olkil",
           "title": "OLKIL",
-          "icon": "media/icon.png"
+          "icon": "media/activitybar-icon.png"
         }
       ]
     },
@@ -156,7 +197,8 @@
           "type": "webview",
           "id": "olkil.sidebar",
           "name": "OLKIL",
-          "icon": "media/icon.png"
+          "retainContextWhenHidden": true,
+          "icon": "media/activitybar-icon.png"
         }
       ]
     },

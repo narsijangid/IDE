@@ -16,6 +16,22 @@
 		initSmoothAnchors();
 	});
 
+	// Defensive: reveal everything after short timeout (IntersectionObserver can stall)
+	setTimeout(function () {
+		document.querySelectorAll('.olkil-reveal').forEach(function (n) {
+			n.classList.add('is-visible');
+			n.style.opacity = '1';
+			n.style.transform = 'none';
+		});
+	}, 600);
+	setTimeout(function () {
+		document.querySelectorAll('.olkil-reveal').forEach(function (n) {
+			n.classList.add('is-visible');
+			n.style.opacity = '1';
+			n.style.transform = 'none';
+		});
+	}, 1800);
+
 	function initMobileNav() {
 		var toggle = document.querySelector('.olkil-menu-toggle');
 		var nav = document.querySelector('.olkil-nav');

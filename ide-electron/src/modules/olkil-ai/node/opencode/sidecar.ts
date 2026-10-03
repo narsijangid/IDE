@@ -115,7 +115,6 @@ export class OpencodeSidecar {
       OPENCODE_SERVER_PASSWORD: password,
       DEEPSEEK_API_KEY: this.secrets.deepseekKey || '',
       POOLSIDE_API_KEY: this.secrets.poolsideKey || '',
-      OPENROUTER_API_KEY: this.secrets.openrouterKey || '',
     });
 
     const proc = spawn(binary, args, {
@@ -136,13 +135,13 @@ export class OpencodeSidecar {
   /** OpenCode also reads auth.json; keep it in sync so packaged users don't 401. */
   private writeProviderAuth(): void {
     const auth: Record<string, { type: 'api'; key: string }> = {};
-    if (this.secrets.openrouterKey) {
+    if (this.secrets.openrouterKey && !/^sk-or-/i.test(this.secrets.openrouterKey)) {
       auth.openrouter = { type: 'api', key: this.secrets.openrouterKey };
     }
-    if (this.secrets.deepseekKey) {
+    if (this.secrets.deepseekKey && !/^sk-/i.test(this.secrets.deepseekKey)) {
       auth.deepseek = { type: 'api', key: this.secrets.deepseekKey };
     }
-    if (this.secrets.poolsideKey) {
+    if (this.secrets.poolsideKey && !/^sky_/i.test(this.secrets.poolsideKey)) {
       auth.poolside = { type: 'api', key: this.secrets.poolsideKey };
     }
     for (const ep of this.extras?.customModels || []) {

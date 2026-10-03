@@ -1442,7 +1442,13 @@ body.olkil-theme .ast-separate-container .ast-comment-section {
 .olkil-article.olkil-reveal,
 article.olkil-article.olkil-reveal,
 body.single .olkil-reveal.olkil-article,
-body.page .olkil-reveal.olkil-article {
+body.page .olkil-reveal.olkil-article,
+/* Blog listing cards — always visible; JS reveal can cause blank grid */
+.olkil-post.olkil-reveal,
+body.blog .olkil-reveal.olkil-post,
+body.archive .olkil-reveal.olkil-post,
+body.home .olkil-reveal.olkil-post,
+.olkil-posts .olkil-post.olkil-reveal {
 	opacity: 1 !important;
 	transform: none !important;
 }

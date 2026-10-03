@@ -117,26 +117,21 @@ const extraResources = [
   },
 ];
 
-// Bake DeepSeek / Dazzlone keys into extraResources (gitignored olkil.env).
+// Client installers must not contain provider API keys. Cloud calls go
+// through the OLKIL broker, which keeps the key on the server.
 require('../scripts/stage-olkil-env');
 const olkilEnvFile = path.join(__dirname, 'olkil.env');
-const requireCloud = process.env.OLKIL_REQUIRE_CLOUD_KEYS === '1' || process.env.GITHUB_ACTIONS === 'true';
 if (fs.existsSync(olkilEnvFile)) {
+  const envText = fs.readFileSync(olkilEnvFile, 'utf8');
+  if (/sk-or-v1-|OPENROUTER_API_KEY=\S|DEEPSEEK_API_KEY=\S|POOLSIDE_API_KEY=\S|sky_/i.test(envText)) {
+    throw new Error('[pack] Refusing to bundle olkil.env because it contains a provider key.');
+  }
   extraResources.push({
     from: path.join(__dirname),
     to: '.',
     filter: ['olkil.env'],
   });
-  const envText = fs.readFileSync(olkilEnvFile, 'utf8');
-  const hasDeepseek = /^DEEPSEEK_API_KEY=.+$/m.test(envText);
-  console.log(`[pack] Bundling olkil.env (deepseek=${hasDeepseek ? 'yes' : 'NO'})`);
-  if (requireCloud && !hasDeepseek) {
-    throw new Error('[pack] olkil.env has no DEEPSEEK_API_KEY — installers would 401 in chat.');
-  }
-} else if (requireCloud) {
-  throw new Error('[pack] build/olkil.env missing — set DEEPSEEK_API_KEY before pack');
-} else {
-  console.warn('[pack] build/olkil.env missing — cloud chat will 401 in this installer');
+  console.log('[pack] Bundling olkil.env without provider keys');
 }
 
 const bundleOllama = process.env.OLKIL_BUNDLE_OLLAMA === '1';

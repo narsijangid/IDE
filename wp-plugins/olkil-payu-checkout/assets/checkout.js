@@ -67,9 +67,19 @@
 		return 'IN';
 	}
 
-	function refreshNonce(form, cfg) {
-		var url = (cfg && cfg.nonceUrl) || '/wp-json/olkil-payu/v1/checkout-nonce';
-		return fetch(url, { method: 'GET', credentials: 'same-origin', cache: 'no-store' })
+	/**
+	 * Fetch a fresh nonce/ticket. Cache-bust so LiteSpeed/HCDN cannot
+	 * return a stale blob that overwrites the valid page nonce.
+	 */
+	function refreshCheckoutAuth(form, cfg) {
+		var base = (cfg && cfg.nonceUrl) || '/wp-json/olkil-payu/v1/checkout-boot';
+		var url = base + (base.indexOf('?') >= 0 ? '&' : '?') + '_=' + Date.now();
+		return fetch(url, {
+			method: 'GET',
+			credentials: 'same-origin',
+			cache: 'no-store',
+			headers: { 'Cache-Control': 'no-cache', Pragma: 'no-cache' },
+		})
 			.then(function (res) {
 				return res.json().then(function (data) {
 					if (!res.ok) throw new Error('nonce_unavailable');
@@ -77,11 +87,25 @@
 				});
 			})
 			.then(function (data) {
-				if (!data || !data.nonce) return;
-				var el = form.querySelector('[name="olkil_payu_nonce"]');
-				if (el) el.value = data.nonce;
+				if (!data) return;
+				if (data.nonce) {
+					var el = form.querySelector('[name="olkil_payu_nonce"]');
+					if (el) el.value = data.nonce;
+				}
+				if (data.ticket) {
+					var t = form.querySelector('[name="olkil_payu_ticket"]');
+					if (!t) {
+						t = document.createElement('input');
+						t.type = 'hidden';
+						t.name = 'olkil_payu_ticket';
+						form.appendChild(t);
+					}
+					t.value = data.ticket;
+				}
 			})
-			.catch(function () {});
+			.catch(function () {
+				/* Keep the page-rendered nonce/ticket — do not wipe them. */
+			});
 	}
 
 	ready(function () {
@@ -105,7 +129,7 @@
 			if (countryField) countryField.value = country;
 
 			if (firstname.trim().length < 2 || email.indexOf('@') < 1 || phone.length < 8) {
-				refreshNonce(form, cfg).then(function () {
+				refreshCheckoutAuth(form, cfg).then(function () {
 					form.setAttribute('data-olkil-enc', '1');
 					form.submit();
 				});
@@ -164,7 +188,7 @@
 					});
 			};
 
-			refreshNonce(form, cfg).then(go);
+			refreshCheckoutAuth(form, cfg).then(go);
 		});
 	});
 })();

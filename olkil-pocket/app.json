@@ -1,0 +1,35 @@
+{
+  "expo": {
+    "name": "OLKIL Pocket",
+    "slug": "olkil-pocket",
+    "scheme": "olkilpocket",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "icon": "./assets/icon.png",
+    "userInterfaceStyle": "dark",
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "com.olkil.pocket"
+    },
+    "android": {
+      "package": "com.olkil.pocket",
+      "adaptiveIcon": {
+        "backgroundColor": "#0A0A0B",
+        "foregroundImage": "./assets/android-icon-foreground.png",
+        "backgroundImage": "./assets/android-icon-background.png",
+        "monochromeImage": "./assets/android-icon-monochrome.png"
+      }
+    },
+    "web": {
+      "favicon": "./assets/favicon.png"
+    },
+    "plugins": [
+      "expo-web-browser"
+    ],
+    "extra": {
+      "eas": {
+        "projectId": "24effa99-f90d-462d-b1aa-171897dbaac8"
+      }
+    }
+  }
+}

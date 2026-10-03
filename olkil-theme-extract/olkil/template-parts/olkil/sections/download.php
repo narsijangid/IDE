@@ -8,7 +8,7 @@ if ( ! defined( 'ABSPATH' ) ) {
 	exit;
 }
 
-$v_fallback = function_exists( 'olkil_app_version' ) ? olkil_app_version() : '1.3.27';
+$v_fallback = function_exists( 'olkil_app_version' ) ? olkil_app_version() : '1.3.28';
 $win_v      = function_exists( 'olkil_dl_app_version' ) ? olkil_dl_app_version() : $v_fallback;
 $mac_v      = function_exists( 'olkil_dl_maclin_version' ) ? olkil_dl_maclin_version() : $win_v;
 $linux_v    = $mac_v;

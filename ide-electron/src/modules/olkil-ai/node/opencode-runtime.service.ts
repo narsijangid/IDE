@@ -12,18 +12,14 @@ import type {
 import { findModel, applyCustomModelEndpoints, customEndpointFor, DEFAULT_MODEL_ID, type AiProviderId, type CustomModelEndpoint } from '../common/models';
 import { isHeavyProjectBuildCommand, userAskedToRunBuild } from '../common/shell-policy';
 import { routeOpenRouterModel } from '../common/auto-router';
-import {
-  EMBEDDED_DEEPSEEK_API_KEY,
-  EMBEDDED_ENV,
-  EMBEDDED_OPENROUTER_API_KEY,
-  EMBEDDED_POOLSIDE_API_KEY,
-} from './embedded-secrets';
+import { EMBEDDED_ENV } from './embedded-secrets';
 import { OlkilWalletError, assertOlkilWallet, chargeOlkilWallet, addApiUsage, maxApiUsage, parseProviderUsage, collectGenerationIds, usageFromEngineMessage, type OlkilApiUsage } from './olkil-wallet.service';
 import { opencodeAgentForMode, opencodeModelRef, toOpencodeMcp } from './opencode/config';
 import { OpencodeSidecar } from './opencode/sidecar';
 import { startOpencodeDownload } from './opencode/binary';
 import type { OpencodeMcpServer, OpencodeProviderSecrets } from './opencode/config';
 import { actualOpenRouterUsage, refreshOpenRouterCatalog } from './openrouter';
+import { cachedBroker, ensureOpenRouterBroker } from './broker-creds';
 
 type ActivityKind = ClineEngineActivity['kind'];
 
@@ -105,65 +101,44 @@ function clipSnapshot(text: string | null): string | null {
 
 const DEFAULT_DEEPSEEK_BASE = 'https://api.deepseek.com';
 const DEFAULT_OLLAMA_BASE = 'http://127.0.0.1:11434';
-const DEFAULT_OPENROUTER_BASE = 'https://openrouter.ai/api/v1';
 
 function readEnvFile(): Record<string, string> {
   const out: Record<string, string> = { ...EMBEDDED_ENV };
   try {
     const envPath = path.join(process.cwd(), '.env');
-    if (!fs.existsSync(envPath)) {
-      return out;
-    }
-    for (const line of fs.readFileSync(envPath, 'utf8').split(/\r?\n/)) {
-      const m = /^\s*([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*)\s*$/.exec(line);
-      if (!m) {
-        continue;
+    if (fs.existsSync(envPath)) {
+      for (const line of fs.readFileSync(envPath, 'utf8').split(/\r?\n/)) {
+        const m = /^\s*([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*)\s*$/.exec(line);
+        if (!m) {
+          continue;
+        }
+        let v = m[2] || '';
+        if ((v.startsWith('"') && v.endsWith('"')) || (v.startsWith("'") && v.endsWith("'"))) {
+          v = v.slice(1, -1);
+        }
+        out[m[1]] = v;
       }
-      let v = m[2] || '';
-      if ((v.startsWith('"') && v.endsWith('"')) || (v.startsWith("'") && v.endsWith("'"))) {
-        v = v.slice(1, -1);
-      }
-      out[m[1]] = v;
     }
   } catch {
     // ignore
   }
+  delete out.OPENROUTER_API_KEY;
+  delete out.DEEPSEEK_API_KEY;
+  delete out.POOLSIDE_API_KEY;
   return out;
 }
 
-function firstKey(...vals: Array<string | undefined>): string {
-  for (const val of vals) {
-    const v = String(val || '').trim();
-    if (v && !/your_|changeme|placeholder/i.test(v)) {
-      return v;
-    }
-  }
-  return '';
-}
-
-function providerSecrets(): OpencodeProviderSecrets {
+async function providerSecrets(): Promise<OpencodeProviderSecrets> {
   const env = readEnvFile();
+  const broker = (await ensureOpenRouterBroker()) || cachedBroker();
   return {
-    deepseekKey: firstKey(
-      process.env.DEEPSEEK_API_KEY,
-      env.DEEPSEEK_API_KEY,
-      EMBEDDED_DEEPSEEK_API_KEY,
-    ),
+    deepseekKey: '',
     deepseekBase:
       process.env.DEEPSEEK_BASE_URL || env.DEEPSEEK_BASE_URL || DEFAULT_DEEPSEEK_BASE,
-    poolsideKey: firstKey(
-      process.env.POOLSIDE_API_KEY,
-      env.POOLSIDE_API_KEY,
-      EMBEDDED_POOLSIDE_API_KEY,
-    ),
+    poolsideKey: '',
     ollamaBase: process.env.OLLAMA_BASE_URL || env.OLLAMA_BASE_URL || DEFAULT_OLLAMA_BASE,
-    openrouterKey: firstKey(
-      process.env.OPENROUTER_API_KEY,
-      env.OPENROUTER_API_KEY,
-      EMBEDDED_OPENROUTER_API_KEY,
-    ),
-    openrouterBase:
-      process.env.OPENROUTER_BASE_URL || env.OPENROUTER_BASE_URL || DEFAULT_OPENROUTER_BASE,
+    openrouterKey: broker?.apiKey || '',
+    openrouterBase: broker?.baseURL || `${(process.env.OLKIL_BILLING_URL || 'https://olkil.com').replace(/\/$/, '')}/wp-json/olkil-payu/v1/broker/v1`,
   };
 }
 
@@ -282,6 +257,7 @@ function errorMessage(error: any): string {
  */
 export class OlkilOpencodeRuntimeHost {
   private sidecar: OpencodeSidecar | null = null;
+  private sidecarKeyFp = '';
   private readonly states = new Map<string, ClineEngineRunState>();
   private readonly lives = new Map<string, LiveRun>();
   private readonly sessions = new Map<string, SessionHandle>();
@@ -364,14 +340,12 @@ export class OlkilOpencodeRuntimeHost {
         }
       }
       await assertOlkilWallet(option.provider);
-      const secrets = providerSecrets();
+      const secrets = await providerSecrets();
       if (option.provider === 'openrouter' && secrets.openrouterKey) {
         await refreshOpenRouterCatalog(secrets.openrouterKey, secrets.openrouterBase);
       }
       if (option.provider === 'openrouter' && !secrets.openrouterKey) {
-        throw new Error(
-          'Cloud models are not configured in this OLKIL build. Reinstall the latest app from olkil.com.',
-        );
+        throw new Error('Sign in to OLKIL to use cloud models.');
       }
       if (option.provider === 'deepseek' && !secrets.deepseekKey) {
         throw new Error(
@@ -545,8 +519,16 @@ export class OlkilOpencodeRuntimeHost {
   }
 
   async ensureSidecar(): Promise<OpencodeSidecar> {
+    const secrets = await providerSecrets();
+    const fp = crypto.createHash('sha256').update(secrets.openrouterKey || '').digest('hex').slice(0, 16);
+    if (this.sidecar && this.sidecarKeyFp !== fp) {
+      this.sidecar.close();
+      this.sidecar = null;
+      this.eventsBound = false;
+    }
     if (!this.sidecar) {
-      this.sidecar = new OpencodeSidecar(providerSecrets(), {
+      this.sidecarKeyFp = fp;
+      this.sidecar = new OpencodeSidecar(secrets, {
         mcp: toOpencodeMcp(this.lastMcpServers),
         customModels: this.lastCustomModels,
       });
@@ -1039,7 +1021,7 @@ export class OlkilOpencodeRuntimeHost {
       const pulled = await this.pullSessionUsage(live);
       billed = maxApiUsage(billed, pulled);
       if (provider === 'openrouter') {
-        const secrets = providerSecrets();
+        const secrets = await providerSecrets();
         billed = maxApiUsage(
           billed,
           await actualOpenRouterUsage({

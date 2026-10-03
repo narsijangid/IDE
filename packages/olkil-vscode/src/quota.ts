@@ -1,4 +1,5 @@
 import { authOrigin, type OlkilSession } from './auth';
+import { fetchOpenRouterCatalog, lookupModelRates, openRouterRatesFresh } from './models';
 
 export interface OlkilQuota {
   plan: string;
@@ -16,22 +17,22 @@ export const PAID_PLANS = [
   {
     id: 'lite',
     name: 'Lite',
-    price: '$3',
+    price: '$10',
     period: '/ mo',
     blurb: 'Cloud agent and frontier models',
   },
   {
     id: 'pro',
     name: 'Pro',
-    price: '$10',
+    price: '$20',
     period: '/ mo',
-    blurb: 'Extended Agent limits',
+    blurb: 'Extended limits on Agent',
     featured: true,
   },
   {
     id: 'ultra',
     name: 'Ultra',
-    price: '$49',
+    price: '$100',
     period: '/ mo',
     blurb: 'Parallel agents and priority',
   },
@@ -104,35 +105,72 @@ function numDeep(value: unknown): number {
 
 function costNum(value: unknown): number {
   const n = typeof value === 'number' ? value : Number(String(value || '').trim());
-  return Number.isFinite(n) && n > 0 && n < 25 ? n : 0;
+  return Number.isFinite(n) && n > 0 && n < 500 ? n : 0;
 }
 
-export function estimateCostUsd(
+/**
+ * Model API fee in USD.
+ * OpenRouter `total_cost` / `usage.cost` is the final charge for that generation
+ * (input, output, reasoning, and cache are already inside it). Use it as-is.
+ * If it is missing, tokens × that model's own catalog rates.
+ * Reasoning tokens are part of completion when the count fits inside it.
+ * Cache reads and cache writes are priced once, not also as fresh input.
+ * Returns 0 when this model's price is unknown.
+ */
+export function apiFeeUsd(
   model: string | undefined,
-  prompt: number,
-  completion: number,
-  cacheHit = 0,
+  usage: {
+    prompt: number;
+    completion: number;
+    costUsd?: number;
+    cacheHit?: number;
+    cacheWrite?: number;
+    reasoning?: number;
+  },
 ): number {
-  const slug = String(model || '')
-    .replace(/^openrouter:/i, '')
-    .toLowerCase();
-  const table: Record<string, [number, number, number]> = {
-    'deepseek/deepseek-v4-flash': [0.09, 0.18, 0.018],
-    'deepseek-v4-flash': [0.09, 0.18, 0.018],
-    'x-ai/grok-4.6': [2, 6, 0.5],
-    'anthropic/claude-sonnet-5': [2, 10, 0.2],
-    'anthropic/claude-opus-5': [5, 25, 0.5],
-    'openai/gpt-5.6-sol': [2, 10, 0.2],
-    'openai/gpt-5.6-luna': [0.2, 1.2, 0.02],
-  };
-  const rates =
-    table[slug] ||
-    Object.entries(table).find(([id]) => slug && (id.includes(slug) || slug.includes(id)))?.[1] ||
-    [2, 10, 0.2];
-  const hit = Math.max(0, cacheHit);
-  const miss = Math.max(0, prompt - hit);
-  const usd = (miss / 1_000_000) * rates[0] + (hit / 1_000_000) * rates[2] + (Math.max(0, completion) / 1_000_000) * rates[1];
-  return Math.min(8, Math.max(0, usd));
+  const reported = Number(usage.costUsd);
+  if (Number.isFinite(reported) && reported > 0 && reported < 500) return reported;
+  const rates = lookupModelRates(model);
+  if (!rates) return 0;
+  const input = Math.max(0, Math.floor(usage.prompt));
+  const cacheRead = Math.min(Math.max(0, Math.floor(usage.cacheHit || 0)), input);
+  const room = Math.max(0, input - cacheRead);
+  const cacheWrite =
+    rates.cacheWrite > 0 ? Math.min(Math.max(0, Math.floor(usage.cacheWrite || 0)), room) : 0;
+  const fresh = room - cacheWrite;
+  const output = Math.max(0, Math.floor(usage.completion));
+  const reasoning = Math.max(0, Math.floor(usage.reasoning || 0));
+  const readRate = rates.cacheRead > 0 ? rates.cacheRead : rates.prompt;
+  let outputUsd = 0;
+  if (rates.reasoning > 0 && reasoning > 0 && reasoning <= output) {
+    outputUsd = (output - reasoning) * rates.completion + reasoning * rates.reasoning;
+  } else if (reasoning > output) {
+    const reasonRate = rates.reasoning > 0 ? rates.reasoning : rates.completion;
+    outputUsd = output * rates.completion + reasoning * reasonRate;
+  } else {
+    outputUsd = (output > 0 ? output : reasoning) * rates.completion;
+  }
+  const usd = fresh * rates.prompt + cacheRead * readRate + cacheWrite * rates.cacheWrite + outputUsd;
+  return Number.isFinite(usd) && usd > 0 ? usd : 0;
+}
+
+export async function resolveApiFeeUsd(
+  model: string | undefined,
+  usage: {
+    prompt: number;
+    completion: number;
+    costUsd?: number;
+    cacheHit?: number;
+    cacheWrite?: number;
+    reasoning?: number;
+  },
+): Promise<number> {
+  const reported = Number(usage.costUsd);
+  if (Number.isFinite(reported) && reported > 0 && reported < 500) return reported;
+  if (!lookupModelRates(model) || !openRouterRatesFresh()) {
+    await fetchOpenRouterCatalog({ force: true });
+  }
+  return apiFeeUsd(model, usage);
 }
 
 export type ParsedUsage = {
@@ -142,6 +180,7 @@ export type ParsedUsage = {
   costUsd: number;
   cacheHit: number;
   cacheMiss: number;
+  cacheWrite: number;
   reasoning: number;
 };
 
@@ -181,7 +220,13 @@ export function parseUsageBlob(raw: unknown): ParsedUsage | null {
       cache.read ??
       nested.prompt_tokens_details?.cached_tokens,
   );
-  const cacheMiss = numDeep(u.prompt_cache_miss_tokens ?? cache.write);
+  const cacheMiss = numDeep(u.prompt_cache_miss_tokens);
+  const cacheWrite = numDeep(
+    u.cache_write_tokens ??
+      u.native_tokens_cache_write ??
+      cache.write ??
+      nested.prompt_tokens_details?.cache_write_tokens,
+  );
   const reasoning = numDeep(
     u.native_tokens_reasoning ??
       u.reasoning_tokens ??
@@ -189,6 +234,7 @@ export function parseUsageBlob(raw: unknown): ParsedUsage | null {
       details.reasoning_tokens ??
       nested.completion_tokens_details?.reasoning_tokens,
   );
+  // Final account charge for this generation. Ignores upstream_inference_cost and cache_discount.
   const costUsd = costNum(
     u.total_cost ??
       u.totalCost ??
@@ -210,6 +256,7 @@ export function parseUsageBlob(raw: unknown): ParsedUsage | null {
     costUsd,
     cacheHit,
     cacheMiss,
+    cacheWrite,
     reasoning,
   };
 }
@@ -225,6 +272,7 @@ export function maxUsage(a: ParsedUsage | null, b: ParsedUsage | null): ParsedUs
     costUsd: Math.max(a.costUsd, b.costUsd),
     cacheHit: Math.max(a.cacheHit, b.cacheHit),
     cacheMiss: Math.max(a.cacheMiss, b.cacheMiss),
+    cacheWrite: Math.max(a.cacheWrite, b.cacheWrite),
     reasoning: Math.max(a.reasoning, b.reasoning),
   };
 }
@@ -239,12 +287,13 @@ export function addUsage(a: ParsedUsage | null, b: ParsedUsage | null): ParsedUs
     costUsd: a.costUsd + b.costUsd,
     cacheHit: a.cacheHit + b.cacheHit,
     cacheMiss: a.cacheMiss + b.cacheMiss,
+    cacheWrite: a.cacheWrite + b.cacheWrite,
     reasoning: a.reasoning + b.reasoning,
   };
 }
 
 export interface EngineCreds {
-  provider: 'openrouter' | 'deepseek';
+  provider: 'openrouter' | 'deepseek' | 'trial';
   baseURL: string;
   apiKey: string;
   model: string;
@@ -336,20 +385,23 @@ export async function fetchOpenRouterGenerationUsage(
   return found;
 }
 
-function credsFromJson(json: Record<string, any> | null): EngineCreds | null {
+/** Reject provider keys. Cloud creds are a broker grant, never sk-or- / sky_. */
+export function isUpstreamProviderKey(value: string): boolean {
+  const v = String(value || '').trim();
+  return /^sk-or-/i.test(v) || /^sky_/i.test(v);
+}
+
+export function acceptBrokerCreds(json: Record<string, any> | null): EngineCreds | null {
   if (!json) return null;
   const apiKey = String(json.apiKey || json.key || '').trim();
-  if (!apiKey) return null;
-  const provider = json.provider === 'openrouter' ? 'openrouter' : 'deepseek';
+  const baseURL = String(json.baseURL || '').trim().replace(/\/+$/, '');
+  if (!apiKey.startsWith('olk1.') || isUpstreamProviderKey(apiKey)) return null;
+  if (!baseURL.includes('/olkil-payu/v1/broker/')) return null;
   return {
-    provider,
-    baseURL:
-      String(json.baseURL || '').trim() ||
-      (provider === 'openrouter' ? 'https://openrouter.ai/api/v1' : 'https://api.deepseek.com/v1'),
+    provider: 'openrouter',
+    baseURL,
     apiKey,
-    model:
-      String(json.model || '').trim() ||
-      (provider === 'openrouter' ? 'deepseek/deepseek-v4-flash' : 'deepseek-v4-flash'),
+    model: String(json.model || '').trim() || 'deepseek/deepseek-v4-flash',
   };
 }
 
@@ -371,7 +423,7 @@ export async function hydrateEngineKey(session: OlkilSession): Promise<EngineCre
     try {
       const res = await fetch(url, { method: 'POST', headers, body });
       if (!res.ok) continue;
-      const creds = credsFromJson((await res.json().catch(() => null)) as Record<string, any> | null);
+      const creds = acceptBrokerCreds((await res.json().catch(() => null)) as Record<string, any> | null);
       if (creds) return creds;
     } catch {
       /* try next */
@@ -383,7 +435,7 @@ export async function hydrateEngineKey(session: OlkilSession): Promise<EngineCre
       headers,
       body,
     });
-    const creds = credsFromJson((await res.json().catch(() => null)) as Record<string, any> | null);
+    const creds = acceptBrokerCreds((await res.json().catch(() => null)) as Record<string, any> | null);
     if (creds) return creds;
   } catch {
     /* ignore */
@@ -403,9 +455,12 @@ export async function chargeUsage(
     costUsd?: number;
     cacheHit?: number;
     cacheMiss?: number;
+    cacheWrite?: number;
     reasoning?: number;
   },
 ): Promise<OlkilQuota | null> {
+  const fee = await resolveApiFeeUsd(usage.model, usage);
+  if (!(fee > 0)) return null;
   try {
     const res = await fetch(authOrigin() + '/wp-json/olkil-payu/v1/usage', {
       method: 'POST',
@@ -419,17 +474,10 @@ export async function chargeUsage(
         tokens: usage.total,
         input_tokens: usage.prompt,
         output_tokens: usage.completion,
-        cost_usd:
-          usage.costUsd && usage.costUsd > 0
-            ? usage.costUsd
-            : estimateCostUsd(
-                usage.model,
-                usage.prompt,
-                usage.completion > 0 ? usage.completion : usage.reasoning || 0,
-                usage.cacheHit || 0,
-              ),
+        cost_usd: fee,
         prompt_cache_hit_tokens: usage.cacheHit || 0,
         prompt_cache_miss_tokens: usage.cacheMiss || 0,
+        cache_write_tokens: usage.cacheWrite || 0,
         reasoning_tokens: usage.reasoning || 0,
         model: usage.model || 'deepseek/deepseek-v4-flash',
         provider: usage.provider || 'openrouter',

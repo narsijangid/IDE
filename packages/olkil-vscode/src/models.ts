@@ -4,6 +4,49 @@ export interface OlkilCloudModel {
   label: string;
 }
 
+/** USD per token, from OpenRouter's model list. Not a guessed Sonnet rate. */
+export interface ModelTokenRates {
+  prompt: number;
+  completion: number;
+  cacheRead: number;
+  cacheWrite: number;
+  reasoning: number;
+}
+
+const modelRates = new Map<string, ModelTokenRates>();
+const RATES_TTL_MS = 6 * 60 * 60 * 1000;
+let ratesFetchedAt = 0;
+
+export function openRouterRatesFresh(): boolean {
+  return modelRates.size > 0 && Date.now() - ratesFetchedAt < RATES_TTL_MS;
+}
+
+function perToken(value: unknown): number {
+  const n = typeof value === 'number' ? value : Number(String(value || '').trim());
+  return Number.isFinite(n) && n > 0 ? n : 0;
+}
+
+function rememberRates(slug: string, pricing: Record<string, unknown> | null | undefined) {
+  const id = String(slug || '').trim().toLowerCase().replace(/^openrouter:/, '');
+  if (!id || !pricing) return;
+  const prompt = perToken(pricing.prompt);
+  const completion = perToken(pricing.completion);
+  if (!(prompt > 0) && !(completion > 0)) return;
+  modelRates.set(id, {
+    prompt,
+    completion,
+    cacheRead: perToken(pricing.input_cache_read),
+    cacheWrite: perToken(pricing.input_cache_write),
+    reasoning: perToken(pricing.internal_reasoning),
+  });
+}
+
+export function lookupModelRates(model: string | undefined): ModelTokenRates | null {
+  const id = String(model || '').trim().toLowerCase().replace(/^openrouter:/, '');
+  if (!id) return null;
+  return modelRates.get(id) || null;
+}
+
 /** Same featured cloud lineup as the OLKIL desktop picker (OpenRouter). */
 export const CLOUD_MODELS: OlkilCloudModel[] = [
   { id: 'auto', slug: 'deepseek/deepseek-v4-flash', label: 'Auto' },
@@ -27,7 +70,8 @@ export function setExtraCloudModels(list: OlkilCloudModel[]) {
   extraCloud = Array.isArray(list) ? list : [];
 }
 
-export async function fetchOpenRouterCatalog(): Promise<OlkilCloudModel[]> {
+export async function fetchOpenRouterCatalog(opts?: { force?: boolean }): Promise<OlkilCloudModel[]> {
+  if (!opts?.force && openRouterRatesFresh()) return extraCloud;
   try {
     const res = await fetch('https://openrouter.ai/api/v1/models', {
       headers: { 'HTTP-Referer': 'https://olkil.com', 'X-Title': 'OLKIL' },
@@ -38,6 +82,12 @@ export async function fetchOpenRouterCatalog(): Promise<OlkilCloudModel[]> {
     const featured = new Set(CLOUD_MODELS.map((m) => m.slug));
     const next: OlkilCloudModel[] = [];
     const seen = new Set<string>();
+    for (const row of rows) {
+      rememberRates(
+        String(row?.id || ''),
+        row?.pricing && typeof row.pricing === 'object' ? row.pricing : null,
+      );
+    }
     for (const row of rows) {
       const slug = String(row?.id || '').trim();
       if (!slug || featured.has(slug) || seen.has(slug)) continue;
@@ -56,6 +106,7 @@ export async function fetchOpenRouterCatalog(): Promise<OlkilCloudModel[]> {
       if (next.length >= 280) break;
     }
     extraCloud = next;
+    if (rows.length) ratesFetchedAt = Date.now();
   } catch {
     /* keep last */
   }

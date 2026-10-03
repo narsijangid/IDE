@@ -84,3 +84,4 @@ $profile_url = olkil_page_url( 'profile' );
 		</div>
 	</div>
 </header>
+<noscript><style>.olkil-reveal,.olkil-post,.olkil-article,.olkil-section__head,.olkil-price-grid{opacity:1!important;transform:none!important;visibility:visible!important}</style></noscript>

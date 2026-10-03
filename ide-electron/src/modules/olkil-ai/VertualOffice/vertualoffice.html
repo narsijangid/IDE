@@ -1723,9 +1723,18 @@
                POSITION HELPERS
             ========================================================= */
             function anchorPoint(el) {
+                /* Under CSS transform:scale (VS Code host), getBoundingClientRect is scaled
+                   but traveler left/top are in unscaled scene coords — divide by scale. */
                 var s = scene.getBoundingClientRect();
                 var r = el.getBoundingClientRect();
-                return { x: r.left - s.left + r.width / 2, y: r.top - s.top + r.height / 2 };
+                var sx = scene.offsetWidth ? (s.width / scene.offsetWidth) : 1;
+                var sy = scene.offsetHeight ? (s.height / scene.offsetHeight) : 1;
+                if (!sx) sx = 1;
+                if (!sy) sy = 1;
+                return {
+                    x: (r.left - s.left) / sx + (r.width / sx) / 2,
+                    y: (r.top - s.top) / sy + (r.height / sy) / 2
+                };
             }
 
             function placeTraveler(workerId, point) {
@@ -1761,7 +1770,9 @@
                 var cabin = state[workerId].els.cabin;
                 var trackRect = managerTrack.getBoundingClientRect();
                 var cabinRect = cabin.getBoundingClientRect();
-                var x = (cabinRect.left - trackRect.left) + cabinRect.width / 2 - managerEl.offsetWidth / 2;
+                var sx = managerTrack.offsetWidth ? (trackRect.width / managerTrack.offsetWidth) : 1;
+                if (!sx) sx = 1;
+                var x = ((cabinRect.left - trackRect.left) + cabinRect.width / 2 - managerEl.offsetWidth * sx / 2) / sx;
                 return Math.max(0, x);
             }
 
@@ -2211,6 +2222,8 @@
                     }
                 } else if (d.type === 'complete') {
                     if (d.workerId) completeTask(d.workerId);
+                } else if (d.type === 'select') {
+                    if (d.workerId) selectWorker(d.workerId);
                 } else if (d.type === 'reset') {
                     reset();
                 } else if (d.type === 'ping') {

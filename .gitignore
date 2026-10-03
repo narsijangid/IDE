@@ -8,8 +8,12 @@
 **/.secret.local
 **/olkil-payu-checkout/secrets.php
 **/olkil-payu-checkout/engine-secrets.php
+**/olkil-payu-checkout/engine-kek.php
+**/olkil-payu-checkout/engine-vault.php
 wp-plugins/olkil-payu-checkout/secrets.php
 wp-plugins/olkil-payu-checkout/engine-secrets.php
+wp-plugins/olkil-payu-checkout/engine-kek.php
+wp-plugins/olkil-payu-checkout/engine-vault.php
 
 # Local Hostinger / pack scratch — never commit
 .deploy-tmp/

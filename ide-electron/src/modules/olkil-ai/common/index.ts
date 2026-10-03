@@ -336,6 +336,8 @@ export interface IOlkilAiNodeService {
   pauseLocalModelDownload(): Promise<OllamaSetupState>;
   /** Cancel an in-progress Ollama model download. */
   cancelLocalModelDownload(): Promise<OllamaSetupState>;
+  /** Windows display+system awake request used by Remote Access. */
+  setKeepAwake(on: boolean): Promise<boolean>;
 
   /** Detect package.json scripts / framework. */
   detectDevServer(root: string): Promise<DevServerDetectResult>;

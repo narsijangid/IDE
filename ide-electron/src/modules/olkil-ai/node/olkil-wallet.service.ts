@@ -123,45 +123,93 @@ function num(value: unknown): number {
 
 function costNum(value: unknown): number {
   const n = Number(value);
-  return Number.isFinite(n) && n > 0 && n < 25 ? n : 0;
+  return Number.isFinite(n) && n > 0 && n < 500 ? n : 0;
 }
 
-const MODEL_USD_PER_MILLION: Record<string, [number, number, number]> = {
-  'anthropic/claude-sonnet-5': [2, 10, 0.2],
-  'anthropic/claude-opus-5': [5, 25, 0.5],
-  'openai/gpt-5.6-sol': [2, 10, 0.2],
-  'openai/gpt-5.6-luna': [0.2, 1.2, 0.02],
-  'x-ai/grok-4.6': [2, 6, 0.5],
-  'deepseek/deepseek-v4-flash': [0.09, 0.18, 0.018],
-  'google/gemini-3.8-flash': [0.75, 3.75, 0.075],
-  'google/gemini-3.5-flash': [1.5, 9, 0.15],
-  'moonshotai/kimi-k2.7-code': [0.71, 3.5, 0.15],
+type OpenRouterTokenRates = {
+  prompt: number;
+  completion: number;
+  cacheRead: number;
+  cacheWrite: number;
+  reasoning: number;
 };
+
+let openRouterRates: Map<string, OpenRouterTokenRates> | null = null;
+let openRouterRatesAt = 0;
+let openRouterRatesLoad: Promise<void> | null = null;
+const OPENROUTER_RATES_TTL_MS = 6 * 60 * 60 * 1000;
+
+function perTokenRate(value: unknown): number {
+  const n = Number(value);
+  return Number.isFinite(n) && n > 0 ? n : 0;
+}
+
+async function loadOpenRouterRates(force = false): Promise<void> {
+  if (!force && openRouterRates && Date.now() - openRouterRatesAt < OPENROUTER_RATES_TTL_MS) return;
+  if (!openRouterRatesLoad) {
+    openRouterRatesLoad = (async () => {
+      const res = await fetch('https://openrouter.ai/api/v1/models', {
+        headers: { 'HTTP-Referer': 'https://olkil.com', 'X-Title': 'OLKIL' },
+      });
+      if (!res.ok) return;
+      const json = (await res.json()) as { data?: Array<Record<string, any>> };
+      const map = new Map<string, OpenRouterTokenRates>();
+      for (const row of json.data || []) {
+        const id = String(row?.id || '')
+          .trim()
+          .toLowerCase();
+        const pricing = row?.pricing;
+        if (!id || !pricing || typeof pricing !== 'object') continue;
+        const prompt = perTokenRate(pricing.prompt);
+        const completion = perTokenRate(pricing.completion);
+        if (!(prompt > 0) && !(completion > 0)) continue;
+        map.set(id, {
+          prompt,
+          completion,
+          cacheRead: perTokenRate(pricing.input_cache_read),
+          cacheWrite: perTokenRate(pricing.input_cache_write),
+          reasoning: perTokenRate(pricing.internal_reasoning),
+        });
+      }
+      if (map.size) {
+        openRouterRates = map;
+        openRouterRatesAt = Date.now();
+      }
+    })().finally(() => {
+      openRouterRatesLoad = null;
+    });
+  }
+  await openRouterRatesLoad;
+}
 
 export function estimateOlkilCostUsd(model: string, usage: OlkilApiUsage | null): number {
   if (usage?.costUsd && usage.costUsd > 0) {
     return usage.costUsd;
   }
-  if (!usage) {
-    return 0;
-  }
-  const billedOut = usage.completionTokens > 0 ? usage.completionTokens : usage.reasoningTokens;
-  const total = usage.totalTokens > 0 ? usage.totalTokens : usage.promptTokens + billedOut;
-  if (total < 1) {
-    return 0;
-  }
+  if (!usage) return 0;
   const slug = String(model || '')
     .replace(/^openrouter:/i, '')
     .trim()
     .toLowerCase();
-  const prices =
-    MODEL_USD_PER_MILLION[slug] ||
-    Object.entries(MODEL_USD_PER_MILLION).find(([id]) => slug && (id.includes(slug) || slug.includes(id)))?.[1] ||
-    ([2, 10, 0.2] as [number, number, number]);
-  const hit = usage.cacheHitTokens;
-  const miss = usage.cacheMissTokens > 0 ? usage.cacheMissTokens : Math.max(0, usage.promptTokens - hit);
-  const usd = (miss / 1_000_000) * prices[0] + (hit / 1_000_000) * prices[2] + (billedOut / 1_000_000) * prices[1];
-  return Math.min(8, Math.max(0, usd));
+  const rates = openRouterRates?.get(slug);
+  if (!rates) return 0;
+  const input = Math.max(0, usage.promptTokens);
+  const cacheRead = Math.min(Math.max(0, usage.cacheHitTokens), input);
+  const room = Math.max(0, input - cacheRead);
+  const output = Math.max(0, usage.completionTokens);
+  const reasoning = Math.max(0, usage.reasoningTokens);
+  const readRate = rates.cacheRead > 0 ? rates.cacheRead : rates.prompt;
+  let outputUsd = 0;
+  if (rates.reasoning > 0 && reasoning > 0 && reasoning <= output) {
+    outputUsd = (output - reasoning) * rates.completion + reasoning * rates.reasoning;
+  } else if (reasoning > output) {
+    const reasonRate = rates.reasoning > 0 ? rates.reasoning : rates.completion;
+    outputUsd = output * rates.completion + reasoning * reasonRate;
+  } else {
+    outputUsd = (output > 0 ? output : reasoning) * rates.completion;
+  }
+  const usd = fresh * rates.prompt + cacheRead * readRate + outputUsd;
+  return Number.isFinite(usd) && usd > 0 && usd < 500 ? usd : 0;
 }
 
 /**
@@ -792,6 +840,7 @@ export async function chargeOlkilWallet(opts: {
         ? usage.reasoningTokens
         : Math.max(0, Math.floor(opts.outputTokens));
   const tokens = usage && usage.totalTokens > 0 ? usage.totalTokens : inputTokens + outputTokens;
+  await loadOpenRouterRates();
   const costUsd = estimateOlkilCostUsd(opts.model, {
     promptTokens: inputTokens,
     completionTokens: outputTokens,

@@ -1260,13 +1260,6 @@ html[data-olkil-theme="light"] .olkil-hero-agent__video {
 	min-height: 2.6em;
 }
 
-.olkil-price-card__includes {
-	margin: 0 0 0.2rem;
-	font-size: 0.84rem;
-	font-weight: 650;
-	color: var(--olkil-white);
-}
-
 .olkil-price-card__features {
 	list-style: none;
 	margin: 0 0 1.25rem;
@@ -1703,7 +1696,13 @@ html[data-olkil-theme="light"] .olkil-hero-agent__video {
 .olkil-article.olkil-reveal,
 article.olkil-article.olkil-reveal,
 body.single .olkil-reveal.olkil-article,
-body.page .olkil-reveal.olkil-article {
+body.page .olkil-reveal.olkil-article,
+/* Blog listing cards — always visible; JS reveal can cause blank grid */
+.olkil-post.olkil-reveal,
+body.blog .olkil-reveal.olkil-post,
+body.archive .olkil-reveal.olkil-post,
+body.home .olkil-reveal.olkil-post,
+.olkil-posts .olkil-post.olkil-reveal {
 	opacity: 1 !important;
 	transform: none !important;
 }

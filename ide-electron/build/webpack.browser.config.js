@@ -26,6 +26,10 @@ module.exports = createConfig({
     exprContextCritical: false,
     rules: [
       {
+        test: /[\\/]olkil-vscode[\\/]webview[\\/](sidebar|qrcode)\.(js|css)$/,
+        type: 'asset/source',
+      },
+      {
         test: /\.tsx?$/,
         loader: 'ts-loader',
         options: {
@@ -44,6 +48,9 @@ module.exports = createConfig({
       },
       {
         test: /\.css$/,
+        // Chat CSS is inlined into the panel iframe. css-loader would extract it
+        // onto the workbench document, where the iframe cannot see it.
+        exclude: /[\\/]olkil-vscode[\\/]webview[\\/]/,
         use: [MiniCssExtractPlugin.loader, 'css-loader'],
       },
       {

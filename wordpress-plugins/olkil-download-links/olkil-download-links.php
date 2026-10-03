@@ -2,7 +2,7 @@
 /**
  * Plugin Name: OLKIL Download Links
  * Description: Sets Windows / macOS / Linux download URLs for OLKIL desktop installers. Mirrors installers into /downloads/.
- * Version: 1.3.27
+ * Version: 1.3.28
  * Author: OLKIL
  */
 
@@ -10,15 +10,15 @@ if ( ! defined( 'ABSPATH' ) ) {
 	exit;
 }
 
-if ( get_option( 'olkil_opcache_bust_1327c' ) !== '1' ) {
+if ( get_option( 'olkil_opcache_bust_1328' ) !== '1' ) {
 	if ( function_exists( 'opcache_reset' ) ) {
 		@opcache_reset();
 	}
-	update_option( 'olkil_opcache_bust_1327c', '1', false );
+	update_option( 'olkil_opcache_bust_1328', '1', false );
 }
 
 function olkil_dl_app_version() {
-	return '1.3.27';
+	return '1.3.28';
 }
 
 /**

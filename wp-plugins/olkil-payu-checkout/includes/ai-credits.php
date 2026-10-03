@@ -30,9 +30,9 @@ function olkil_payu_usd_micros() {
 function olkil_payu_ai_credit_micros( $plan ) {
 	$plan     = sanitize_key( $plan );
 	$defaults = array(
-		'lite'  => 3.0,
-		'pro'   => 10.0,
-		'ultra' => 49.0,
+		'lite'  => 10.0,
+		'pro'   => 20.0,
+		'ultra' => 100.0,
 		'max'   => 20.0,
 	);
 	$usd      = isset( $defaults[ $plan ] ) ? (float) $defaults[ $plan ] : 0.0;
@@ -114,33 +114,62 @@ function olkil_payu_entitlement_to_ai_credits( array $ent ) {
 }
 
 /**
- * USD per million tokens: [input, output, cache_read]. Conservative default = Sonnet.
+ * Live USD-per-token rates for one OpenRouter model id.
+ * The catalog is every model OpenRouter lists, cached for a few hours.
  *
- * @return array{0:float,1:float,2:float}
+ * @return array{prompt:float,completion:float,cache_read:float,cache_write:float,reasoning:float}|null
  */
-function olkil_payu_model_usd_per_million( $model ) {
+function olkil_payu_openrouter_token_rates( $model ) {
 	$slug = strtolower( trim( (string) $model ) );
 	$slug = preg_replace( '/^openrouter:/', '', $slug );
-	$table = array(
-		'anthropic/claude-sonnet-5'   => array( 2.0, 10.0, 0.2 ),
-		'anthropic/claude-opus-5'     => array( 5.0, 25.0, 0.5 ),
-		'openai/gpt-5.6-sol'          => array( 2.0, 10.0, 0.2 ),
-		'openai/gpt-5.6-luna'         => array( 0.2, 1.2, 0.02 ),
-		'x-ai/grok-4.6'               => array( 2.0, 6.0, 0.5 ),
-		'deepseek/deepseek-v4-flash'  => array( 0.09, 0.18, 0.018 ),
-		'google/gemini-3.8-flash'     => array( 0.75, 3.75, 0.075 ),
-		'google/gemini-3.5-flash'     => array( 1.5, 9.0, 0.15 ),
-		'moonshotai/kimi-k2.7-code'   => array( 0.71, 3.5, 0.15 ),
-	);
-	if ( isset( $table[ $slug ] ) ) {
-		return $table[ $slug ];
+	if ( '' === $slug ) {
+		return null;
 	}
-	foreach ( $table as $id => $prices ) {
-		if ( $slug && false !== strpos( $id, $slug ) ) {
-			return $prices;
+	$all = get_transient( 'olkil_or_token_rates' );
+	if ( ! is_array( $all ) ) {
+		$res = wp_remote_get(
+			'https://openrouter.ai/api/v1/models',
+			array(
+				'timeout' => 20,
+				'headers' => array(
+					'HTTP-Referer' => 'https://olkil.com',
+					'X-Title'      => 'OLKIL',
+				),
+			)
+		);
+		if ( is_wp_error( $res ) ) {
+			return null;
+		}
+		$json = json_decode( (string) wp_remote_retrieve_body( $res ), true );
+		$rows = is_array( $json['data'] ?? null ) ? $json['data'] : array();
+		$all  = array();
+		foreach ( $rows as $row ) {
+			if ( ! is_array( $row ) ) {
+				continue;
+			}
+			$id = strtolower( trim( (string) ( $row['id'] ?? '' ) ) );
+			$p  = $row['pricing'] ?? null;
+			if ( '' === $id || ! is_array( $p ) ) {
+				continue;
+			}
+			$prompt     = (float) ( $p['prompt'] ?? 0 );
+			$completion = (float) ( $p['completion'] ?? 0 );
+			if ( $prompt <= 0 && $completion <= 0 ) {
+				continue;
+			}
+			$all[ $id ] = array(
+				'prompt'      => $prompt,
+				'completion'  => $completion,
+				'cache_read'  => (float) ( $p['input_cache_read'] ?? 0 ),
+				'cache_write' => (float) ( $p['input_cache_write'] ?? 0 ),
+				'reasoning'   => (float) ( $p['internal_reasoning'] ?? 0 ),
+			);
+		}
+		if ( $all ) {
+			set_transient( 'olkil_or_token_rates', $all, 6 * HOUR_IN_SECONDS );
 		}
 	}
-	return array( 2.0, 10.0, 0.2 );
+	return isset( $all[ $slug ] ) && is_array( $all[ $slug ] ) ? $all[ $slug ] : null;
 }
 
 /**
@@ -149,32 +178,44 @@ function olkil_payu_model_usd_per_million( $model ) {
  */
 function olkil_payu_usage_to_credit_units( array $meta, $token_hint = 0 ) {
 	$cost = (float) ( $meta['cost_usd'] ?? 0 );
-	if ( $cost > 0 && $cost < 25 ) {
+	if ( $cost > 0 && $cost < 500 ) {
 		return max( 1, (int) round( $cost * olkil_payu_usd_micros() ) );
 	}
 
 	$input  = max( 0, (int) ( $meta['input_tokens'] ?? 0 ) );
 	$output = max( 0, (int) ( $meta['output_tokens'] ?? 0 ) );
 	$hit    = max( 0, (int) ( $meta['prompt_cache_hit_tokens'] ?? 0 ) );
-	$miss   = max( 0, (int) ( $meta['prompt_cache_miss_tokens'] ?? 0 ) );
 	if ( $input < 1 && $output < 1 ) {
 		$input = max( 0, (int) $token_hint );
 	}
-	if ( $miss < 1 && $hit > 0 && $input >= $hit ) {
-		$miss = $input - $hit;
-	} elseif ( $miss < 1 && $hit < 1 ) {
-		$miss = $input;
-	}
 
-	$prices = olkil_payu_model_usd_per_million( (string) ( $meta['model'] ?? '' ) );
-	$usd    = ( $miss / 1000000 ) * $prices[0] + ( $hit / 1000000 ) * $prices[2] + ( $output / 1000000 ) * $prices[1];
+	$rates = olkil_payu_openrouter_token_rates( (string) ( $meta['model'] ?? '' ) );
+	if ( ! is_array( $rates ) ) {
+		return 0;
+	}
+	$cache_read = min( $hit, $input );
+	$room       = max( 0, $input - $cache_read );
+	$write      = $rates['cache_write'] > 0 ? min( max( 0, (int) ( $meta['cache_write_tokens'] ?? 0 ) ), $room ) : 0;
+	$fresh      = $room - $write;
+	$reasoning  = max( 0, (int) ( $meta['reasoning_tokens'] ?? 0 ) );
+	$read_rate  = $rates['cache_read'] > 0 ? $rates['cache_read'] : $rates['prompt'];
+	$output_usd = 0.0;
+	if ( $rates['reasoning'] > 0 && $reasoning > 0 && $reasoning <= $output ) {
+		$output_usd = ( ( $output - $reasoning ) * $rates['completion'] ) + ( $reasoning * $rates['reasoning'] );
+	} elseif ( $reasoning > $output ) {
+		$reason_rate = $rates['reasoning'] > 0 ? $rates['reasoning'] : $rates['completion'];
+		$output_usd  = ( $output * $rates['completion'] ) + ( $reasoning * $reason_rate );
+	} else {
+		$billed     = $output > 0 ? $output : $reasoning;
+		$output_usd = $billed * $rates['completion'];
+	}
+	$usd = ( $fresh * $rates['prompt'] ) + ( $cache_read * $read_rate ) + ( $write * $rates['cache_write'] ) + $output_usd;
+	if ( $usd <= 0 || $usd >= 500 ) {
+		return 0;
+	}
 	$units  = (int) round( $usd * olkil_payu_usd_micros() );
 	if ( $units < 1 && ( $input + $output ) > 0 ) {
 		$units = 1;
-	}
-	$max = 8 * olkil_payu_usd_micros();
-	if ( $units > $max ) {
-		$units = $max;
 	}
 	return max( 0, $units );
 }

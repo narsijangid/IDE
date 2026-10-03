@@ -4,6 +4,7 @@ import { launch } from './launch';
 import minimist from 'minimist';
 import { existsSync } from 'fs-extra';
 import { startAutoUpdater } from './services/auto-update';
+import { registerScreenControl } from './screen-control';
 import { startOpencodeDownload } from '../common/ensure-opencode';
 
 const PROTOCOL = 'olkil';
@@ -136,6 +137,7 @@ app.whenReady().then(() => {
   // Re-register after ready (some Windows builds ignore pre-ready calls)
   registerProtocolClient();
   startAutoUpdater();
+  registerScreenControl();
   startOpencodeDownload();
   if (coldProtocol) {
     setTimeout(() => dispatchProtocolUrl(coldProtocol), 1000);

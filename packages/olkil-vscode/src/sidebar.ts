@@ -1,3 +1,4 @@
+import * as crypto from 'crypto';
 import * as vscode from 'vscode';
 import * as fs from 'fs';
 import * as path from 'path';
@@ -22,6 +23,19 @@ import {
   type OlkilQuota,
 } from './quota';
 import { CUSTOM_MODEL_ID, DEFAULT_MODEL_ID, customEndpointReady, customIdFromModelId, customPickerId, fetchOpenRouterCatalog, isAddCustomModel, isCustomModel, newCustomId, pickerModels, resolveCloudSlug, type CustomEndpoint } from './models';
+import { buildDiffPreview, computeEditorDiffMarkers, countLineStats, type DiffLine } from './diff';
+import { ChatHistoryStore, titleFromMessages, type PersistedChatMessage } from './chat-history';
+import { VirtualOfficePanel, VO_ASSIGNEES, VO_WORKERS, isSimpleChatPrompt, type VoAssigneeId } from './virtual-office';
+import { PocketBridge } from './pocket';
+import { ExtensionScreen } from './screen-share';
+import { KeepAwake } from './keep-awake';
+import {
+  exactTrialTokens,
+  freeTrialCreds,
+  openFreeTrial,
+  recordFreeTrialUse,
+  type FreeTrialState,
+} from './free-trial';
 
 function workspaceFolder(): string {
   const folder = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
@@ -91,7 +105,8 @@ function isUserEcho(text: string): boolean {
   return (
     /Stay inside this folder/i.test(t) ||
     /You are OLKIL, the OLKIL coding agent/i.test(t) ||
-    /Agent mode: edit or write/i.test(t) ||
+    /You are OLKIL's coding agent/i.test(t) ||
+    /Agent mode: (edit or write|complete the full request)/i.test(t) ||
     /^Workspace:\s/i.test(t.trim())
   );
 }
@@ -104,25 +119,197 @@ function friendlyEngineError(raw: string): string {
   return t.replace(/\bOpenCode\b/gi, 'OLKIL').replace(/\bDeepSeek\b/gi, 'OLKIL');
 }
 
-function toolLabel(part: any): string {
+function fileExistsOnDisk(filePath: string): boolean {
+  try {
+    const p = String(filePath || '').trim();
+    if (!p) return false;
+    const abs = pathLooksAbsolute(p)
+      ? path.normalize(p)
+      : path.normalize(path.join(vscode.workspace.workspaceFolders?.[0]?.uri.fsPath || '', p));
+    return Boolean(abs && fs.existsSync(abs) && fs.statSync(abs).isFile());
+  } catch {
+    return false;
+  }
+}
+
+function extractWriteContent(part: any): string | null {
+  const input = part.state?.input || part.input || {};
+  const keys = ['content', 'contents', 'file_text', 'fileText', 'new_string', 'newString', 'new_text', 'newText'];
+  for (const k of keys) {
+    if (typeof input[k] === 'string') return input[k] as string;
+  }
+  return null;
+}
+
+function sanitizeToolPath(p: string): string {
+  return String(p || '')
+    .replace(/\\/g, '/')
+    .replace(/^action\//i, '')
+    .replace(/^tool\//i, '')
+    .replace(/^files?\//i, '')
+    .trim();
+}
+
+function toolMeta(part: any): {
+  label: string;
+  detail: string;
+  filePath: string;
+  kind: string;
+  line: string;
+  command: string;
+  title: string;
+  badge: string;
+  action: 'create' | 'edit' | 'read' | 'search' | 'bash' | 'web' | 'tool';
+} {
   const name = String(part.tool || part.name || 'tool').toLowerCase();
   const input = part.state?.input || part.input || {};
-  const file = String(input.path || input.file_path || input.filePath || input.target_file || '').replace(/\\/g, '/');
-  const base = file.split('/').pop();
-  if (/edit|write|apply_patch|str_replace/.test(name)) return base ? 'Editing ' + base : 'Editing file';
-  if (/read/.test(name)) return base ? 'Reading ' + base : 'Reading file';
-  if (/grep|search|glob/.test(name)) return base ? 'Searching ' + base : 'Searching the workspace';
-  if (/bash|shell|cmd/.test(name)) return 'Running command';
-  if (/webfetch|web_search/.test(name)) return 'Looking something up';
-  if (/task|explore/.test(name)) return 'Working in the workspace';
-  return part.state?.title || 'Using tools';
+  const filePath = sanitizeToolPath(
+    String(input.path || input.file_path || input.filePath || input.target_file || input.filename || input.file || ''),
+  );
+  const file = filePath.replace(/\\/g, '/');
+  const base = file.split('/').pop() || '';
+  const cmd = String(input.command || '').trim();
+  const pattern = String(input.pattern || input.query || input.glob_pattern || input.glob || '').trim();
+  const isWrite = /^(write|create_file|write_to_file|write_file)$/.test(name) || name === 'write';
+  const isPatch = /edit|apply_patch|str_replace|search_replace|patch/.test(name);
+  if (isWrite || isPatch) {
+    const existed = filePath ? fileExistsOnDisk(filePath) : false;
+    const creating = !existed;
+    const verb = creating ? 'Creating' : isWrite ? 'Writing' : 'Editing';
+    const doneVerb = creating ? 'Created' : isWrite ? 'Wrote' : 'Edited';
+    return {
+      kind: creating ? 'create' : 'edit',
+      action: creating ? 'create' : 'edit',
+      label: base ? verb + ' ' + base : verb + ' file',
+      detail: file || base,
+      filePath,
+      line: base ? doneVerb + ' ' + base : doneVerb + ' file',
+      command: '',
+      title: base || 'file',
+      badge: creating || isWrite ? 'Writer' : 'Editor',
+    };
+  }
+  if (/read/.test(name)) {
+    return {
+      kind: 'read',
+      action: 'read',
+      label: base ? 'Reading ' + base : 'Reading file',
+      detail: file || base,
+      filePath,
+      line: base ? 'Read ' + base : 'Read file',
+      command: '',
+      title: base || 'file',
+      badge: 'Explorer',
+    };
+  }
+  if (/grep|search|glob/.test(name)) {
+    const q = (pattern || base || 'workspace').slice(0, 100);
+    return {
+      kind: 'search',
+      action: 'search',
+      label: 'Searching · ' + q,
+      detail: file || q,
+      filePath,
+      line: 'Searched files ' + q,
+      command: '',
+      title: q,
+      badge: 'Explorer',
+    };
+  }
+  if (/bash|shell|cmd/.test(name)) {
+    const short = cmd.replace(/\s+/g, ' ').slice(0, 160);
+    return {
+      kind: 'bash',
+      action: 'bash',
+      label: 'Running command',
+      detail: short,
+      filePath: '',
+      line: short,
+      command: short,
+      title: commandTitle(short),
+      badge: 'Shell',
+    };
+  }
+  if (/webfetch|web_search/.test(name)) {
+    const url = String(input.url || input.query || '').slice(0, 100);
+    return {
+      kind: 'web',
+      action: 'web',
+      label: 'Looking something up',
+      detail: url,
+      filePath: '',
+      line: url ? 'Fetched ' + url : 'Web lookup',
+      command: '',
+      title: 'web',
+      badge: 'Explorer',
+    };
+  }
+  return {
+    kind: 'tool',
+    action: 'tool',
+    label: String(part.state?.title || 'Using tools'),
+    detail: base || cmd.slice(0, 80),
+    filePath,
+    line: String(part.state?.title || base || 'Tool'),
+    command: '',
+    title: base || 'task',
+    badge: 'Agent',
+  };
+}
+
+function commandTitle(cmd: string): string {
+  const t = String(cmd || '').trim();
+  if (!t) return 'command';
+  const first = t.split(/[|\n;]/)[0].trim();
+  const tokens = first.split(/\s+/).slice(0, 4);
+  return tokens.join(' ').slice(0, 48) || 'command';
+}
+
+/** Stable activity id so repeated edits/reads of the same file collapse to one row. */
+function activityStableId(
+  meta: { kind: string; command?: string; label?: string },
+  callId: unknown,
+  filePath: string,
+): string {
+  const kind = String(meta.kind || '');
+  const file = String(filePath || '')
+    .replace(/\\/g, '/')
+    .toLowerCase();
+  if (file && /^(create|edit)$/.test(kind)) return 'file:' + file;
+  if (file && kind === 'read') return 'read:' + file;
+  if (kind === 'search') {
+    const q = String(meta.label || '')
+      .replace(/^Searching · /i, '')
+      .slice(0, 100)
+      .toLowerCase();
+    return 'search:' + (q || file || String(callId || 'q'));
+  }
+  if (kind === 'bash') {
+    return 'bash:' + String(meta.command || callId || 'cmd').slice(0, 100);
+  }
+  return String(callId || meta.label || kind || 'tool');
 }
 
 function extractFilePath(part: any): string {
   const input = part.state?.input || part.input || {};
   const meta = part.state?.metadata || {};
-  return String(
-    input.path || input.file_path || input.filePath || input.target_file || meta.filepath || meta.path || '',
+  const output = part.state?.output || part.output || {};
+  return sanitizeToolPath(
+    String(
+      input.path ||
+        input.file_path ||
+        input.filePath ||
+        input.target_file ||
+        input.filename ||
+        input.file ||
+        meta.filepath ||
+        meta.path ||
+        meta.file ||
+        output.path ||
+        output.file_path ||
+        output.filePath ||
+        '',
+    ),
   );
 }
 
@@ -147,22 +334,41 @@ function pathLooksAbsolute(p: string): boolean {
   return /^[a-zA-Z]:[\\/]/.test(p) || p.startsWith('/') || p.startsWith('\\\\');
 }
 
-function lineDiff(before: string | null, after: string | null): { add: number; del: number } {
-  const oldLines = String(before || '').split('\n');
-  const newLines = String(after || '').split('\n');
-  if (before == null && after != null) return { add: newLines.length, del: 0 };
-  if (before != null && after == null) return { add: 0, del: oldLines.length };
-  const bag = new Map<string, number>();
-  for (const line of oldLines) bag.set(line, (bag.get(line) || 0) + 1);
-  let add = 0;
-  for (const line of newLines) {
-    const n = bag.get(line) || 0;
-    if (n > 0) bag.set(line, n - 1);
-    else add += 1;
+function clipSnapshot(text: string | null | undefined, max = 2_000_000): string | null {
+  if (text == null) return null;
+  const s = String(text);
+  return s.length > max ? s.slice(0, max) : s;
+}
+
+function looksIncompleteReply(
+  text: string,
+  hadTools: boolean,
+  pendingTodos: boolean,
+  fileChanges = 0,
+): boolean {
+  if (pendingTodos) return true;
+  const t = String(text || '').trim();
+  if (!hadTools) return false;
+  // Tools already wrote files and model went quiet — finish now (avoid a long "Planning" continue round-trip)
+  if (!t) return fileChanges < 1;
+  const soundsDone =
+    /\b(done|finished|complete[ds]?|updated|fixed|changed|added|removed|created|implemented|refactored)\b/i.test(t) &&
+    !/\b(next|still need|remaining|todo|will now|i('| a)?ll |coming up)\b/i.test(t);
+  if (soundsDone) return false;
+  // Real file edits + a short note → prefer finishing over another continue loop
+  if (fileChanges > 0 && t.length < 400 && !/\b(next|still need|remaining|todo|will now|i('| a)?ll )\b/i.test(t)) {
+    return false;
   }
-  let del = 0;
-  for (const n of bag.values()) del += n;
-  return { add, del };
+  if (t.length < 280) {
+    if (/^(i('| a)?ll|let me|next|starting|now i|i am going|i'm going|working on|first,|step \d)/i.test(t)) {
+      return true;
+    }
+    if (/\b(next|todo|remaining|still need|will (now )?|continue|partial)\b/i.test(t)) return true;
+  }
+  if (/\b(i('| a)?ll (now )?(continue|edit|update|fix|implement)|coming up next|to be continued)\b/i.test(t)) {
+    return true;
+  }
+  return false;
 }
 
 function resolveAbs(filePath: string): string {
@@ -189,7 +395,25 @@ type FileChangeRow = {
   deletions: number;
   status: 'pending' | 'accepted' | 'reverted';
   before: string | null;
+  after: string | null;
+  preview: DiffLine[];
+  live: boolean;
+  action: 'create' | 'edit' | 'delete';
 };
+
+const MAX_AUTO_CONTINUES = 8;
+const CONTINUE_PROMPT =
+  'Finish any remaining work now with tools. No narration. When done, give a short accurate summary.';
+
+function formatHistoryAge(updatedAt: number): string {
+  const ms = Math.max(0, Date.now() - updatedAt);
+  const m = Math.floor(ms / 60000);
+  if (m < 1) return 'just now';
+  if (m < 60) return m + 'm ago';
+  const h = Math.floor(m / 60);
+  if (h < 48) return h + 'h ago';
+  return Math.floor(h / 24) + 'd ago';
+}
 
 export class OlkilSidebarProvider implements vscode.WebviewViewProvider {
   public static readonly viewType = 'olkil.sidebar';
@@ -198,6 +422,8 @@ export class OlkilSidebarProvider implements vscode.WebviewViewProvider {
   private quota: OlkilQuota | null = null;
   private engine = new OlkilEngine();
   private liveText = '';
+  private voLiveText = new Map<string, string>();
+  private voEventWorkerId: string | null = null;
   private engineReady = false;
   private userMessageIds = new Set<string>();
   private turnUsage: ReturnType<typeof parseUsageBlob> = null;
@@ -206,14 +432,105 @@ export class OlkilSidebarProvider implements vscode.WebviewViewProvider {
   private charging = false;
   private modelId = DEFAULT_MODEL_ID;
   private turnFiles = new Map<string, FileChangeRow>();
+  private fileBefore = new Map<string, string | null>();
   private customs: CustomEndpoint[] = [];
+  private turnHadTools = false;
+  private pendingTodos = false;
+  private autoContinues = 0;
+  private userAborted = false;
+  private finishingIdle = false;
+  /** True while a main-chat agent turn is in flight. Pocket waits so it never cuts a local send. */
+  agentBusy = false;
+  private pocket: PocketBridge | null = null;
+  private screen: ExtensionScreen;
+  private keepAwake = new KeepAwake();
+  private quotaLoaded = false;
+  private freeTrial: FreeTrialState = { kind: 'none' };
+  private freeTrialWarned = false;
+  /** This turn failed before the model returned usage. Do not deduct free tokens. */
+  private turnFailed = false;
+  /** Per-VO-worker turn flags so parallel teammates do not share incomplete/continue state. */
+  private voTurns = new Map<
+    string,
+    { hadTools: boolean; pendingTodos: boolean; autoContinues: number; finishing: boolean; aborted: boolean }
+  >();
+  /** Last engine event time per VO worker — hang watchdog. */
+  private voLastEventAt = new Map<string, number>();
+  private voWatchTimer: ReturnType<typeof setInterval> | null = null;
+  /** Tool call ids that already completed — ignore late pending pings that reopen loaders. */
+  private completedToolCalls = new Set<string>();
+  private addDeco: vscode.TextEditorDecorationType;
+  private delDeco: vscode.TextEditorDecorationType;
+  private liveDecoAbs = '';
+  private inkTimers = new Set<ReturnType<typeof setTimeout>>();
+  private virtualOffice: VirtualOfficePanel;
+  private chatHistory: ChatHistoryStore;
+  private currentChatId = '';
+  private currentChatCreatedAt = 0;
+  private chatMessages: PersistedChatMessage[] = [];
 
   constructor(
     private readonly extensionUri: vscode.Uri,
     private readonly context?: vscode.ExtensionContext,
   ) {
     this.engine.onEvent((event) => this.onEngineEvent(event));
+    this.chatHistory = new ChatHistoryStore(() => this.session);
     this.modelId = String(this.context?.globalState.get('olkil.modelId') || DEFAULT_MODEL_ID);
+    this.addDeco = vscode.window.createTextEditorDecorationType({
+      isWholeLine: true,
+      backgroundColor: 'rgba(61, 214, 140, 0.16)',
+      borderWidth: '0 0 0 3px',
+      borderStyle: 'solid',
+      borderColor: '#3dd68c',
+    });
+    this.delDeco = vscode.window.createTextEditorDecorationType({
+      isWholeLine: true,
+      backgroundColor: 'rgba(255, 123, 114, 0.14)',
+      borderWidth: '0 0 0 3px',
+      borderStyle: 'solid',
+      borderColor: '#ff7b72',
+      after: {
+        color: '#ff7b72',
+        margin: '0 0 0 12px',
+      },
+    });
+    this.virtualOffice = new VirtualOfficePanel(
+      extensionUri,
+      () => this.session,
+      () => this.modelId,
+      () => this.engine,
+      () => this.ensureEngine(),
+    );
+    this.virtualOffice.onDidChange(() => this.pushVoStatus());
+    this.screen = new ExtensionScreen(
+      extensionUri.fsPath,
+      (msg) => {
+        void this.view?.webview.postMessage(msg);
+      },
+      () => this.pocket?.link() || '',
+    );
+    this.pocket = new PocketBridge({
+      session: this.session,
+      agentBusy: () => this.agentBusy,
+      ask: (text, opts) => this.ask(text, opts),
+      abort: () => this.abort(),
+      acceptAll: () => this.acceptAllFiles(),
+      revertAll: () => this.revertAllFiles(),
+      saveCustom: (model, baseUrl, apiKey) => this.saveCustomEndpoint(model, baseUrl, apiKey),
+      setModel: (modelId) => {
+        this.modelId = modelId || DEFAULT_MODEL_ID;
+      },
+      getModel: () => this.modelId,
+      listModels: () =>
+        pickerModels(this.readyCustoms())
+          .filter((m) => !isAddCustomModel(m.id))
+          .map((m) => ({ id: m.id, label: m.label })),
+    }, () => this.pushPocket());
+    this.virtualOffice.onCabinClick((workerId) => this.showVoWorkerChat(workerId));
+    this.virtualOffice.onError((workerId, text) => {
+      this.post({ type: 'error', voWorkerId: workerId, text });
+      this.pushVoStatus();
+    });
     void this.loadCustoms();
   }
 
@@ -257,6 +574,27 @@ export class OlkilSidebarProvider implements vscode.WebviewViewProvider {
     this.pushAuth();
   }
 
+  private async saveCustomEndpoint(modelRaw: string, baseUrlRaw: string, apiKeyRaw: string, preferredId = ''): Promise<boolean> {
+    const model = String(modelRaw || '').trim();
+    const baseUrl = String(baseUrlRaw || '').trim();
+    const incomingKey = String(apiKeyRaw || '').trim();
+    let id = String(preferredId || '').trim();
+    const existing = id ? this.customs.find((c) => c.id === id) : undefined;
+    if (!existing) id = newCustomId();
+    const apiKey = incomingKey || existing?.apiKey || '';
+    const row: CustomEndpoint = { id, model, baseUrl, apiKey };
+    if (!customEndpointReady(row)) {
+      this.post({ type: 'error', text: 'Add model id, base URL, and API key, then save.' });
+      return false;
+    }
+    this.customs = existing ? this.customs.map((c) => (c.id === id ? row : c)) : this.customs.concat(row);
+    await this.persistCustoms();
+    this.modelId = customPickerId(id);
+    void this.context?.globalState.update('olkil.modelId', this.modelId);
+    this.pushAuth();
+    return true;
+  }
+
   private async persistCustoms() {
     const ctx = this.context;
     if (!ctx) return;
@@ -291,24 +629,91 @@ export class OlkilSidebarProvider implements vscode.WebviewViewProvider {
   }
 
   private post(msg: Record<string, unknown>) {
+    if (this.voEventWorkerId && msg.voWorkerId == null) {
+      msg = { ...msg, voWorkerId: this.voEventWorkerId };
+    }
     void this.view?.webview.postMessage(msg);
+    if (!msg.voWorkerId && this.pocket?.activeTaskId) this.pocket.onChatEvent(msg);
+    if (String(msg.type || '') === 'idle' && !msg.voWorkerId) this.agentBusy = false;
+    const wid = String(msg.voWorkerId || this.virtualOffice.inspectedWorkerId || '');
+    if (this.virtualOffice.active && wid) {
+      const t = String(msg.type || '');
+      if (t === 'activity' || t === 'assistant' || t === 'phase' || t === 'fileDiff' || t === 'error' || t === 'user') {
+        this.virtualOffice.appendLog(wid, msg);
+      }
+    }
   }
 
   async boot() {
+    if (this.context?.globalState.get('olkil.remoteAccess')) {
+      const stale = this.context.globalState.get<number>('olkil.remoteAccessPid');
+      const ok = await this.keepAwake.start(stale);
+      if (ok && this.keepAwake.pid()) await this.context.globalState.update('olkil.remoteAccessPid', this.keepAwake.pid());
+      if (!ok) {
+        await this.context.globalState.update('olkil.remoteAccess', false);
+        await this.context.globalState.update('olkil.remoteAccessPid', 0);
+      }
+    }
     this.session = await ensureSession();
+    this.quotaLoaded = false;
     if (this.session) {
       try {
         this.quota = await fetchQuota(this.session);
+        this.quotaLoaded = true;
       } catch {
         this.quota = null;
       }
     }
+    this.refreshFreeTrial();
     this.pushAuth();
     void this.loadModelCatalog();
-    if (this.session && (canUseVscodeAgent(this.quota) || this.canRunCustom())) {
+    if (this.session) void this.chatHistory.bootstrap();
+    if (this.session && this.canRunAgent()) {
       void this.ensureEngine().catch((err) => {
         this.post({ type: 'error', text: err instanceof Error ? err.message : String(err) });
       });
+    }
+    if (this.session) {
+      void this.armPocket().then(() => {
+        if (this.keepAwake.isOn()) void this.screen.start();
+      });
+    }
+  }
+
+  private async ensureRemoteSecret(): Promise<string> {
+    const uid = this.session?.user?.uid || '';
+    if (!uid || !this.context) return '';
+    const map = { ...(this.context.globalState.get<Record<string, string>>('olkil.remoteSecrets') || {}) };
+    const existing = String(map[uid] || '');
+    if (/^[a-f0-9]{64}$/.test(existing)) return existing;
+    const secret = crypto.randomBytes(32).toString('hex');
+    map[uid] = secret;
+    await this.context.globalState.update('olkil.remoteSecrets', map);
+    return secret;
+  }
+
+  private async armPocket(): Promise<string> {
+    const secret = await this.ensureRemoteSecret();
+    if (!secret || !this.pocket) return '';
+    this.pocket.setSecret(secret);
+    if (!this.pocket.isOn()) await this.pocket.start();
+    return secret;
+  }
+
+  private async showRemoteQr() {
+    try {
+      if (!this.session) {
+        await this.signIn();
+        if (!this.session) return;
+      }
+      const secret = await this.armPocket();
+      if (!secret) {
+        void vscode.window.showWarningMessage('Sign in to OLKIL to connect your phone.');
+        return;
+      }
+      this.post({ type: 'remoteQr', open: true, url: 'https://olkil.com/pocket/#k=' + secret });
+    } catch (err) {
+      void vscode.window.showWarningMessage(err instanceof Error ? err.message : String(err));
     }
   }
 
@@ -321,7 +726,43 @@ export class OlkilSidebarProvider implements vscode.WebviewViewProvider {
   }
 
   private canRunAgent() {
-    return this.canRunCustom() || this.canRunCloud();
+    return this.canRunCustom() || this.canRunCloud() || this.freeTrial.kind === 'active';
+  }
+
+  private shouldUseFreeTrial(): boolean {
+    if (this.canRunCloud()) return false;
+    if (isCustomModel(this.modelId) && this.canRunCustom()) return false;
+    return this.freeTrial.kind === 'active';
+  }
+
+  private refreshFreeTrial() {
+    const uid = this.session?.user?.uid || '';
+    if (!uid || this.canRunCloud()) {
+      this.freeTrial = { kind: 'none' };
+      return;
+    }
+    this.freeTrial = openFreeTrial(vscode.env.machineId, uid, this.quotaLoaded);
+    if (this.freeTrial.kind === 'blocked') this.warnBlockedTrial();
+  }
+
+  private warnBlockedTrial() {
+    if (this.freeTrialWarned) return;
+    this.freeTrialWarned = true;
+    void vscode.window.showWarningMessage(
+      'This computer already used the free trial on another OLKIL account. Upgrade to Lite or Pro to continue.',
+    );
+  }
+
+  private upgradeReason(): string {
+    if (this.freeTrial.kind === 'blocked') return 'trial-blocked';
+    if (this.freeTrial.kind === 'exhausted') return 'trial-ended';
+    return '';
+  }
+
+  private quotaForUi(): OlkilQuota | null {
+    if (!this.quota || this.canRunCloud() || this.freeTrial.kind !== 'active') return this.quota;
+    const left = this.freeTrial.left.toLocaleString('en-US');
+    return { ...this.quota, planName: this.quota.planName || 'Free', leftLabel: left + ' tokens left' };
   }
 
   private pushAuth() {
@@ -330,18 +771,57 @@ export class OlkilSidebarProvider implements vscode.WebviewViewProvider {
       type: 'auth',
       signedIn: Boolean(this.session),
       user: this.session?.user || null,
-      quota: this.quota,
+      quota: this.quotaForUi(),
       engineReady: this.engineReady,
       paid: this.canRunCloud(),
       chatOpen: Boolean(this.session),
       plans: PAID_PLANS,
       models: pickerModels(this.customs),
       modelId: this.modelId,
+      virtualOffice: this.virtualOffice.active,
+      voAssignee: this.virtualOffice.assigneeId,
+      voAssignees: VO_ASSIGNEES,
+      voInspected: this.virtualOffice.inspectedWorkerId,
+      voRunning: this.virtualOffice.listRuns().map((r) => ({
+        workerId: r.workerId,
+        workerName: r.workerName,
+        title: r.title,
+        status: r.status,
+      })),
       customs: this.customs.map((c) => ({
         id: c.id,
         model: c.model,
         baseUrl: c.baseUrl,
         hasKey: Boolean(c.apiKey),
+      })),
+      pocketOn: !!this.pocket?.isOn(),
+      pocketCode: this.pocket?.code() || '',
+      pocketError: this.pocket?.lastError || '',
+      remoteAccess: this.keepAwake.isOn(),
+    });
+  }
+
+  private pushPocket() {
+    this.post({
+      type: 'pocket',
+      pocketOn: !!this.pocket?.isOn(),
+      pocketCode: this.pocket?.code() || '',
+      pocketError: this.pocket?.lastError || '',
+    });
+  }
+
+  /** Lightweight VO status — avoids full auth remount that blinked "Assigned to …". */
+  private pushVoStatus() {
+    this.post({
+      type: 'voStatus',
+      virtualOffice: this.virtualOffice.active,
+      voAssignee: this.virtualOffice.assigneeId,
+      voInspected: this.virtualOffice.inspectedWorkerId,
+      voRunning: this.virtualOffice.listRuns().map((r) => ({
+        workerId: r.workerId,
+        workerName: r.workerName,
+        title: r.title,
+        status: r.status,
       })),
     });
   }
@@ -360,8 +840,10 @@ export class OlkilSidebarProvider implements vscode.WebviewViewProvider {
 
   async signIn() {
     this.session = await completeLogin();
+    this.quotaLoaded = false;
     try {
       this.quota = await fetchQuota(this.session);
+      this.quotaLoaded = true;
     } catch {
       this.quota = {
         plan: '',
@@ -375,87 +857,430 @@ export class OlkilSidebarProvider implements vscode.WebviewViewProvider {
         upgradeUrl: 'https://olkil.com/pricing/',
       };
     }
+    this.refreshFreeTrial();
     this.pushAuth();
     void this.loadModelCatalog();
+    void this.chatHistory.bootstrap();
     if (this.canRunAgent()) {
       await this.ensureEngine();
     }
+    void this.armPocket();
   }
 
   signOut() {
     clearSession();
     this.session = null;
     this.quota = null;
+    this.quotaLoaded = false;
+    this.freeTrial = { kind: 'none' };
+    this.freeTrialWarned = false;
+    this.chatHistory.resetLocal();
+    this.currentChatId = '';
+    this.currentChatCreatedAt = 0;
+    this.chatMessages = [];
     this.engine.dispose();
     this.engine = new OlkilEngine();
     this.engine.onEvent((event) => this.onEngineEvent(event));
     this.engineReady = false;
+    this.screen.stop();
+    this.pocket?.stop();
     this.pushAuth();
   }
 
   async newChat() {
     if (!this.session) return;
+    this.persistCurrentChat();
+    this.currentChatId = '';
+    this.currentChatCreatedAt = 0;
+    this.chatMessages = [];
     if (this.canRunAgent()) {
       await this.ensureEngine();
       await this.engine.newSession();
     }
+    this.resetTurnState();
+    this.post({ type: 'reset' });
+  }
+
+  /** Title-bar History — last 3 chats (same Firestore doc as desktop IDE). */
+  async showHistory() {
+    if (!this.session) {
+      await this.signIn();
+      if (!this.session) return;
+    }
+    await this.chatHistory.bootstrap();
+    const items = this.chatHistory.listSummaries();
+    if (!items.length) {
+      void vscode.window.showInformationMessage('No recent chats yet — only the latest 3 are kept (48h).');
+      return;
+    }
+    const picked = await vscode.window.showQuickPick(
+      items.map((h) => ({
+        label: h.title,
+        description: `${formatHistoryAge(h.updatedAt)} · ${h.messageCount} msgs`,
+        id: h.id,
+      })),
+      { title: 'Recent chats · max 3 · 48h', placeHolder: 'Open a previous chat' },
+    );
+    if (!picked) return;
+    await this.loadChatHistory(picked.id);
+  }
+
+  private async loadChatHistory(id: string) {
+    this.persistCurrentChat();
+    let session = this.chatHistory.getSessionById(id);
+    if (!session) {
+      await this.chatHistory.bootstrap();
+      session = this.chatHistory.getSessionById(id);
+    }
+    if (!session) {
+      void vscode.window.showWarningMessage('That chat expired or is no longer available.');
+      return;
+    }
+    this.currentChatId = session.id;
+    this.currentChatCreatedAt = session.createdAt;
+    this.chatMessages = session.messages.map((m) => ({ ...m }));
+    this.resetTurnState();
+    if (this.canRunAgent()) {
+      try {
+        await this.ensureEngine();
+        await this.engine.newSession();
+      } catch {
+        /* still show messages */
+      }
+    }
+    this.post({ type: 'loadHistory', messages: session.messages });
+  }
+
+  private persistCurrentChat() {
+    if (this.virtualOffice.active) return;
+    if (!this.currentChatId || !this.chatMessages.some((m) => m.role === 'user')) return;
+    const now = Date.now();
+    this.chatHistory.scheduleUpsert({
+      id: this.currentChatId,
+      title: titleFromMessages(this.chatMessages),
+      createdAt: this.currentChatCreatedAt || now,
+      updatedAt: now,
+      expiresAt: now + 48 * 60 * 60 * 1000,
+      messages: this.chatMessages,
+    });
+  }
+
+  private trackChatUser(text: string) {
+    if (this.virtualOffice.active) return;
+    if (!this.currentChatId) {
+      this.currentChatId = 'chat-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 8);
+      this.currentChatCreatedAt = Date.now();
+    }
+    this.chatMessages.push({
+      id: 'u-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 6),
+      role: 'user',
+      content: text,
+    });
+  }
+
+  private trackChatAssistant(text: string) {
+    if (this.virtualOffice.active) return;
+    const t = text.trim();
+    if (!t || !this.currentChatId) return;
+    this.chatMessages.push({
+      id: 'a-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 6),
+      role: 'assistant',
+      content: t,
+    });
+    this.persistCurrentChat();
+  }
+
+  private resetTurnState() {
     this.liveText = '';
     this.userMessageIds.clear();
     this.turnUsage = null;
     this.turnGenIds.clear();
     this.turnCharged = false;
     this.charging = false;
+    this.turnFailed = false;
     this.turnFiles.clear();
-    this.post({ type: 'reset' });
+    this.fileBefore.clear();
+    this.turnHadTools = false;
+    this.pendingTodos = false;
+    this.autoContinues = 0;
+    this.userAborted = false;
+    this.finishingIdle = false;
+    this.completedToolCalls.clear();
+    for (const t of this.inkTimers) clearTimeout(t);
+    this.inkTimers.clear();
+    this.clearLiveDecorations();
   }
 
-  async ask(text: string) {
-    const trimmed = text.trim();
-    if (!trimmed) return;
+  private voTurn(workerId: string) {
+    let t = this.voTurns.get(workerId);
+    if (!t) {
+      t = { hadTools: false, pendingTodos: false, autoContinues: 0, finishing: false, aborted: false };
+      this.voTurns.set(workerId, t);
+    }
+    return t;
+  }
+
+  private resetVoTurn(workerId: string) {
+    this.voTurns.set(workerId, {
+      hadTools: false,
+      pendingTodos: false,
+      autoContinues: 0,
+      finishing: false,
+      aborted: false,
+    });
+    this.voLiveText.set(workerId, '');
+    this.voLastEventAt.set(workerId, Date.now());
+    // Keep completedToolCalls — parallel workers share engine events; per-call ids stay unique
+    this.ensureVoWatchdog();
+  }
+
+  private ensureVoWatchdog() {
+    if (this.voWatchTimer) return;
+    this.voWatchTimer = setInterval(() => {
+      void this.tickVoWatchdog();
+    }, 12_000);
+  }
+
+  /** Unstick VO teammates that hang on Reading/Editing with no engine progress. */
+  private async tickVoWatchdog() {
+    if (!this.virtualOffice.active) return;
+    const now = Date.now();
+    for (const run of this.virtualOffice.listRuns()) {
+      if (run.status !== 'running') continue;
+      const last = this.voLastEventAt.get(run.workerId) || run.startedAt || now;
+      const silentMs = now - last;
+      const text = cleanAssistantText(this.voLiveText.get(run.workerId) || '');
+      const turn = this.voTurn(run.workerId);
+      // ~60s quiet + reply looks finished → complete (stops office/chat desync)
+      if (silentMs >= 60_000 && text && !looksIncompleteReply(text, turn.hadTools, turn.pendingTodos, this.turnFiles.size)) {
+        await this.forceVoWorkerComplete(run.workerId, 'quiet-done');
+        continue;
+      }
+      // ~90s with zero events → force finish so workers never stick forever on Reading/Editing
+      if (silentMs >= 90_000) {
+        await this.forceVoWorkerComplete(run.workerId, 'watchdog');
+      }
+    }
+  }
+
+  private async forceVoWorkerComplete(workerId: string, reason: string) {
+    const run = this.virtualOffice.getRun(workerId);
+    if (!run || run.status !== 'running') return;
+    const turn = this.voTurn(workerId);
+    if (turn.finishing || turn.aborted) return;
+    turn.finishing = true;
+    this.virtualOffice.completeIfSession(run.sessionId);
+    const cleaned = cleanAssistantText(this.voLiveText.get(workerId) || '');
+    if (cleaned && !isUserEcho(cleaned)) {
+      this.post({ type: 'assistant', text: cleaned, live: false, voWorkerId: workerId });
+    }
+    this.post({
+      type: 'activity',
+      voWorkerId: workerId,
+      id: 'vo-done-' + workerId + '-' + Date.now(),
+      label: `${run.workerName} finished`,
+      detail: reason === 'watchdog' ? 'Timed out idle work' : run.title,
+      done: true,
+    });
+    this.post({ type: 'phase', voWorkerId: workerId, label: '' });
+    this.post({
+      type: 'voWorkerDone',
+      workerId,
+      voRunning: this.virtualOffice.listRuns().map((r) => ({
+        workerId: r.workerId,
+        workerName: r.workerName,
+        title: r.title,
+        status: r.status,
+      })),
+    });
+    this.post({ type: 'idle', voWorkerId: workerId });
+    this.pushVoStatus();
+    const still = this.virtualOffice.runningCount();
+    this.post({
+      type: 'voParallel',
+      label:
+        still > 0
+          ? `${still} teammate${still === 1 ? '' : 's'} still working — send another task anytime`
+          : 'All free — send the next task',
+    });
+    try {
+      await this.engine.abortSession(run.sessionId);
+    } catch {
+      /* best-effort */
+    }
+    turn.finishing = false;
+  }
+
+  async ask(text: string, opts?: { mode?: string; skipUserEcho?: boolean; hasImages?: boolean; pocket?: boolean }) {
+    const trimmed = String(text || '').trim();
+    const mode = String(opts?.mode || 'agent');
+    if (!trimmed && !opts?.hasImages) return;
     if (!this.session) {
       await this.signIn();
       if (!this.session) return;
     }
-    try {
-      this.quota = await fetchQuota(this.session);
-    } catch {
-      /* keep last quota */
-    }
     if (isAddCustomModel(this.modelId) || (isCustomModel(this.modelId) && !this.canRunCustom())) {
-      this.post({ type: 'user', text: trimmed });
+      if (!opts?.skipUserEcho) this.post({ type: 'user', text: trimmed || 'Image' });
       this.post({
         type: 'error',
         text: 'Add model id, base URL, and API key in Custom at the top, then send again.',
       });
       return;
     }
+
+    if (!this.virtualOffice.active || opts?.pocket) {
+      this.agentBusy = true;
+      if (!opts?.skipUserEcho) {
+        this.post({ type: 'user', text: trimmed });
+      }
+      if (trimmed) this.trackChatUser(trimmed);
+      this.resetTurnState();
+    }
+    if (!this.virtualOffice.active || opts?.pocket) {
+      this.post({ type: 'phase', label: 'Planning next moves' });
+    }
+
+    const quotaPromise = fetchQuota(this.session)
+      .then((q) => {
+        this.quota = q;
+        this.quotaLoaded = true;
+        return q;
+      })
+      .catch(() => this.quota);
+
     if (!this.canRunAgent()) {
-      this.post({ type: 'user', text: trimmed });
-      this.pushAuth();
-      this.post({ type: 'upgrade' });
+      await quotaPromise;
+      this.refreshFreeTrial();
+      if (!this.canRunAgent()) {
+        this.pushAuth();
+        this.post({ type: 'upgrade', reason: this.upgradeReason() });
+        this.post({ type: 'idle' });
+        return;
+      }
+    } else {
+      void quotaPromise.then(() => this.pushAuth());
+    }
+
+    // Engine prompt may include silent Ask instructions — never shown in the chat bubble
+    let enginePrompt =
+      trimmed ||
+      (opts?.hasImages ? 'Please look at the attached image(s) and help me with them.' : '');
+    if (mode === 'ask') {
+      enginePrompt +=
+        '\n\n[OLKIL Ask mode: answer in chat only — do not edit files, create files, or run tools.]';
+    }
+
+    if (this.virtualOffice.active && !opts?.pocket) {
+      try {
+        const voPrompt = isSimpleChatPrompt(trimmed) ? trimmed : this.withEditorContext(trimmed);
+        const run = await this.virtualOffice.startTask(voPrompt);
+        this.resetVoTurn(run.workerId);
+        this.post({
+          type: 'voOpenChat',
+          workerId: run.workerId,
+          workerName: run.workerName,
+          fresh: true,
+          prompt: trimmed,
+        });
+        this.post({
+          type: 'activity',
+          voWorkerId: run.workerId,
+          id: 'vo-assign-' + run.workerId + '-' + run.startedAt,
+          label: `Assigned to ${run.workerName}`,
+          detail: run.title,
+          done: true,
+        });
+        this.post({
+          type: 'phase',
+          voWorkerId: run.workerId,
+          label: `${run.workerName} working`,
+        });
+        this.pushVoStatus();
+        this.post({
+          type: 'voParallel',
+          label: `${run.workerName} on it — send another task anytime`,
+        });
+      } catch (err) {
+        this.post({ type: 'error', text: err instanceof Error ? err.message : String(err) });
+        this.post({ type: 'idle' });
+      }
       return;
     }
-    this.post({ type: 'user', text: trimmed });
-    this.liveText = '';
-    this.userMessageIds.clear();
-    this.turnUsage = null;
-    this.turnGenIds.clear();
-    this.turnCharged = false;
-    this.charging = false;
-    this.turnFiles.clear();
-    this.post({ type: 'activity', id: 'working', label: 'Working…', done: false });
+
     try {
       await this.ensureEngine();
-      await this.engine.sendPrompt(this.withEditorContext(trimmed), this.modelId);
+      await this.engine.sendPrompt(
+        mode === 'ask' ? enginePrompt : this.withEditorContext(enginePrompt),
+        this.modelId,
+      );
     } catch (err) {
       this.post({ type: 'error', text: err instanceof Error ? err.message : String(err) });
       this.post({ type: 'idle' });
     }
   }
 
+  private showVoWorkerChat(workerId: string) {
+    const run = this.virtualOffice.getRun(workerId);
+    const name = run?.workerName || VO_WORKERS.find((w) => w.id === workerId)?.name || workerId;
+    this.post({
+      type: 'voOpenChat',
+      workerId,
+      workerName: name,
+      fresh: false,
+      messages: run?.log || [],
+      phase:
+        run?.status === 'running'
+          ? `${name} working`
+          : run
+            ? `${name} · ${run.status}`
+            : `${name} · idle`,
+    });
+    this.pushVoStatus();
+  }
+
   async abort() {
+    this.userAborted = true;
     await this.engine.abort();
+    this.post({ type: 'liveStatus', label: '', detail: '', file: '', clear: true });
     this.post({ type: 'idle' });
+  }
+
+  /** Stop one Virtual Office teammate without killing other parallel agents. */
+  async abortVoWorker(workerId: string) {
+    const turn = this.voTurn(workerId);
+    turn.aborted = true;
+    turn.finishing = false;
+    const run = await this.virtualOffice.stopWorker(workerId);
+    if (!run) return;
+    this.post({
+      type: 'activity',
+      voWorkerId: workerId,
+      id: 'vo-stop-' + workerId + '-' + Date.now(),
+      label: `${run.workerName} stopped`,
+      detail: run.title,
+      done: true,
+    });
+    this.post({ type: 'phase', voWorkerId: workerId, label: '' });
+    this.post({
+      type: 'voWorkerDone',
+      workerId,
+      voRunning: this.virtualOffice.listRuns().map((r) => ({
+        workerId: r.workerId,
+        workerName: r.workerName,
+        title: r.title,
+        status: r.status,
+      })),
+    });
+    this.post({ type: 'idle', voWorkerId: workerId });
+    this.pushVoStatus();
+    const still = this.virtualOffice.runningCount();
+    this.post({
+      type: 'voParallel',
+      label:
+        still > 0
+          ? `${still} teammate${still === 1 ? '' : 's'} still working — send another task anytime`
+          : 'All free — send the next task',
+    });
   }
 
   private withEditorContext(text: string): string {
@@ -465,18 +1290,60 @@ export class OlkilSidebarProvider implements vscode.WebviewViewProvider {
     const selected = editor.selection.isEmpty ? '' : editor.document.getText(editor.selection);
     const bits = [text, 'Active file: ' + file];
     if (selected.trim()) {
-      bits.push('Selected code from ' + file + ':\n```\n' + selected.slice(0, 12000) + '\n```');
+      bits.push('Selected code from ' + file + ':\n```\n' + selected.slice(0, 6000) + '\n```');
     }
     return bits.join('\n\n');
   }
 
+  private listContextFiles(): { path: string; name: string; kind: string }[] {
+    const seen = new Set<string>();
+    const out: { path: string; name: string; kind: string }[] = [];
+    const push = (uri: vscode.Uri, kind: string) => {
+      const abs = uri.fsPath;
+      if (!abs || seen.has(abs)) return;
+      seen.add(abs);
+      const rel = vscode.workspace.asRelativePath(uri);
+      out.push({
+        path: rel || abs,
+        name: path.basename(abs),
+        kind,
+      });
+    };
+    for (const ed of vscode.window.visibleTextEditors) {
+      if (ed.document.uri.scheme === 'file') push(ed.document.uri, 'open');
+    }
+    for (const doc of vscode.workspace.textDocuments) {
+      if (doc.uri.scheme === 'file' && !doc.isUntitled) push(doc.uri, 'recent');
+    }
+    const folder = vscode.workspace.workspaceFolders?.[0];
+    if (folder) {
+      try {
+        const entries = fs.readdirSync(folder.uri.fsPath, { withFileTypes: true }).slice(0, 40);
+        for (const ent of entries) {
+          if (ent.name.startsWith('.')) continue;
+          const abs = path.join(folder.uri.fsPath, ent.name);
+          if (ent.isDirectory()) {
+            out.push({ path: ent.name + '/', name: ent.name, kind: 'folder' });
+          } else if (ent.isFile()) {
+            push(vscode.Uri.file(abs), 'workspace');
+          }
+        }
+      } catch {
+        /* ignore */
+      }
+    }
+    return out.slice(0, 80);
+  }
+
   private async ensureEngine() {
     if (!this.session) throw new Error('Sign in first.');
+    const trial = this.shouldUseFreeTrial() ? freeTrialCreds() : null;
     await this.engine.ensureStarted(
       this.session,
       workspaceFolder(),
       this.readyCustoms(),
-      this.canRunCloud(),
+      this.canRunCloud() || Boolean(trial),
+      trial,
     );
     this.engineReady = true;
     this.pushAuth();
@@ -486,32 +1353,99 @@ export class OlkilSidebarProvider implements vscode.WebviewViewProvider {
     const event = unwrapEvent(raw);
     const type = String(event.type || '');
     const props = (event.properties || {}) as Record<string, any>;
+    const eventSession = String(props.sessionID || props.sessionId || props.info?.id || props.info?.sessionID || '');
+    const voRun = eventSession ? this.virtualOffice.sessionToWorker(eventSession) : undefined;
+    // Allow main chat session OR any Virtual Office worker session through.
+    if (eventSession && this.engine.sessionId && eventSession !== this.engine.sessionId && !voRun) {
+      return;
+    }
+    // After Stop: ignore late tool/text/file events so the teammate looks truly stopped.
+    if (eventSession && this.virtualOffice.isSessionStopped(eventSession)) {
+      if (type === 'permission.asked' || type === 'permission.updated') {
+        const id = permissionId(event);
+        if (id) void this.engine.replyPermissionFor(eventSession, id, 'reject');
+      }
+      return;
+    }
+    this.voEventWorkerId = voRun?.workerId || null;
+    if (voRun) {
+      this.voLastEventAt.set(voRun.workerId, Date.now());
+      this.ensureVoWatchdog();
+    }
+    try {
+      this.onEngineEventBody(event, type, props, voRun);
+    } finally {
+      this.voEventWorkerId = null;
+    }
+  }
+
+  private getLiveText(): string {
+    if (this.voEventWorkerId) return this.voLiveText.get(this.voEventWorkerId) || '';
+    return this.liveText;
+  }
+
+  private setLiveText(text: string) {
+    if (this.voEventWorkerId) this.voLiveText.set(this.voEventWorkerId, text);
+    else this.liveText = text;
+  }
+
+  private onEngineEventBody(
+    event: Record<string, unknown>,
+    type: string,
+    props: Record<string, any>,
+    voRun: { workerId: string; workerName: string } | undefined,
+  ) {
     if (type === 'permission.asked' || type === 'permission.updated') {
       const id = permissionId(event);
-      if (id) void this.engine.replyPermission(id, 'always');
+      if (id) {
+        if (voRun) {
+          const sid = String(props.sessionID || props.sessionId || '');
+          if (sid) void this.engine.replyPermissionFor(sid, id, 'always');
+        } else {
+          void this.engine.replyPermission(id, 'always');
+        }
+      }
       return;
     }
     if (type === 'question.asked') {
       return;
     }
+    if (type === 'session.status') {
+      // Keep status internal — do not spam the chat UI.
+      return;
+    }
     if (type === 'todo.updated') {
       const todos = props.todos || [];
-      const active = todos.find((t: any) => t.status === 'in_progress') || todos[0];
-      if (active?.content) {
-        this.post({
-          type: 'activity',
-          id: 'todo',
-          label: String(active.content).slice(0, 120),
-          done: active.status === 'completed',
-        });
-      }
+      const pending = todos.some((t: any) => t.status === 'in_progress' || t.status === 'pending');
+      if (voRun) this.voTurn(voRun.workerId).pendingTodos = pending;
+      else this.pendingTodos = pending;
+      // Do not surface raw todo counts ("3 todos") in the activity feed.
       return;
     }
     if (type === 'file.edited') {
-      const filePath = String(props.file || '');
+      const filePath = sanitizeToolPath(String(props.file || ''));
       if (filePath) {
-        this.noteFile(filePath, 0, 0);
-        this.post({ type: 'activity', id: 'edit-' + filePath, label: 'Editing ' + filePath.split(/[\\/]/).pop(), done: false });
+        this.commitFileChange(filePath);
+        const row = this.turnFiles.get(resolveAbs(filePath));
+        const base = filePath.split(/[\\/]/).pop() || filePath;
+        const creating = row?.action === 'create' || (row?.before == null && row?.after != null);
+        this.post({
+          type: 'activity',
+          id: 'file:' + filePath.replace(/\\/g, '/').toLowerCase(),
+          label: (creating ? 'Created ' : 'Edited ') + base,
+          detail: filePath,
+          done: true,
+          kind: creating ? 'create' : 'edit',
+          action: creating ? 'create' : 'edit',
+          file: filePath,
+          title: base,
+          badge: creating ? 'Writer' : 'Editor',
+          line: (creating ? 'Created ' : 'Edited ') + base,
+        });
+        if (!voRun) this.post({ type: 'phase', label: 'Planning next moves' });
+        else this.post({ type: 'phase', voWorkerId: voRun.workerId, label: `${voRun.workerName} working` });
+        void this.revealAndDecorate(filePath, false);
+        void this.syncDiffs();
       }
       return;
     }
@@ -539,25 +1473,77 @@ export class OlkilSidebarProvider implements vscode.WebviewViewProvider {
         return;
       }
       if (isReasoningPart(part) || part.type === 'reasoning') {
-        this.post({ type: 'activity', id: 'thinking', label: 'Working…', done: false });
+        // Keep thinking internal — UI stays on Planning next moves (no alternate cue words)
+        if (!voRun) this.post({ type: 'phase', label: 'Planning next moves' });
+        else this.post({ type: 'phase', voWorkerId: voRun.workerId, label: `${voRun.workerName} working` });
         return;
       }
       if (part.type === 'tool') {
-        const path = extractFilePath(part);
+        // Teammate already finished in the office — ignore late tool pings
+        if (voRun) {
+          const liveRun = this.virtualOffice.getRun(voRun.workerId);
+          if (!liveRun || liveRun.status !== 'running') return;
+        }
+        if (voRun) this.voTurn(voRun.workerId).hadTools = true;
+        else this.turnHadTools = true;
+        const meta = toolMeta(part);
         const done = part.state?.status === 'completed' || part.state?.status === 'error';
+        const filePath = extractFilePath(part);
+        const hollowCreate =
+          (meta.kind === 'create' || meta.kind === 'edit') &&
+          !filePath &&
+          (!meta.title || meta.title === 'file');
+        // Don't flash a stuck "Creating file" live card with no path — wait for a real target
+        if (hollowCreate && !done) {
+          if (!voRun) this.post({ type: 'phase', label: 'Planning next moves' });
+          else this.post({ type: 'phase', voWorkerId: voRun.workerId, label: `${voRun.workerName} working` });
+          return;
+        }
+        const callKey = String(part.callID || part.id || '');
+        if (done && callKey) this.completedToolCalls.add(callKey);
+        // Late "pending/running" ping after this call already completed → would reopen loader
+        if (!done && callKey && this.completedToolCalls.has(callKey)) return;
+        const stableId = activityStableId(meta, part.callID || part.id, filePath);
+        const cleanFile = sanitizeToolPath(meta.filePath || filePath);
         this.post({
           type: 'activity',
-          id: String(part.callID || part.id || toolLabel(part)),
-          label: toolLabel(part),
-          done,
+          id: stableId,
+          label: done ? meta.line || meta.label : meta.label,
+          detail: sanitizeToolPath(meta.detail) || cleanFile,
+          done: done || hollowCreate,
+          kind: meta.kind,
+          action: meta.action,
+          file: cleanFile,
+          line: meta.line,
+          command: meta.command,
+          title: meta.title && meta.title !== 'file' ? meta.title : cleanFile.split('/').pop() || meta.title,
+          badge: meta.badge,
         });
-        if (path && /edit|write|patch|apply/i.test(String(part.tool || ''))) {
-          this.noteFile(path, 0, 0, part.state?.status === 'pending' || part.state?.status === 'running');
+        if (done) {
+          if (!voRun) this.post({ type: 'phase', label: 'Planning next moves' });
+          else this.post({ type: 'phase', voWorkerId: voRun.workerId, label: `${voRun.workerName} working` });
+        }
+        if (filePath && /edit|write|patch|apply|create/i.test(String(part.tool || ''))) {
+          const st = String(part.state?.status || '');
+          if (st === 'pending' || st === 'running' || !done) {
+            this.snapshotBefore(filePath);
+          }
+          if (done) {
+            const fromTool = extractWriteContent(part);
+            this.commitFileChange(filePath, fromTool);
+            // Skip line-by-line ink animation — keeps the agent loop snappy
+            void this.revealAndDecorate(filePath, false);
+            void this.syncDiffs();
+          }
         }
         return;
       }
       if (part.type === 'patch' && Array.isArray(part.files)) {
-        for (const file of part.files) this.noteFile(String(file), 0, 0);
+        for (const file of part.files) {
+          this.snapshotBefore(String(file));
+          this.commitFileChange(String(file));
+        }
+        void this.syncDiffs();
         return;
       }
       const text = eventText(event);
@@ -566,15 +1552,17 @@ export class OlkilSidebarProvider implements vscode.WebviewViewProvider {
         this.post({ type: 'error', text: friendlyEngineError(text) });
         return;
       }
-      this.post({ type: 'activity', id: 'thinking', label: 'Thought', done: true });
-      this.post({ type: 'activity', id: 'working', label: 'Writing', done: false });
+      this.post({ type: 'activity', id: 'thinking', label: 'Thought', done: true, kind: 'status' });
       const isDelta =
         type === 'message.part.delta' || (typeof props.delta === 'string' && !part.text);
-      this.liveText = isDelta ? this.liveText + text : text;
-      const cleaned = cleanAssistantText(this.liveText);
+      this.setLiveText(isDelta ? this.getLiveText() + text : text);
+      const cleaned = cleanAssistantText(this.getLiveText());
       if (!cleaned) return;
-      this.liveText = cleaned;
-      this.post({ type: 'assistant', text: this.liveText, live: true });
+      this.setLiveText(cleaned);
+      this.post({ type: 'assistant', text: this.getLiveText(), live: true });
+      // Keep Dev Studio feed alive between thoughts/tools (Stop is on, no silent gaps)
+      if (!voRun) this.post({ type: 'phase', label: 'Planning next moves' });
+      else if (voRun) this.post({ type: 'phase', voWorkerId: voRun.workerId, label: `${voRun.workerName} working` });
       return;
     }
     if (type === 'session.error') {
@@ -582,81 +1570,422 @@ export class OlkilSidebarProvider implements vscode.WebviewViewProvider {
       const msg =
         (err && (err.data?.message || err.message || err.name)) ||
         (typeof err === 'string' ? err : 'The coding engine hit an error.');
-      this.post({ type: 'error', text: friendlyEngineError(String(msg)) });
-      this.post({ type: 'idle' });
+      if (voRun) {
+        const sid = String(props.sessionID || props.sessionId || '');
+        if (sid) this.virtualOffice.failIfSession(sid);
+        this.pushVoStatus();
+      }
+      if (/abort/i.test(String(msg))) {
+        this.post({ type: 'liveStatus', label: '', detail: '', file: '', clear: true });
+        this.post({ type: 'idle', voWorkerId: voRun?.workerId });
+        return;
+      }
+      this.turnFailed = true;
+      this.post({ type: 'error', text: friendlyEngineError(String(msg)), voWorkerId: voRun?.workerId });
+      this.post({ type: 'liveStatus', label: '', detail: '', file: '', clear: true });
+      this.post({ type: 'idle', voWorkerId: voRun?.workerId });
       return;
     }
     if (type === 'session.idle') {
-      const cleaned = cleanAssistantText(this.liveText);
-      if (cleaned && !isUserEcho(cleaned) && !/insufficient balance/i.test(cleaned)) {
-        this.liveText = cleaned;
-        this.post({ type: 'assistant', text: this.liveText, live: false });
-      }
-      this.post({ type: 'idle' });
-      void this.finishTurn();
+      void this.handleSessionIdle(this.voEventWorkerId);
     }
   }
 
-  private noteFile(filePath: string, additions: number, deletions: number, snapshotOnly = false) {
-    const rel = String(filePath || '').trim();
-    if (!rel) return;
-    const abs = resolveAbs(rel);
-    const prev = this.turnFiles.get(abs) || this.turnFiles.get(rel);
-    const before = prev?.before !== undefined ? prev.before : readFileSafe(abs);
-    if (snapshotOnly && !prev) {
-      this.turnFiles.set(abs, {
-        path: rel,
-        abs,
-        additions: 0,
-        deletions: 0,
-        status: 'pending',
-        before,
-      });
-      this.pushFiles();
+  private postLive(label: string, detail: string, file: string) {
+    this.post({ type: 'liveStatus', label, detail, file: file || '' });
+  }
+
+  private async handleSessionIdle(voWorkerId?: string | null) {
+    const readLive = () => (voWorkerId ? this.voLiveText.get(voWorkerId) || '' : this.liveText);
+    const writeLive = (t: string) => {
+      if (voWorkerId) this.voLiveText.set(voWorkerId, t);
+      else this.liveText = t;
+    };
+    const voBag = voWorkerId ? this.voTurn(voWorkerId) : null;
+    const hadTools = voBag ? voBag.hadTools : this.turnHadTools;
+    const pendingTodos = voBag ? voBag.pendingTodos : this.pendingTodos;
+    const autoContinues = voBag ? voBag.autoContinues : this.autoContinues;
+    const finishing = voBag ? voBag.finishing : this.finishingIdle;
+    const aborted = voBag ? voBag.aborted : this.userAborted;
+
+    if (finishing || aborted) {
+      this.post({ type: 'liveStatus', label: '', detail: '', file: '', clear: true });
+      this.post({ type: 'idle', voWorkerId: voWorkerId || undefined });
       return;
     }
-    const after = readFileSafe(abs);
-    const counted =
-      additions || deletions
-        ? { add: additions, del: deletions }
-        : lineDiff(prev?.before ?? before, after);
+    // Stopped VO teammate — don't flush more assistant text / diffs / continues
+    if (this.virtualOffice.active && voWorkerId) {
+      const stopped = this.virtualOffice.getRun(voWorkerId);
+      if (!stopped || stopped.status !== 'running') {
+        this.post({ type: 'idle', voWorkerId });
+        return;
+      }
+    }
+
+    const cleaned = cleanAssistantText(readLive());
+    await this.syncDiffs();
+
+    const fileChanges = this.turnFiles.size;
+    const incomplete = looksIncompleteReply(cleaned, hadTools, pendingTodos, fileChanges);
+    if (incomplete && autoContinues < MAX_AUTO_CONTINUES && !aborted) {
+      if (voBag) {
+        voBag.autoContinues += 1;
+        voBag.hadTools = false;
+      } else {
+        this.autoContinues += 1;
+        this.turnHadTools = false;
+      }
+      // Keep streaming bubble live while we continue — do not finalize summary yet
+      if (cleaned && !isUserEcho(cleaned) && !/insufficient balance/i.test(cleaned)) {
+        writeLive(cleaned);
+        this.post({ type: 'assistant', text: cleaned, live: true, voWorkerId: voWorkerId || undefined });
+      }
+      const contN = voBag ? voBag.autoContinues : this.autoContinues;
+      if (!voWorkerId) this.post({ type: 'phase', label: 'Planning next moves' });
+      else this.post({ type: 'phase', voWorkerId, label: 'Planning next moves' });
+      this.post({
+        type: 'activity',
+        voWorkerId: voWorkerId || undefined,
+        id: 'continue-' + (voWorkerId || 'main') + '-' + contN,
+        label: 'Continuing…',
+        detail: 'Finishing remaining work (' + contN + '/' + MAX_AUTO_CONTINUES + ')',
+        done: false,
+        kind: 'status',
+      });
+      try {
+        if (this.virtualOffice.active && voWorkerId) {
+          const run = this.virtualOffice.getRun(voWorkerId);
+          if (run && run.status === 'running') {
+            await this.virtualOffice.continueRun(voWorkerId, CONTINUE_PROMPT);
+            return;
+          }
+        }
+        await this.engine.sendPrompt(CONTINUE_PROMPT, this.modelId);
+        return;
+      } catch (err) {
+        this.post({
+          type: 'error',
+          text: err instanceof Error ? err.message : String(err),
+          voWorkerId: voWorkerId || undefined,
+        });
+      }
+    }
+
+    // Truly finished — file card first, then final summary (summary must be last in UI)
+    for (const row of this.turnFiles.values()) row.live = false;
+    this.pushFiles();
+
+    let summary = cleaned;
+    if ((!summary || isUserEcho(summary)) && !/insufficient balance/i.test(String(summary || ''))) {
+      const n = this.turnFiles.size;
+      summary =
+        n > 0
+          ? `Done. Updated ${n} file${n === 1 ? '' : 's'} for this task.`
+          : 'Done. Finished the assigned task.';
+    }
+    if (summary && !isUserEcho(summary) && !/insufficient balance/i.test(summary)) {
+      writeLive(summary);
+      this.post({ type: 'assistant', text: summary, live: false, voWorkerId: voWorkerId || undefined });
+      if (!voWorkerId) this.trackChatAssistant(summary);
+    }
+
+    if (this.virtualOffice.active && voWorkerId) {
+      const voRun = this.virtualOffice.getRun(voWorkerId);
+      // Already Stopped / finished — swallow late idle (no "finished" / continue)
+      if (!voRun || voRun.status !== 'running') {
+        this.post({ type: 'idle', voWorkerId });
+        return;
+      }
+      this.virtualOffice.completeIfSession(voRun.sessionId);
+      if (voBag) voBag.finishing = true;
+      this.post({
+        type: 'activity',
+        voWorkerId,
+        id: 'vo-done-' + voRun.workerId + '-' + Date.now(),
+        label: `${voRun.workerName} finished`,
+        detail: voRun.title,
+        done: true,
+      });
+      this.post({ type: 'phase', voWorkerId, label: '' });
+      this.post({
+        type: 'voWorkerDone',
+        workerId: voWorkerId,
+        voRunning: this.virtualOffice.listRuns().map((r) => ({
+          workerId: r.workerId,
+          workerName: r.workerName,
+          title: r.title,
+          status: r.status,
+        })),
+      });
+      this.post({ type: 'idle', voWorkerId });
+      this.pushVoStatus();
+      const still = this.virtualOffice.runningCount();
+      this.post({
+        type: 'voParallel',
+        label:
+          still > 0
+            ? `${still} teammate${still === 1 ? '' : 's'} still working — send another task anytime`
+            : 'All free — send the next task',
+      });
+      this.post({ type: 'liveStatus', label: '', detail: '', file: '', clear: true });
+      void this.finishTurn().finally(() => {
+        if (voBag) voBag.finishing = false;
+      });
+      return;
+    }
+
+    this.finishingIdle = true;
+    this.post({ type: 'liveStatus', label: '', detail: '', file: '', clear: true });
+    this.post({ type: 'idle' });
+    void this.finishTurn().finally(() => {
+      this.finishingIdle = false;
+    });
+  }
+
+  private snapshotBefore(filePath: string) {
+    const abs = resolveAbs(filePath);
+    if (!abs || this.fileBefore.has(abs)) return;
+    const before = readFileSafe(abs);
+    // null = file did not exist (create). Never read AFTER the write.
+    this.fileBefore.set(abs, before);
+  }
+
+  /** Commit a real before→after change and push exact +/- counts + ink stream. */
+  private commitFileChange(filePath: string, afterOverride?: string | null) {
+    const abs = resolveAbs(filePath);
+    if (!abs) return;
+    const rel = String(filePath || '').trim() || abs;
+
+    if (!this.fileBefore.has(abs)) {
+      // Missed the pending snapshot. If tool gave us content and disk matches,
+      // treat as create only when file was empty/missing before this call's override.
+      const onDisk = readFileSafe(abs);
+      if (afterOverride != null && (onDisk == null || onDisk === afterOverride)) {
+        this.fileBefore.set(abs, null);
+      } else if (onDisk != null && afterOverride != null && onDisk !== afterOverride) {
+        // Disk already updated; we lost before — still count using override as after
+        // and empty before only if file is brand new content (heuristic: no prev row)
+        this.fileBefore.set(abs, this.turnFiles.get(abs)?.before ?? null);
+      } else {
+        this.fileBefore.set(abs, onDisk);
+      }
+    }
+
+    const before = this.fileBefore.get(abs) ?? null;
+    const after =
+      afterOverride !== undefined && afterOverride !== null
+        ? afterOverride
+        : readFileSafe(abs) ?? this.turnFiles.get(abs)?.after ?? null;
+
+    if (before == null && after == null) return;
+
+    const stats = countLineStats(before, after);
+    const prev = this.turnFiles.get(abs);
+    const action: 'create' | 'edit' | 'delete' =
+      before == null && after != null ? 'create' : after == null && before != null ? 'delete' : 'edit';
+
+    // Prefer fresh computed stats; only keep previous if new compute is empty but old had values
+    // (e.g. transient read before flush)
+    let additions = stats.additions;
+    let deletions = stats.deletions;
+    if (additions === 0 && deletions === 0 && after != null && before !== after) {
+      // Fallback: non-empty change that LCS missed (rare) — count by length delta heuristic
+      const bLines = before == null ? 0 : String(before).split(/\r?\n/).length;
+      const aLines = String(after).split(/\r?\n/).length;
+      if (before == null) {
+        additions = aLines;
+      } else if (aLines !== bLines) {
+        additions = Math.max(0, aLines - bLines);
+        deletions = Math.max(0, bLines - aLines);
+      }
+    }
+    if (additions === 0 && deletions === 0 && prev && (prev.additions || prev.deletions)) {
+      additions = prev.additions;
+      deletions = prev.deletions;
+    }
+
+    const preview = buildDiffPreview(before, after, 24);
     this.turnFiles.set(abs, {
-      path: rel,
+      path: prev?.path || rel,
       abs,
-      additions: Math.max(counted.add, prev?.additions || 0),
-      deletions: Math.max(counted.del, prev?.deletions || 0),
+      additions,
+      deletions,
       status: prev?.status === 'accepted' || prev?.status === 'reverted' ? prev.status : 'pending',
-      before: prev?.before ?? before,
+      before,
+      after,
+      preview,
+      live: true,
+      action,
     });
     this.pushFiles();
+    this.postInk(abs, action, additions, deletions, preview);
+  }
+
+  private postInk(
+    _abs: string,
+    _action: 'create' | 'edit' | 'delete',
+    _additions: number,
+    _deletions: number,
+    _preview: DiffLine[],
+  ) {
+    // Ink stage removed from chat UI — live reveal stays in file cards + editor.
   }
 
   private applyDiffs(raw: unknown) {
     const list = Array.isArray(raw) ? raw : (raw as any)?.diff;
     if (!Array.isArray(list)) return;
     for (const d of list) {
-      const path = String(d.file || d.path || d.filename || '');
-      if (!path) continue;
-      let add = Number(d.additions || d.added || 0);
-      let del = Number(d.deletions || d.removed || 0);
-      if ((!add && !del) && (d.patch || d.diff)) {
+      const filePath = String(d.file || d.path || d.filename || '');
+      if (!filePath) continue;
+      const abs = resolveAbs(filePath);
+      const prev = this.turnFiles.get(abs);
+      const before =
+        d.before !== undefined
+          ? clipSnapshot(d.before)
+          : this.fileBefore.has(abs)
+            ? this.fileBefore.get(abs) ?? null
+            : prev?.before ?? null;
+      const after =
+        d.after !== undefined ? clipSnapshot(d.after) : readFileSafe(abs) ?? prev?.after ?? null;
+
+      if (d.before !== undefined && !this.fileBefore.has(abs)) {
+        this.fileBefore.set(abs, clipSnapshot(d.before));
+      }
+
+      let add = Number(d.additions ?? d.added);
+      let del = Number(d.deletions ?? d.removed);
+      const hasApiCounts = Number.isFinite(add) && Number.isFinite(del) && (add > 0 || del > 0);
+      if (!hasApiCounts && (d.patch || d.diff)) {
         const c = countLines(String(d.patch || d.diff));
         add = c.add;
         del = c.del;
       }
-      this.noteFile(path, add, del);
+      if ((!Number.isFinite(add) || !Number.isFinite(del) || (add === 0 && del === 0)) && (before != null || after != null)) {
+        const c = countLineStats(before, after);
+        add = c.additions;
+        del = c.deletions;
+      }
+      if (!Number.isFinite(add)) add = 0;
+      if (!Number.isFinite(del)) del = 0;
+      if (before == null && after == null && add === 0 && del === 0) continue;
+
+      // Use API/computed counts as source of truth when non-zero
+      if (add > 0 || del > 0 || before !== after) {
+        this.fileBefore.set(abs, before ?? this.fileBefore.get(abs) ?? null);
+        const action: 'create' | 'edit' | 'delete' =
+          before == null && after != null ? 'create' : after == null && before != null ? 'delete' : 'edit';
+        const preview = buildDiffPreview(before, after, 24);
+        this.turnFiles.set(abs, {
+          path: filePath,
+          abs,
+          additions: add,
+          deletions: del,
+          status: prev?.status === 'accepted' || prev?.status === 'reverted' ? prev.status : 'pending',
+          before: before ?? prev?.before ?? null,
+          after: after ?? prev?.after ?? null,
+          preview,
+          live: true,
+          action,
+        });
+        this.postInk(abs, action, add, del, preview);
+      }
     }
+    this.pushFiles();
   }
 
   private pushFiles() {
-    const files = [...this.turnFiles.values()].map((f) => ({
-      path: f.abs || f.path,
-      name: (f.abs || f.path).replace(/\\/g, '/').split('/').pop() || f.path,
-      additions: f.additions,
-      deletions: f.deletions,
-      status: f.status,
-    }));
+    const files = [...this.turnFiles.values()]
+      .filter((f) => f.after != null || f.before != null || f.additions > 0 || f.deletions > 0)
+      .map((f) => ({
+        path: f.abs || f.path,
+        name: (f.abs || f.path).replace(/\\/g, '/').split('/').pop() || f.path,
+        additions: f.additions,
+        deletions: f.deletions,
+        status: f.status,
+        live: f.live,
+        action: f.action,
+        preview: (f.preview || []).slice(0, 14).map((line) => ({
+          type: line.type,
+          text: String((line as any).text || '').slice(0, 200),
+        })),
+      }));
     if (files.length) this.post({ type: 'files', files });
+  }
+
+  private clearLiveDecorations() {
+    for (const ed of vscode.window.visibleTextEditors) {
+      ed.setDecorations(this.addDeco, []);
+      ed.setDecorations(this.delDeco, []);
+    }
+    this.liveDecoAbs = '';
+  }
+
+  private async revealAndDecorate(filePath: string, animate = false) {
+    const abs = resolveAbs(filePath);
+    if (!abs || !fs.existsSync(abs)) return;
+    try {
+      const uri = vscode.Uri.file(abs);
+      const doc = await vscode.workspace.openTextDocument(uri);
+      const editor = await vscode.window.showTextDocument(doc, {
+        preview: true,
+        preserveFocus: true,
+        viewColumn: vscode.ViewColumn.Active,
+      });
+      const row = this.turnFiles.get(abs);
+      const before = row?.before ?? this.fileBefore.get(abs) ?? null;
+      const after = row?.after ?? readFileSafe(abs);
+      if (before == null && after == null) return;
+      const markers = computeEditorDiffMarkers(before, after);
+      const addRanges = markers.addedLines
+        .map((n) => {
+          const line = Math.max(0, n - 1);
+          if (line >= doc.lineCount) return null;
+          return doc.lineAt(line).range;
+        })
+        .filter(Boolean) as vscode.Range[];
+      const delRanges: vscode.DecorationOptions[] = markers.deletedHunks.map((h) => {
+        const line = Math.max(0, Math.min(doc.lineCount - 1, h.afterLineNumber));
+        const range = doc.lineAt(line).range;
+        const preview = h.lines
+          .slice(0, 3)
+          .map((l) => l.slice(0, 80))
+          .join(' · ');
+        return {
+          range,
+          renderOptions: {
+            after: {
+              contentText: preview ? '  − ' + preview : '  − deleted lines',
+              color: '#ff7b72',
+            },
+          },
+        };
+      });
+      if (this.liveDecoAbs && this.liveDecoAbs !== abs) this.clearLiveDecorations();
+      this.liveDecoAbs = abs;
+      editor.setDecorations(this.delDeco, delRanges);
+
+      if (animate && addRanges.length > 1) {
+        editor.setDecorations(this.addDeco, []);
+        const step = Math.max(1, Math.ceil(addRanges.length / 48));
+        for (let i = 0; i < addRanges.length; i += step) {
+          const slice = addRanges.slice(0, Math.min(addRanges.length, i + step));
+          editor.setDecorations(this.addDeco, slice);
+          editor.revealRange(slice[slice.length - 1], vscode.TextEditorRevealType.InCenterIfOutsideViewport);
+          await new Promise((r) => {
+            const t = setTimeout(r, 22);
+            this.inkTimers.add(t);
+          });
+        }
+        editor.setDecorations(this.addDeco, addRanges);
+      } else {
+        editor.setDecorations(this.addDeco, addRanges);
+        if (addRanges.length) {
+          editor.revealRange(addRanges[0], vscode.TextEditorRevealType.InCenterIfOutsideViewport);
+        }
+      }
+    } catch {
+      /* ignore */
+    }
   }
 
   private async acceptFile(filePath: string) {
@@ -730,11 +2059,13 @@ export class OlkilSidebarProvider implements vscode.WebviewViewProvider {
 
   private async finishTurn() {
     await this.syncDiffs();
+    for (const row of this.turnFiles.values()) row.live = false;
+    this.pushFiles();
     await this.chargeTurn();
     await this.refreshQuotaAfterTurn();
-    if (this.quota && !this.canRunAgent()) {
+    if (!this.canRunAgent()) {
       this.pushAuth();
-      this.post({ type: 'upgrade' });
+      this.post({ type: 'upgrade', reason: this.upgradeReason() });
     }
   }
 
@@ -749,21 +2080,44 @@ export class OlkilSidebarProvider implements vscode.WebviewViewProvider {
     for (const row of this.turnFiles.values()) {
       if (row.status !== 'pending') continue;
       const after = readFileSafe(row.abs);
-      const c = lineDiff(row.before, after);
-      row.additions = Math.max(row.additions, c.add);
-      row.deletions = Math.max(row.deletions, c.del);
+      const before = row.before ?? this.fileBefore.get(row.abs) ?? null;
+      if (before == null && after == null) continue;
+      const c = countLineStats(before, after);
+      row.after = after;
+      row.before = before;
+      row.action = before == null && after != null ? 'create' : after == null ? 'delete' : 'edit';
+      if (c.additions > 0 || c.deletions > 0 || (after != null && before !== after)) {
+        row.additions = c.additions;
+        row.deletions = c.deletions;
+        row.preview = buildDiffPreview(before, after, 24);
+      }
+      if (before != null && !this.fileBefore.has(row.abs)) this.fileBefore.set(row.abs, before);
     }
     this.pushFiles();
   }
 
   private async chargeTurn() {
     if (this.turnCharged || this.charging || !this.session) return;
-    if (this.canRunCustom() && !this.canRunCloud()) {
+    if (isCustomModel(this.modelId) || (this.canRunCustom() && !this.canRunCloud() && !this.shouldUseFreeTrial())) {
       this.turnCharged = true;
       return;
     }
-    if (isCustomModel(this.modelId)) {
-      this.turnCharged = true;
+    if (this.engine.currentCreds()?.provider === 'trial') {
+      this.charging = true;
+      try {
+        const uid = this.session.user?.uid || '';
+        let tokens = 0;
+        if (!this.turnFailed && uid) {
+          let usage = this.turnUsage;
+          if (!usage || exactTrialTokens(usage) < 1) usage = maxUsage(usage, await this.pullSessionUsage());
+          tokens = exactTrialTokens(usage);
+        }
+        if (tokens > 0 && uid) this.freeTrial = recordFreeTrialUse(vscode.env.machineId, uid, tokens);
+        this.turnCharged = true;
+        this.pushAuth();
+      } finally {
+        this.charging = false;
+      }
       return;
     }
     this.charging = true;
@@ -780,6 +2134,7 @@ export class OlkilSidebarProvider implements vscode.WebviewViewProvider {
         this.turnCharged = true;
         return;
       }
+      await fetchOpenRouterCatalog();
       const model = creds?.model && creds.provider !== 'openrouter' ? creds.model : resolveCloudSlug(this.modelId);
       const billedOut = usage.completion > 0 ? usage.completion : usage.reasoning;
       for (let attempt = 0; attempt < 3; attempt++) {
@@ -790,6 +2145,7 @@ export class OlkilSidebarProvider implements vscode.WebviewViewProvider {
           costUsd: usage.costUsd,
           cacheHit: usage.cacheHit,
           cacheMiss: usage.cacheMiss,
+          cacheWrite: usage.cacheWrite,
           reasoning: usage.reasoning,
           model,
           provider: creds?.provider || 'openrouter',
@@ -867,6 +2223,8 @@ export class OlkilSidebarProvider implements vscode.WebviewViewProvider {
     if (!this.session) return;
     try {
       this.quota = await fetchQuota(this.session);
+      this.quotaLoaded = true;
+      this.refreshFreeTrial();
       this.pushAuth();
     } catch {
       /* ignore */
@@ -883,6 +2241,14 @@ export class OlkilSidebarProvider implements vscode.WebviewViewProvider {
     baseUrl?: string;
     apiKey?: string;
     id?: string;
+    workerId?: string;
+    mode?: string;
+    skipUserEcho?: boolean;
+    hasImages?: boolean;
+    raw?: string;
+    session?: string;
+    offer?: string;
+    ice?: string;
   }) {
     switch (msg.type) {
       case 'ready':
@@ -899,10 +2265,20 @@ export class OlkilSidebarProvider implements vscode.WebviewViewProvider {
         this.signOut();
         break;
       case 'send':
-        await this.ask(String(msg.text || ''));
+        await this.ask(String(msg.text || ''), {
+          mode: String(msg.mode || 'agent'),
+          skipUserEcho: !!msg.skipUserEcho,
+          hasImages: !!msg.hasImages,
+        });
+        break;
+      case 'listContextFiles':
+        this.post({ type: 'contextFiles', files: this.listContextFiles() });
         break;
       case 'abort':
         await this.abort();
+        break;
+      case 'abortVo':
+        await this.abortVoWorker(String(msg.workerId || ''));
         break;
       case 'newChat':
         await this.newChat();
@@ -912,28 +2288,14 @@ export class OlkilSidebarProvider implements vscode.WebviewViewProvider {
         void this.context?.globalState.update('olkil.modelId', this.modelId);
         this.pushAuth();
         break;
-      case 'saveCustom': {
-        const model = String(msg.model || '').trim();
-        const baseUrl = String(msg.baseUrl || '').trim();
-        const incomingKey = typeof msg.apiKey === 'string' ? msg.apiKey.trim() : '';
-        let id = String(msg.id || customIdFromModelId(this.modelId) || '').trim();
-        const existing = id ? this.customs.find((c) => c.id === id) : undefined;
-        if (!existing) id = newCustomId();
-        const apiKey = incomingKey || existing?.apiKey || '';
-        const row: CustomEndpoint = { id, model, baseUrl, apiKey };
-        if (!customEndpointReady(row)) {
-          this.post({ type: 'error', text: 'Add model id, base URL, and API key, then save.' });
-          break;
-        }
-        this.customs = existing
-          ? this.customs.map((c) => (c.id === id ? row : c))
-          : this.customs.concat(row);
-        await this.persistCustoms();
-        this.modelId = customPickerId(id);
-        void this.context?.globalState.update('olkil.modelId', this.modelId);
-        this.pushAuth();
+      case 'saveCustom':
+        await this.saveCustomEndpoint(
+          String(msg.model || ''),
+          String(msg.baseUrl || ''),
+          typeof msg.apiKey === 'string' ? msg.apiKey : '',
+          String(msg.id || customIdFromModelId(this.modelId) || ''),
+        );
         break;
-      }
       case 'deleteCustom': {
         const id = String(msg.id || customIdFromModelId(this.modelId) || '').trim();
         this.customs = this.customs.filter((c) => c.id !== id);
@@ -972,31 +2334,109 @@ export class OlkilSidebarProvider implements vscode.WebviewViewProvider {
           vscode.Uri.parse('https://olkil.com/checkout/?plan=' + encodeURIComponent(String(msg.plan || 'pro'))),
         );
         break;
+      case 'toggleVirtualOffice':
+        await this.virtualOffice.toggle();
+        break;
+      case 'togglePocket':
+        await this.togglePocket();
+        break;
+      case 'toggleRemoteAccess':
+        await this.toggleRemoteAccess();
+        break;
+      case 'showRemoteQr':
+        await this.showRemoteQr();
+        break;
+      case 'screenOffer':
+        this.screen.onOffer(msg);
+        break;
+      case 'screenInput':
+        this.screen.onInput(String(msg.raw || ''));
+        break;
+      case 'setVoAssignee': {
+        const id = String(msg.id || 'manager') as VoAssigneeId;
+        const allowed = VO_ASSIGNEES.some((a) => a.id === id);
+        this.virtualOffice.setAssignee(allowed ? id : 'manager');
+        break;
+      }
       default:
         break;
     }
   }
 
+  async toggleVirtualOffice() {
+    await this.virtualOffice.toggle();
+  }
+
   private html(webview: vscode.Webview): string {
     const css = webview.asWebviewUri(vscode.Uri.joinPath(this.extensionUri, 'webview', 'sidebar.css'));
     const js = webview.asWebviewUri(vscode.Uri.joinPath(this.extensionUri, 'webview', 'sidebar.js'));
+    const qr = webview.asWebviewUri(vscode.Uri.joinPath(this.extensionUri, 'webview', 'qrcode.js'));
+    const screen = webview.asWebviewUri(vscode.Uri.joinPath(this.extensionUri, 'webview', 'screen-peer.js'));
     const icon = webview.asWebviewUri(vscode.Uri.joinPath(this.extensionUri, 'media', 'icon.png'));
     const nonce = String(Date.now());
     return `<!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
-  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src ${webview.cspSource} data:; style-src ${webview.cspSource}; script-src 'nonce-${nonce}';" />
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src ${webview.cspSource} data: blob:; style-src ${webview.cspSource}; script-src 'nonce-${nonce}'; connect-src https: wss: stun: turn:; media-src blob: mediastream:; worker-src blob:;" />
   <link rel="stylesheet" href="${css}" />
 </head>
 <body>
   <div id="app" data-icon="${icon}"></div>
+  <script nonce="${nonce}" src="${qr}"></script>
   <script nonce="${nonce}" src="${js}"></script>
+  <script nonce="${nonce}" src="${screen}"></script>
 </body>
 </html>`;
   }
 
+  async toggleRemoteAccess() {
+    if (this.keepAwake.isOn()) {
+      this.screen.stop();
+      this.keepAwake.stop();
+      await this.context?.globalState.update('olkil.remoteAccess', false);
+      await this.context?.globalState.update('olkil.remoteAccessPid', 0);
+      this.post({ type: 'remoteQr', open: false });
+      this.pushAuth();
+      return;
+    }
+    const ok = await this.keepAwake.start();
+    if (!ok) {
+      void vscode.window.showWarningMessage('Remote Access could not keep this screen on.');
+      await this.context?.globalState.update('olkil.remoteAccess', false);
+    } else {
+      await this.context?.globalState.update('olkil.remoteAccess', true);
+      if (this.keepAwake.pid()) await this.context?.globalState.update('olkil.remoteAccessPid', this.keepAwake.pid());
+      await this.showRemoteQr();
+      await this.screen.start();
+    }
+    this.pushAuth();
+  }
+
+  async togglePocket() {
+    if (!this.pocket) return;
+    if (this.pocket.isOn()) {
+      this.pocket.stop();
+      await this.context?.globalState.update('olkil.pocketOn', false);
+      void vscode.window.showInformationMessage('OLKIL Pocket is off.');
+      return;
+    }
+    if (!this.session) {
+      await this.signIn();
+      if (!this.session) return;
+    }
+    await this.armPocket();
+    if (this.pocket.isOn()) await this.context?.globalState.update('olkil.pocketOn', true);
+  }
+
   dispose() {
+    this.screen.stop();
+    this.keepAwake.stop();
+    this.pocket?.dispose();
+    this.clearLiveDecorations();
+    this.addDeco.dispose();
+    this.delDeco.dispose();
+    this.virtualOffice.dispose();
     this.engine.dispose();
   }
 }
