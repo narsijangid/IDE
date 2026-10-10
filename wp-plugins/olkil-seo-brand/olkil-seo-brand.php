@@ -74,6 +74,9 @@ function olkil_seo_brand_sync_theme_files() {
 		'theme-overrides/assets/olkil/img/community.png'            => 'assets/olkil/img/community.png',
 		'theme-overrides/assets/olkil/img/cli-preview.png'          => 'assets/olkil/img/cli-preview.png',
 		'theme-overrides/inc/olkil/olkil-branding.php'              => 'inc/olkil/olkil-branding.php',
+		'theme-overrides/assets/olkil/ide-demo/ide-demo.css'        => 'assets/olkil/ide-demo/ide-demo.css',
+		'theme-overrides/assets/olkil/ide-demo/ide-demo.js'         => 'assets/olkil/ide-demo/ide-demo.js',
+		'theme-overrides/assets/olkil/ide-demo/olkil-logo.png'      => 'assets/olkil/ide-demo/olkil-logo.png',
 	);
 
 	$ok = true;

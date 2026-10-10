@@ -1,0 +1,113 @@
+/* OLKIL IDE demo widget — lazy-loaded by template-parts/olkil/sections/demo.php. Everything is scoped to .olkide. */
+.olkide{--bg:#1b1b1e;--bg2:#161618;--bg3:#242428;--bar:#111113;--line:#2a2a2f;--tx:#d4d4d8;--mut:#8a8a94;--acc:#ff2d8c;--ok:#4ade80;--er:#f87171;--wa:#fbbf24;
+ position:relative;width:100%;max-width:1180px;margin:0 auto;border:1px solid var(--line);border-radius:12px;overflow:hidden;background:var(--bg);color:var(--tx);font:13px/1.5 system-ui,-apple-system,"Segoe UI",sans-serif;text-align:left;letter-spacing:normal;color-scheme:dark;scrollbar-width:thin;scrollbar-color:#3a3a42 transparent;box-shadow:0 30px 80px rgba(0,0,0,.5),0 0 0 1px rgba(255,45,140,.08)}
+.olkide *,.olkide *::before,.olkide *::after{box-sizing:border-box}
+.olkide button,.olkide input,.olkide textarea,.olkide select{margin:0;padding:0;border:0;border-radius:0;background:none;box-shadow:none;text-shadow:none;text-transform:none;letter-spacing:normal;min-height:0;min-width:0;height:auto;width:auto;max-width:none;line-height:inherit;font:inherit;color:inherit;outline:0;transition:none}
+.olkide button,.olkide input,.olkide textarea{-webkit-appearance:none;appearance:none}
+.olkide pre{margin:0;padding:6px 24px 40px 0;border:0;border-radius:0;background:none;max-width:none;overflow:visible;white-space:pre;color:var(--tx)}
+.olkide img{max-width:none}
+.olkide .mono,.olkide pre,.olkide textarea.ed{font:13px/20px "Cascadia Code","JetBrains Mono",Consolas,"Courier New",monospace}
+.olkide .i{width:16px;height:16px;fill:none;stroke:currentColor;stroke-width:1.7;stroke-linecap:round;stroke-linejoin:round;flex:none;vertical-align:middle}
+.olkide .ib{background:none;border:0;color:var(--mut);cursor:pointer;display:grid;place-items:center;width:26px;height:26px;border-radius:5px;padding:0}
+.olkide .ib:hover,.olkide .ib:focus-visible{background:var(--bg3);color:#fff}
+.olkide .titlebar{display:flex;align-items:center;gap:12px;padding:0 6px 0 12px;height:36px;background:var(--bar);border-bottom:1px solid var(--line);position:relative}
+.olkide .titlebar img{width:18px;height:18px;display:block}
+.olkide .menu{display:flex;position:relative}.olkide .menu span{padding:3px 9px;border-radius:5px;color:var(--mut);cursor:pointer}
+.olkide .menu span:hover,.olkide .menu span.on{background:var(--bg3);color:#fff}
+.olkide .tt{position:absolute;left:50%;transform:translateX(-50%);color:var(--mut);pointer-events:none;white-space:nowrap}
+.olkide .wc{margin-left:auto;display:flex}
+.olkide .wc .ib{width:34px;height:28px;border-radius:0}.olkide .wc .ib:last-child:hover{background:#c42b1c}
+.olkide .dd{position:absolute;z-index:50;min-width:200px;background:#202024;border:1px solid #38383f;border-radius:8px;padding:4px;box-shadow:0 12px 30px rgba(0,0,0,.5)}
+.olkide .dd div{display:flex;justify-content:space-between;gap:24px;padding:5px 10px;border-radius:5px;cursor:pointer}
+.olkide .dd div:hover{background:var(--acc);color:#fff}.olkide .dd i{font-style:normal;color:var(--mut)}
+.olkide .main{display:grid;grid-template-columns:48px 240px 1fr 350px;grid-template-rows:minmax(0,1fr);height:580px;transition:grid-template-columns .15s}
+.olkide .main>*{min-height:0}
+.olkide .act{background:var(--bar);display:flex;flex-direction:column;align-items:center;padding:4px 0;border-right:1px solid var(--line)}
+.olkide .act .ib{width:48px;height:46px;border-radius:0;border-left:2px solid transparent}
+.olkide .act .ib .i{width:22px;height:22px}.olkide .act .ib.on{color:#fff;border-left-color:var(--acc)}
+.olkide .act .sp{flex:1}
+.olkide .side{background:var(--bg2);border-right:1px solid var(--line);overflow:auto;min-width:0}
+.olkide .side.h{border:0}
+.olkide .sh{display:flex;align-items:center;justify-content:space-between;padding:8px 8px 6px 16px;color:var(--mut);font-size:11px;font-weight:600;letter-spacing:.05em;white-space:nowrap}
+.olkide .sh div{display:flex}
+.olkide .sec{padding:3px 8px;font-size:11px;font-weight:700;color:#bbb;display:flex;gap:4px;align-items:center;white-space:nowrap}
+.olkide .f{display:flex;gap:7px;align-items:center;padding:2px 10px;cursor:pointer;white-space:nowrap;color:var(--tx)}
+.olkide .f:hover{background:var(--bg3)}.olkide .f.on{background:#2c2c34}.olkide .f.d{color:#c8c8d0}
+.olkide .f .i{width:14px;height:14px;color:var(--mut)}
+.olkide .ts{font-size:8.5px;font-weight:800;color:#5aa9ff;width:14px;text-align:center}.olkide .cs{color:#ff6fb0;font-weight:800;font-size:12px;width:14px;text-align:center}.olkide .jt{color:#e8b64a;font-size:12px;width:14px;text-align:center}
+.olkide .f em{margin-left:auto;font-style:normal;font-size:11px;color:#e2c08d}
+.olkide .f input,.olkide .sin{background:#0f0f11;border:1px solid var(--acc);border-radius:4px;color:var(--tx);outline:0;padding:2px 6px;font:inherit;width:100%}
+.olkide .pad{padding:4px 12px}
+.olkide .btn{display:flex;align-items:center;justify-content:center;gap:6px;background:var(--acc);color:#fff;border:0;border-radius:6px;padding:6px 12px;cursor:pointer;width:100%;margin-top:6px}
+.olkide .btn:hover{filter:brightness(1.1);background:var(--acc);color:#fff}.olkide .btn.g{background:var(--bg3);color:var(--tx);width:auto;margin:0;padding:3px 10px}
+.olkide .ext{display:flex;gap:10px;padding:8px 12px;align-items:center}.olkide .ext b{display:block}.olkide .ext small{color:var(--mut)}
+.olkide .ext .box{width:34px;height:34px;border-radius:7px;background:var(--bg3);display:grid;place-items:center;color:var(--acc);font-weight:700;flex:none}
+.olkide .center{display:flex;flex-direction:column;min-width:0;background:var(--bg)}
+.olkide .tabs{display:flex;background:var(--bar);overflow-x:auto;border-bottom:1px solid var(--line);scrollbar-width:none;flex:none}
+.olkide .tab{padding:0 10px 0 14px;height:35px;color:var(--mut);cursor:pointer;white-space:nowrap;border-right:1px solid var(--line);display:flex;gap:7px;align-items:center}
+.olkide .tab.on{background:var(--bg);color:#fff;box-shadow:inset 0 1px var(--acc)}
+.olkide .tab b{font-weight:400;width:18px;height:18px;display:grid;place-items:center;border-radius:4px;opacity:.6}.olkide .tab b:hover{opacity:1;background:var(--bg3)}
+.olkide .crumb{padding:3px 16px;color:var(--mut);font-size:12px;height:24px;flex:none;white-space:nowrap;overflow:hidden}
+.olkide .code{flex:1;overflow:auto;display:flex;align-items:flex-start;position:relative;min-height:0}
+.olkide .gut{position:sticky;left:0;z-index:2;background:var(--bg);margin:0;padding:6px 14px 6px 0;width:56px;text-align:right;color:#5a5a66;user-select:none;flex:none}
+.olkide .stack{position:relative;flex:1;min-width:max-content}
+.olkide textarea.ed{position:absolute;inset:0;width:100%;height:100%;background:transparent;color:transparent;caret-color:#fff;border:0;outline:0;resize:none;overflow:hidden;white-space:pre;padding:6px 24px 40px 0;tab-size:2}
+/* olkil.css styles body.olkil-theme textarea with !important; these selectors are more specific. */
+.olkide textarea.ed{background:transparent!important;color:transparent!important;-webkit-text-fill-color:transparent;border:0!important;border-radius:0!important}
+.olkide .inp textarea{background:none!important;color:var(--tx)!important;border:0!important;border-radius:0!important}
+.olkide textarea.ed::selection{background:rgba(255,45,140,.35);color:transparent}
+.olkide .k{color:#ff79c6}.olkide .s{color:#9ece6a}.olkide .t{color:#7aa2f7}.olkide .c{color:#667;font-style:italic}.olkide .n{color:#e5a76b}
+.olkide .panel{height:160px;border-top:1px solid var(--line);background:var(--bg2);display:flex;flex-direction:column;flex:none}
+.olkide .ph{display:flex;align-items:center;padding:0 6px 0 14px;gap:18px;font-size:11px;color:var(--mut);height:30px;flex:none}
+.olkide .ph>span{cursor:pointer;height:30px;display:flex;align-items:center;gap:6px;border-bottom:1px solid transparent;white-space:nowrap}.olkide .ph>span:hover{color:#fff}.olkide .ph>span.on{color:#fff;border-bottom-color:var(--acc)}
+.olkide .ph .bd{background:var(--acc);color:#fff;border-radius:9px;padding:0 6px;font-size:10px}
+.olkide .ph .r{margin-left:auto;display:flex}
+.olkide .pb{flex:1;overflow:auto;padding:2px 14px;font-size:12px;display:none}.olkide .pb.on{display:block}
+.olkide .pb input{background:none;border:0;outline:0;color:var(--tx);font:inherit;width:70%}
+.olkide .pr{display:flex;gap:8px;padding:2px 0;cursor:pointer;align-items:center}.olkide .pr:hover{background:var(--bg3)}.olkide .pr small{color:var(--mut)}
+.olkide .er{color:var(--er)}.olkide .wa{color:var(--wa)}.olkide .ok{color:var(--ok)}
+.olkide .chat{background:var(--bg2);border-left:1px solid var(--line);display:flex;flex-direction:column;min-width:0;position:relative;overflow:hidden}
+.olkide .chat.h{border:0}
+.olkide .chead{display:flex;align-items:center;gap:8px;padding:6px 8px 6px 12px;border-bottom:1px solid var(--line);white-space:nowrap}
+.olkide .chead img{width:16px;height:16px;display:block}.olkide .chead b{letter-spacing:.06em}.olkide .chead em{font-style:normal;color:var(--mut);font-size:11px}
+.olkide .chead .r{margin-left:auto;display:flex}
+.olkide .modes{display:flex;gap:6px;padding:10px 12px;align-items:center}
+.olkide .modes button{background:var(--bg3);border:1px solid var(--line);border-radius:7px;padding:4px 11px;cursor:pointer;color:var(--mut)}
+.olkide .modes button:hover{color:#fff;background:var(--bg3)}.olkide .modes button.on{border-color:var(--acc);color:#fff;background:#3d1529}
+.olkide .modes select{flex:1;min-width:0;background:var(--bg3);color:var(--tx);border:1px solid var(--line);border-radius:7px;padding:5px 8px;font:inherit;cursor:pointer;outline:0;height:auto}
+.olkide .msgs{flex:1;overflow:auto;padding:6px 12px;display:flex;flex-direction:column;gap:10px;min-height:0}
+.olkide .m{max-width:92%;padding:8px 11px;border-radius:10px;animation:olkideIn .2s;word-wrap:break-word;white-space:pre-wrap}
+.olkide .m.bot{background:var(--bg3);border:1px solid var(--line);align-self:flex-start}
+.olkide .m.me{background:#5c1a3d;color:#fff;align-self:flex-end}
+.olkide .m .chip{display:flex;gap:6px;align-items:center;margin-top:8px;background:var(--bg);border:1px solid var(--line);border-radius:6px;padding:3px 8px;cursor:pointer;color:var(--tx)}
+.olkide .m .chip:hover{border-color:var(--acc)}
+.olkide .typing i{display:inline-block;width:5px;height:5px;margin-right:3px;border-radius:50%;background:var(--mut);animation:olkideB 1s infinite}
+.olkide .typing i:nth-child(2){animation-delay:.15s}.olkide .typing i:nth-child(3){animation-delay:.3s}
+@keyframes olkideIn{from{opacity:0;transform:translateY(4px)}}@keyframes olkideB{50%{transform:translateY(-4px);background:var(--acc)}}
+.olkide .inp{margin:10px;border:1px solid var(--line);border-radius:10px;background:var(--bg);padding:8px;position:relative}
+.olkide .inp:focus-within{border-color:var(--acc)}
+.olkide .inp textarea{display:block;width:100%;height:46px;resize:none;background:none;border:0;outline:0;color:var(--tx);font:inherit;padding:0}
+.olkide .inp .row{display:flex;justify-content:space-between;align-items:center;color:var(--mut);font-size:11px}
+.olkide .inp .row a{cursor:pointer;color:var(--mut);text-decoration:none}.olkide .inp .row a:hover{color:#fff}
+.olkide .send{width:28px;height:28px;border-radius:50%;border:0;background:var(--acc);color:#fff;cursor:pointer;display:grid;place-items:center;padding:0}
+.olkide .send:hover{filter:brightness(1.15);background:var(--acc);color:#fff}
+.olkide .men{position:absolute;left:8px;right:8px;bottom:100%;margin-bottom:6px;background:#202024;border:1px solid #38383f;border-radius:8px;padding:4px;max-height:150px;overflow:auto;z-index:5}
+.olkide .men div{padding:4px 8px;border-radius:5px;cursor:pointer;display:flex;gap:6px;align-items:center}.olkide .men div:hover,.olkide .men div.on{background:var(--acc);color:#fff}
+.olkide .hist{position:absolute;inset:44px 0 0 0;background:var(--bg2);z-index:4;padding:10px;overflow:auto}
+.olkide .hist div{padding:8px 10px;border:1px solid var(--line);border-radius:8px;margin-bottom:6px;cursor:pointer}.olkide .hist div:hover{border-color:var(--acc)}
+.olkide .status{display:flex;align-items:center;height:24px;background:var(--bar);border-top:1px solid var(--line);color:var(--mut);font-size:11.5px;padding:0 4px;overflow:hidden}
+.olkide .status span{padding:0 8px;height:24px;display:flex;align-items:center;gap:4px;cursor:pointer;white-space:nowrap}.olkide .status span:hover{background:var(--bg3);color:#fff}
+.olkide .status .i{width:13px;height:13px}.olkide .status .sp{flex:1;pointer-events:none}
+.olkide .toast{position:absolute;left:50%;bottom:40px;transform:translateX(-50%);background:#2b2b31;border:1px solid #3c3c44;padding:6px 14px;border-radius:8px;opacity:0;pointer-events:none;transition:opacity .2s;z-index:60;white-space:nowrap}
+.olkide .toast.on{opacity:1}
+.olkide.mini .main,.olkide.mini .status{display:none}
+.olkide.max{position:fixed;inset:0;margin:0;max-width:none;border-radius:0;z-index:100000;display:flex;flex-direction:column}.olkide.max .main{flex:1;height:auto}
+.olkide .closed{display:none;position:absolute;inset:36px 0 0 0;background:var(--bg);z-index:70;place-items:center}
+.olkide.cl .closed{display:grid}.olkide .closed button{background:var(--acc);color:#fff;border:0;border-radius:8px;padding:10px 20px;cursor:pointer}
+@media(max-width:900px){
+ .olkide .main{grid-template-columns:1fr!important;grid-template-rows:none;height:auto}
+ .olkide .act,.olkide .side,.olkide .panel,.olkide .menu,.olkide .tt{display:none!important}
+ .olkide .center{height:300px}
+ .olkide .chat{display:flex!important;height:400px;border-left:0;border-top:1px solid var(--line)}
+ .olkide .status span:not(#olkSProb):not(.sp):not(#olkSLn){display:none}
+}

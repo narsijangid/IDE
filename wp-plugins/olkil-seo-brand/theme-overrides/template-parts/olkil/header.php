@@ -13,7 +13,7 @@ $profile_url = olkil_page_url( 'profile' );
 <header class="olkil-header" role="banner">
 	<div class="olkil-header__inner">
 		<a class="olkil-logo" href="<?php echo esc_url( home_url( '/' ) ); ?>" aria-label="OLKIL home">
-			<img class="olkil-logo__img" src="<?php echo esc_url( OLKIL_URI . 'assets/olkil/img/logo-mark.png' ); ?>" width="32" height="32" alt="" decoding="async" />
+			<img class="olkil-logo__img" src="<?php echo esc_url( OLKIL_URI . 'assets/olkil/img/logo-favicon.png' ); ?>" width="32" height="32" alt="" decoding="async" />
 			<span>OLKIL</span>
 		</a>
 

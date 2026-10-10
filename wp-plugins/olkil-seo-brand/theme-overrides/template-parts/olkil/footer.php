@@ -14,7 +14,7 @@ $year = gmdate( 'Y' );
 		<div class="olkil-footer__grid">
 			<div class="olkil-footer__brand">
 				<a class="olkil-logo" href="<?php echo esc_url( home_url( '/' ) ); ?>">
-					<img class="olkil-logo__img" src="<?php echo esc_url( OLKIL_URI . 'assets/olkil/img/logo-mark.png' ); ?>" width="32" height="32" alt="" decoding="async" />
+					<img class="olkil-logo__img" src="<?php echo esc_url( OLKIL_URI . 'assets/olkil/img/logo-favicon.png' ); ?>" width="32" height="32" alt="" decoding="async" />
 					<span>OLKIL</span>
 				</a>
 				<p><?php esc_html_e( 'Free AI-powered IDE for ambitious builders. Windows, macOS & Linux.', 'astra' ); ?></p>
@@ -37,6 +37,7 @@ $year = gmdate( 'Y' );
 				<ul>
 					<li><a href="<?php echo esc_url( olkil_page_url( 'privacy-policy' ) ); ?>"><?php esc_html_e( 'Privacy Policy', 'astra' ); ?></a></li>
 					<li><a href="<?php echo esc_url( olkil_page_url( 'terms-and-conditions' ) ); ?>"><?php esc_html_e( 'Terms & Conditions', 'astra' ); ?></a></li>
+					<li><a href="<?php echo esc_url( home_url( '/cookie-policy/' ) ); ?>"><?php esc_html_e( 'Cookie Policy', 'olkil' ); ?></a></li>
 					<li><a href="<?php echo esc_url( olkil_page_url( 'refund-policy' ) ); ?>"><?php esc_html_e( 'Return & Refund', 'astra' ); ?></a></li>
 					<li><a href="<?php echo esc_url( home_url( '/cancellation-policy/' ) ); ?>"><?php esc_html_e( 'Cancellation', 'astra' ); ?></a></li>
 					<li><a href="<?php echo esc_url( olkil_page_url( 'contact' ) ); ?>"><?php esc_html_e( 'Contact Us', 'astra' ); ?></a></li>
@@ -77,7 +78,15 @@ $year = gmdate( 'Y' );
 				<a href="<?php echo esc_url( home_url( '/cancellation-policy/' ) ); ?>">Cancel</a>
 				<span aria-hidden="true">·</span>
 				<a href="<?php echo esc_url( olkil_page_url( 'contact' ) ); ?>">Contact</a>
+				<span aria-hidden="true">·</span>
+				<a href="<?php echo esc_url( home_url( '/cookie-policy/' ) ); ?>" data-olkil-cookies>Cookies</a>
 			</span>
 		</div>
 	</div>
 </footer>
+<script>window.olkilCookieCfg={cookie:<?php echo wp_json_encode( home_url( '/cookie-policy/' ) ); ?>,privacy:<?php echo wp_json_encode( olkil_page_url( 'privacy-policy' ) ); ?>,terms:<?php echo wp_json_encode( olkil_page_url( 'terms-and-conditions' ) ); ?>};
+(function(){var b=<?php echo wp_json_encode( OLKIL_URI . 'assets/olkil/cookie/' ); ?>,v=<?php echo wp_json_encode( OLKIL_VERSION ); ?>,s=0;
+function load(m){if(window.olkilCookies){window.olkilCookies.open(m);return}window.olkilCookiesOpen=m;if(s)return;s=1;var l=document.createElement('link');l.rel='stylesheet';l.href=b+'cookie-consent.css?ver='+v;l.onload=l.onerror=function(){var j=document.createElement('script');j.src=b+'cookie-consent.js?ver='+v;j.async=true;document.body.appendChild(j)};document.head.appendChild(l)}
+document.addEventListener('click',function(e){var t=e.target.closest&&e.target.closest('[data-olkil-cookies]');if(t){e.preventDefault();load('settings')}});
+var c;try{c=localStorage.getItem('olkil-cookie-consent')}catch(e){c='1'}
+if(!c){var go=function(){'requestIdleCallback'in window?requestIdleCallback(function(){load('banner')},{timeout:3000}):setTimeout(function(){load('banner')},1500)};document.readyState==='complete'?go():window.addEventListener('load',go)}})();</script>
