@@ -1104,7 +1104,7 @@ export class OlkilAiNodeService implements IOlkilAiNodeService {
       return Boolean(this.getKey('deepseek'));
     }
     if (provider === 'openrouter') {
-      return Boolean(this.getKey('openrouter'));
+      return Boolean(this.getKey('openrouter') || (await ensureOpenRouterBroker()));
     }
     // Any usable backend
     if (await this.isOllamaReachable()) {

@@ -1180,6 +1180,7 @@ function render(opts) {
     // Visible chat stays clean — Ask instructions / image placeholders never enter the bubble
     const displayText = text;
     const imagePreviews = images.map((img) => ({ name: img.name, dataUrl: img.dataUrl }));
+    const imagePayload = images.map((img) => ({ name: img.name, mime: img.mime, dataUrl: img.dataUrl }));
     if (state.virtualOffice) {
       state.busy = false;
       state.phase = 'Assigning to a teammate…';
@@ -1190,6 +1191,8 @@ function render(opts) {
         mode: 'agent',
         effort: state.effortLevel,
         skipUserEcho: false,
+        hasImages: images.length > 0,
+        images: imagePayload,
       });
       return;
     }
@@ -1208,6 +1211,7 @@ function render(opts) {
       effort: state.effortLevel,
       skipUserEcho: true,
       hasImages: images.length > 0,
+      images: imagePayload,
     });
   };
   composer.querySelector('#send').addEventListener('click', send);

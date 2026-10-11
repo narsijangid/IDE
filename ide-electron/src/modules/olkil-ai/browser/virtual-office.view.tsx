@@ -9,7 +9,7 @@ const OFFICE_DESIGN_W = 900;
 const OFFICE_DESIGN_H = 540;
 const OFFICE_FIT_PAD = 16;
 /** Keep a little margin so the office never fills the whole tab. */
-const OFFICE_MAX_SCALE = 0.65;
+const OFFICE_MAX_SCALE = 0.92;
 
 /**
  * Loads VertualOffice/vertualoffice.html in an iframe.

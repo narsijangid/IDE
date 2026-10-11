@@ -1,5 +1,5 @@
 import React from 'react';
-import logoUrl from '../../../browser/assets/olkil-logo.png';
+import logoUrl from '../../../browser/assets/olkil-icon.png';
 import styles from './olkil-header.module.less';
 
 /** Renders inside menubar, immediately before the OLKIL app menu label. */

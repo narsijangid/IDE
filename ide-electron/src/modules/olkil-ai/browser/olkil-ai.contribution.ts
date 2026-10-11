@@ -13,7 +13,6 @@ import {
 } from '@opensumi/ide-core-browser';
 import { MenuContribution, IMenuRegistry, MenuId } from '@opensumi/ide-core-browser/lib/menu/next';
 import { IOlkilChatService, IOlkilChatUiService } from '../common';
-import { IOlkilSettingsService } from '../../olkil-auth/common/settings';
 import { OlkilAiOverlay } from './overlay';
 
 export const OLKIL_AI_TOGGLE_COMMAND = {
@@ -34,9 +33,9 @@ export const OLKIL_AI_INLINE_EDIT_COMMAND = {
 const OVERLAY_ROOT_ID = 'olkil-ai-overlay-root';
 
 /**
- * The agent lives in a floating overlay rather than a workbench slot: that keeps
- * the editor at full width, lets the panel fold itself into a corner pill when a
- * file is opened, and gives us full control over the transition.
+ * The agent is rendered outside the OpenSumi slot system so we keep full control
+ * over its transition, but it docks into the workbench's right edge and reserves
+ * that column (see `overlay.tsx`), so it reads as part of the layout.
  */
 @Domain(ClientAppContribution, CommandContribution, KeybindingContribution, MenuContribution)
 export class OlkilAiContribution
@@ -50,22 +49,12 @@ export class OlkilAiContribution
 
   @Autowired(IOlkilChatService)
   private chat!: IOlkilChatService;
-
-  @Autowired(IOlkilSettingsService)
-  private settings!: IOlkilSettingsService;
-
   private host?: HTMLDivElement;
   private reactRoot?: Root;
 
   onDidStart() {
     this.ui.init();
     this.mountOverlay();
-    if (this.settings.get().openAgentOnStart) {
-      this.ui.open();
-    }
-    if (this.settings.get().pinAgentPanel) {
-      this.ui.setPinned(true);
-    }
   }
 
   onStop() {

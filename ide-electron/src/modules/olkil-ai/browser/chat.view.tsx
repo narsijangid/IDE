@@ -22,7 +22,7 @@ import { MarkdownMessage } from './markdown';
 import { LiveStatusBar, shouldShowLiveStatusBar, useLiveStatusLabel, useWorkspaceRoot } from './live-status-rotator';
 import { CheckIcon, CopyIcon, SendIcon, StopIcon } from './icons';
 import styles from './chat.view.module.less';
-import logoUrl from './olkil-logo.png';
+import logoUrl from '../../../browser/assets/olkil-icon.png';
 import { OLKIL_AUTH_OPEN_ACCOUNT, rememberOlkilSettingsSection } from '../../olkil-auth/browser/commands';
 import { isAutoModelId } from '../common/auto-router';
 import { isMeteredCloudProvider } from '../common/models';

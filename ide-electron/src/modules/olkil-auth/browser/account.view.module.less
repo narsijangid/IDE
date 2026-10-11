@@ -466,6 +466,9 @@
 
 .email {
   margin-top: 2px;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
   font-size: 12px;
   color: var(--descriptionForeground, rgba(255, 255, 255, 0.55));
 }
@@ -754,16 +757,102 @@
   margin-bottom: 0;
 }
 
-@media (max-width: 760px) {
+.navLabel {
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+/* Narrow pane (docked agent panel open, split editors). */
+.shellCompact {
   .nav {
     width: 188px;
   }
 
   .main {
-    padding: 20px 16px 40px;
+    padding: 20px 18px 40px;
+  }
+
+  .row {
+    flex-wrap: wrap;
+    gap: 10px 16px;
   }
 
   .formGrid {
     grid-template-columns: 1fr;
+  }
+
+  .meta,
+  .kv {
+    grid-template-columns: minmax(84px, max-content) minmax(0, 1fr);
+    gap: 8px 12px;
+  }
+
+  .metaValue {
+    word-break: normal;
+    overflow-wrap: anywhere;
+  }
+
+  .select {
+    min-width: 0;
+    max-width: 100%;
+  }
+}
+
+/* Very narrow pane: the nav collapses to an icon rail. */
+.shellRail {
+  .nav {
+    width: 52px;
+  }
+
+  .navHead,
+  .groupLabel,
+  .navLabel,
+  .navEmpty {
+    display: none;
+  }
+
+  .navList {
+    padding: 8px 6px 18px;
+  }
+
+  .group {
+    margin-top: 8px;
+    padding-top: 8px;
+    border-top: 1px solid var(--sideBar-border, rgba(128, 128, 128, 0.18));
+  }
+
+  .group:first-child {
+    margin-top: 0;
+    padding-top: 0;
+    border-top: none;
+  }
+
+  .navBtn {
+    justify-content: center;
+    padding: 8px 0;
+  }
+
+  .main {
+    padding: 18px 14px 36px;
+  }
+
+  .identityRow {
+    flex-wrap: wrap;
+  }
+
+  .identity {
+    flex-basis: 100%;
+  }
+
+  .meta,
+  .kv {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 2px;
+  }
+
+  .metaValue {
+    margin-bottom: 8px;
   }
 }

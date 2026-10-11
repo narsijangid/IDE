@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { CommandService, useInjectable } from '@opensumi/ide-core-browser';
 import { URI } from '@opensumi/ide-core-common';
 import { ReactEditorComponent } from '@opensumi/ide-editor/lib/browser';
@@ -7,11 +7,10 @@ import {
   DiscoveredMcpServer,
   IOlkilAiNodeService,
   IOlkilChatService,
-  IOlkilChatUiService,
   OlkilAiNodeServicePath,
 } from 'modules/olkil-ai/common';
 import { AI_MODELS, isMeteredCloudProvider, isRetiredOlkilModel } from 'modules/olkil-ai/common/models';
-import logoUrl from '../../../browser/assets/olkil-logo.png';
+import logoUrl from '../../../browser/assets/olkil-icon.png';
 import { IOlkilAuthService, OlkilAuthUser } from '../common';
 import {
   ChatModeSetting,
@@ -31,7 +30,7 @@ import {
 import { OLKIL_AUTH_OPEN_ACCOUNT, OLKIL_AUTH_SIGN_IN, OLKIL_AUTH_SIGN_OUT, OLKIL_SETTINGS_SECTION_EVENT, rememberOlkilSettingsSection } from './commands';
 import styles from './account.view.module.less';
 
-type OlkilSubscription = {
+export type OlkilSubscription = {
   plan: string;
   plan_name: string;
   tokens_total_label?: string;
@@ -82,7 +81,7 @@ function isUsableSubscription(value: unknown): value is OlkilSubscription {
   return Boolean(value && typeof value === 'object' && typeof (value as OlkilSubscription).plan_name === 'string' && (value as OlkilSubscription).plan_name);
 }
 
-function readCachedSubscription(email: string | null | undefined): OlkilSubscription | null {
+export function readCachedSubscription(email: string | null | undefined): OlkilSubscription | null {
   if (!email) {
     return null;
   }
@@ -144,7 +143,7 @@ async function fetchSubscription(email: string): Promise<OlkilSubscription | nul
   }
 }
 
-async function loadSubscription(email: string | null | undefined): Promise<OlkilSubscription | null> {
+export async function loadSubscription(email: string | null | undefined): Promise<OlkilSubscription | null> {
   if (!email) {
     return null;
   }
@@ -335,8 +334,32 @@ export const OlkilAccountView: ReactEditorComponent<null> = () => {
 
   const patch = (partial: Partial<OlkilSettings>) => settingsApi.patch(partial);
 
+  // The docked agent panel narrows the editor without changing the viewport, so
+  // the layout keys off the pane's own width instead of media queries.
+  const shellRef = useRef<HTMLDivElement>(null);
+  const [shellWidth, setShellWidth] = useState(0);
+  useEffect(() => {
+    const el = shellRef.current;
+    if (!el) {
+      return;
+    }
+    const observer = new ResizeObserver(([entry]) => setShellWidth(Math.round(entry.contentRect.width)));
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, []);
+  const rail = shellWidth > 0 && shellWidth < 600;
+  const compact = shellWidth > 0 && shellWidth < 860;
+  useEffect(() => {
+    if (rail) {
+      setQuery('');
+    }
+  }, [rail]);
+
   return (
-    <div className={styles.shell}>
+    <div
+      ref={shellRef}
+      className={`${styles.shell} ${compact ? styles.shellCompact : ''} ${rail ? styles.shellRail : ''}`}
+    >
       <aside className={styles.nav}>
         <div className={styles.navHead}>
           <p className={styles.navKicker}>OLKIL</p>
@@ -360,9 +383,10 @@ export const OlkilAccountView: ReactEditorComponent<null> = () => {
                     type="button"
                     className={`${styles.navBtn} ${section === item.id ? styles.navBtnActive : ''}`}
                     onClick={() => go(item.id)}
+                    title={item.label}
                   >
                     <NavGlyph id={item.id} />
-                    {item.label}
+                    <span className={styles.navLabel}>{item.label}</span>
                   </button>
                 ))}
               </div>
@@ -398,7 +422,6 @@ function GeneralPane({
   patch: (partial: Partial<OlkilSettings>) => void;
 }) {
   const chat = useInjectable<IOlkilChatService>(IOlkilChatService);
-  const ui = useInjectable<IOlkilChatUiService>(IOlkilChatUiService);
 
   const setMode = (mode: ChatModeSetting) => {
     patch({ defaultChatMode: mode });
@@ -420,11 +443,6 @@ function GeneralPane({
               { id: 'plan', label: 'Plan' },
               { id: 'ask', label: 'Ask' },
             ]}
-          />} />
-        <SettingRow title="Open agent on startup" desc="Show the chat panel when OLKIL launches." control={<Switch on={settings.openAgentOnStart} onChange={(openAgentOnStart) => patch({ openAgentOnStart })} />} />
-        <SettingRow title="Pin agent panel" desc="Keep chat open when you switch files, instead of folding it into the corner pill." control={<Switch
-            on={settings.pinAgentPanel}
-            onChange={(pinAgentPanel) => ui.setPinned(pinAgentPanel)}
           />} />
       </div>
     </div>

@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { useInjectable } from '@opensumi/ide-core-browser';
 import {
+  CHAT_PANEL_DEFAULT_WIDTH,
   CHAT_PANEL_MAX_WIDTH,
   CHAT_PANEL_MIN_WIDTH,
   ChatPanelState,
@@ -9,21 +10,49 @@ import {
 } from '../common';
 import { ExtensionChatHost } from './extension-chat-host';
 import { useLiveStatusLabel, useWorkspaceRoot } from './live-status-rotator';
-import {
-  AiSparkIcon,
-  CloseIcon,
-  CollapseIcon,
-  ExpandIcon,
-  HistoryIcon,
-  MinimizeIcon,
-  NewChatIcon,
-  PinIcon,
-} from './icons';
+import { CollapseIcon, ExpandIcon, HistoryIcon, MinimizeIcon, NewChatIcon } from './icons';
 import styles from './overlay.module.less';
-import logoUrl from './olkil-logo.png';
+import logoUrl from '../../../browser/assets/olkil-icon.png';
 
 /** Matches the panel transition duration in overlay.module.less. */
 const EXIT_MS = 320;
+/** Space the editor keeps beside the docked panel. */
+const MIN_EDITOR_SPACE = 420;
+/** Below this window width the panel floats over the editor instead of docking. */
+const DOCK_MIN_VIEWPORT = 900;
+/** Workbench reflows during a drag are throttled; the panel itself follows every frame. */
+const DRAG_REFLOW_MS = 90;
+
+function panelFit(width: number, viewport: number): { px: number; max: number; docked: boolean } {
+  const docked = viewport >= DOCK_MIN_VIEWPORT;
+  const max = docked
+    ? Math.max(CHAT_PANEL_MIN_WIDTH, Math.min(CHAT_PANEL_MAX_WIDTH, viewport - MIN_EDITOR_SPACE))
+    : Math.max(280, viewport - 40);
+  const min = Math.min(CHAT_PANEL_MIN_WIDTH, max);
+  return { px: Math.round(Math.min(max, Math.max(min, width))), max, docked };
+}
+
+function useViewportWidth(): number {
+  const [width, setWidth] = useState(window.innerWidth);
+  useEffect(() => {
+    let frame = 0;
+    const onResize = () => {
+      if (frame) {
+        return;
+      }
+      frame = window.requestAnimationFrame(() => {
+        frame = 0;
+        setWidth(window.innerWidth);
+      });
+    };
+    window.addEventListener('resize', onResize);
+    return () => {
+      window.removeEventListener('resize', onResize);
+      window.cancelAnimationFrame(frame);
+    };
+  }, []);
+  return width;
+}
 
 function cx(...names: Array<string | false | undefined>): string {
   return names.filter(Boolean).join(' ');
@@ -80,13 +109,26 @@ function useWorkbenchInset(ref: React.RefObject<HTMLDivElement>) {
   }, [ref]);
 }
 
+/** The workbench row holding the sidebar and editor (between title bar and status bar). */
+function workbenchRow(): HTMLElement | null {
+  return document.getElementById('main-horizontal')?.parentElement ?? null;
+}
+
+/** Shrinks the workbench row so the docked panel sits beside the editor, not over it. */
+function reserveColumn(px: number) {
+  const row = workbenchRow();
+  if (row) {
+    row.style.marginRight = px > 0 ? `${px}px` : '';
+  }
+}
+
 export const OlkilAiOverlay = () => {
   const ui = useInjectable<IOlkilChatUiService>(IOlkilChatUiService);
   const chat = useInjectable<IOlkilChatService>(IOlkilChatService);
 
   const [state, setState] = useState<ChatPanelState>(ui.state);
   const [expanded, setExpanded] = useState(ui.expanded);
-  const [pinned, setPinned] = useState(ui.pinned);
+  const [savedWidth, setSavedWidth] = useState(ui.width);
   const [busy, setBusy] = useState(chat.busy);
   const [liveStatus, setLiveStatus] = useState(chat.status);
   const [pendingCount, setPendingCount] = useState(chat.pendingChanges.length);
@@ -105,7 +147,7 @@ export const OlkilAiOverlay = () => {
     const d = ui.onDidChange(() => {
       setState(ui.state);
       setExpanded(ui.expanded);
-      setPinned(ui.pinned);
+      setSavedWidth(ui.width);
     });
     return () => d.dispose();
   }, [ui]);
@@ -159,15 +201,24 @@ export const OlkilAiOverlay = () => {
     return () => window.clearTimeout(timer);
   }, [state, open]);
 
-  const applyWidth = useCallback((px: number) => {
+  const viewport = useViewportWidth();
+  const fit = panelFit(savedWidth, viewport);
+
+  const setPanelWidth = useCallback((px: number) => {
     panelRef.current?.style.setProperty('--olkil-panel-width', `${px}px`);
   }, []);
 
   useEffect(() => {
     if (mounted) {
-      applyWidth(ui.width);
+      setPanelWidth(fit.px);
     }
-  }, [applyWidth, mounted, ui.width]);
+  }, [setPanelWidth, mounted, fit.px]);
+
+  useEffect(() => {
+    reserveColumn(open && fit.docked ? fit.px : 0);
+  }, [open, fit.docked, fit.px]);
+
+  useEffect(() => () => reserveColumn(0), []);
 
   const onResizeStart = useCallback(
     (event: React.PointerEvent<HTMLDivElement>) => {
@@ -176,42 +227,85 @@ export const OlkilAiOverlay = () => {
         return;
       }
       event.preventDefault();
+      const grip = event.currentTarget;
+      const pointerId = event.pointerId;
       const startX = event.clientX;
       const startWidth = panel.getBoundingClientRect().width;
-      const maxWidth = Math.min(CHAT_PANEL_MAX_WIDTH, window.innerWidth - 160);
+      const { max: maxWidth, docked } = panelFit(startWidth, window.innerWidth);
+      const minWidth = Math.min(CHAT_PANEL_MIN_WIDTH, maxWidth);
       let width = startWidth;
       let frame = 0;
+      let lastReflow = 0;
 
       panel.classList.add(styles.panelResizing);
+      document.body.classList.add(styles.bodyResizing);
 
       const onMove = (moveEvent: PointerEvent) => {
-        width = Math.min(maxWidth, Math.max(CHAT_PANEL_MIN_WIDTH, startWidth + (startX - moveEvent.clientX)));
+        width = Math.round(Math.min(maxWidth, Math.max(minWidth, startWidth + (startX - moveEvent.clientX))));
         if (frame) {
           return;
         }
-        // One style write per frame keeps the drag at display refresh rate.
-        frame = window.requestAnimationFrame(() => {
+        frame = window.requestAnimationFrame((now) => {
           frame = 0;
-          applyWidth(width);
+          setPanelWidth(width);
+          // Reflowing the editor is the expensive part, so it trails the pointer slightly.
+          if (docked && now - lastReflow >= DRAG_REFLOW_MS) {
+            lastReflow = now;
+            reserveColumn(width);
+          }
         });
       };
 
+      let done = false;
       const onUp = () => {
+        if (done) {
+          return;
+        }
+        done = true;
         window.removeEventListener('pointermove', onMove);
         window.removeEventListener('pointerup', onUp);
+        window.removeEventListener('pointercancel', onUp);
+        window.removeEventListener('blur', onUp);
+        grip.removeEventListener('lostpointercapture', onUp);
+        if (grip.hasPointerCapture?.(pointerId)) {
+          grip.releasePointerCapture(pointerId);
+        }
         if (frame) {
           window.cancelAnimationFrame(frame);
           frame = 0;
         }
         panel.classList.remove(styles.panelResizing);
+        document.body.classList.remove(styles.bodyResizing);
+        setPanelWidth(width);
+        if (docked) {
+          reserveColumn(width);
+        }
         ui.setWidth(width);
       };
 
+      // Capture keeps move/up events flowing when the cursor crosses the chat iframe.
+      try {
+        grip.setPointerCapture(pointerId);
+      } catch {
+        // Pointer already released; the window listeners still end the drag.
+      }
       window.addEventListener('pointermove', onMove);
       window.addEventListener('pointerup', onUp);
+      window.addEventListener('pointercancel', onUp);
+      window.addEventListener('blur', onUp);
+      grip.addEventListener('lostpointercapture', onUp);
     },
-    [applyWidth, ui],
+    [setPanelWidth, ui],
   );
+
+  const onResizeReset = useCallback(() => {
+    ui.setWidth(CHAT_PANEL_DEFAULT_WIDTH);
+    const { px, docked } = panelFit(CHAT_PANEL_DEFAULT_WIDTH, window.innerWidth);
+    setPanelWidth(px);
+    if (docked) {
+      reserveColumn(px);
+    }
+  }, [setPanelWidth, ui]);
 
   const onPanelKeyDown = useCallback(
     (event: React.KeyboardEvent<HTMLElement>) => {
@@ -258,29 +352,16 @@ export const OlkilAiOverlay = () => {
     <div className={styles.host} ref={hostRef}>
       <button
         type="button"
-        className={cx(styles.chip, styles.launcher, state !== 'closed' && styles.chipHidden)}
-        onClick={() => ui.open()}
-        title="OLKIL Agent — Ctrl+L"
-        aria-label="Open OLKIL Agent"
-        tabIndex={state === 'closed' ? 0 : -1}
-      >
-        <AiSparkIcon size={18} className={styles.chipGlyph} />
-        {busy || pendingCount > 0 ? (
-          <span className={cx(styles.chipDot, chromeBusy && styles.chipDotBusy)} />
-        ) : null}
-      </button>
-
-      <button
-        type="button"
-        className={cx(styles.chip, styles.pill, state !== 'minimized' && styles.chipHidden)}
+        className={cx(styles.edgeTab, open && styles.edgeTabHidden)}
         onClick={() => ui.restore()}
-        title="Restore OLKIL Agent — Ctrl+L"
-        aria-label="Restore OLKIL Agent"
-        tabIndex={state === 'minimized' ? 0 : -1}
+        title={`OLKIL Agent · ${statusLabel} — Ctrl+L`}
+        aria-label="Open OLKIL Agent"
+        tabIndex={open ? -1 : 0}
       >
-        <AiSparkIcon size={15} className={styles.chipGlyph} />
-        <span className={styles.pillLabel}>{statusLabel}</span>
-        <span className={cx(styles.chipDot, styles.pillDot, chromeBusy && styles.chipDotBusy)} />
+        <img src={logoUrl} alt="" width={20} height={20} draggable={false} />
+        {busy || pendingCount > 0 ? (
+          <span className={cx(styles.edgeDot, chromeBusy && styles.edgeDotBusy)} />
+        ) : null}
       </button>
 
       {mounted ? (
@@ -288,6 +369,7 @@ export const OlkilAiOverlay = () => {
           ref={panelRef as React.RefObject<HTMLElement>}
           className={cx(
             styles.panel,
+            !fit.docked && styles.panelFloating,
             expanded && styles.panelExpanded,
             !open && styles.panelHidden,
             !open && offscreen && styles.panelOffscreen,
@@ -299,9 +381,11 @@ export const OlkilAiOverlay = () => {
           <div
             className={styles.resizeGrip}
             onPointerDown={onResizeStart}
+            onDoubleClick={onResizeReset}
             role="separator"
             aria-orientation="vertical"
             aria-label="Resize agent panel"
+            title="Drag to resize · double-click to reset"
           />
 
           <header className={styles.titleBar}>
@@ -374,16 +458,6 @@ export const OlkilAiOverlay = () => {
               </button>
               <button
                 type="button"
-                className={cx(styles.iconBtn, pinned && styles.iconBtnOn)}
-                onClick={() => ui.setPinned(!pinned)}
-                title={pinned ? 'Unpin — hide when a file opens' : 'Pin — stay open when a file opens'}
-                aria-label="Pin agent panel"
-                aria-pressed={pinned}
-              >
-                <PinIcon size={15} />
-              </button>
-              <button
-                type="button"
                 className={styles.iconBtn}
                 onClick={() => ui.setExpanded(!expanded)}
                 title={expanded ? 'Restore panel width' : 'Full screen'}
@@ -395,19 +469,10 @@ export const OlkilAiOverlay = () => {
                 type="button"
                 className={styles.iconBtn}
                 onClick={() => ui.minimize()}
-                title="Minimize"
+                title="Minimize to the side — Ctrl+L"
                 aria-label="Minimize agent panel"
               >
                 <MinimizeIcon size={15} />
-              </button>
-              <button
-                type="button"
-                className={cx(styles.iconBtn, styles.iconBtnDanger)}
-                onClick={() => ui.close()}
-                title="Close"
-                aria-label="Close agent panel"
-              >
-                <CloseIcon size={15} />
               </button>
             </div>
           </header>

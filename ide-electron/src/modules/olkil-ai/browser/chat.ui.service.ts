@@ -1,12 +1,10 @@
 import { Autowired, Injectable } from '@opensumi/di';
 import { Disposable, Emitter, Event } from '@opensumi/ide-core-common';
-import { WorkbenchEditorService } from '@opensumi/ide-editor';
 import {
   CHAT_PANEL_DEFAULT_WIDTH,
   CHAT_PANEL_MAX_WIDTH,
   CHAT_PANEL_MIN_WIDTH,
   ChatPanelState,
-  IOlkilChatService,
   IOlkilChatUiService,
 } from '../common';
 import { IOlkilSettingsService } from '../../olkil-auth/common/settings';
@@ -17,6 +15,7 @@ interface PersistedLayout {
   width?: number;
   expanded?: boolean;
   pinned?: boolean;
+  collapsed?: boolean;
 }
 
 function clampWidth(width: number): number {
@@ -30,27 +29,24 @@ function clampWidth(width: number): number {
  * Owns where/how big the agent panel is. Split from `OlkilChatService` so that
  * chrome changes (open, minimize, resize) never re-render the message list, and
  * so a streaming conversation never re-lays out the panel.
+ *
+ * The panel is docked into the workbench's right edge. Every launch starts with
+ * it collapsed into the edge tab so the editor opens at full width.
  */
 @Injectable()
 export class OlkilChatUiService extends Disposable implements IOlkilChatUiService {
-  @Autowired(WorkbenchEditorService)
-  private editorService!: WorkbenchEditorService;
-
-  @Autowired(IOlkilChatService)
-  private chat!: IOlkilChatService;
-
   @Autowired(IOlkilSettingsService)
   private settings!: IOlkilSettingsService;
 
   private readonly _onDidChange = new Emitter<void>();
   readonly onDidChange: Event<void> = this._onDidChange.event;
 
-  /** Always starts closed: the first paint stays cheap. */
   state: ChatPanelState = 'closed';
   expanded = false;
   pinned = false;
   width = CHAT_PANEL_DEFAULT_WIDTH;
 
+  private collapsed = false;
   private initialized = false;
 
   init() {
@@ -59,38 +55,23 @@ export class OlkilChatUiService extends Disposable implements IOlkilChatUiServic
     }
     this.initialized = true;
     this.readLayout();
-    this.addDispose(
-      this.editorService.onActiveResourceChange(() => {
-        // Reading code wins over chatting: fold the panel into its pill so the
-        // editor is never covered. Pinning (or a running turn) opts out.
-        // Virtual Office tab is the assignment board — keep chat open for prompts.
-        const uri = this.editorService.currentResource?.uri;
-        if (uri?.scheme === 'olkil-voffice') {
-          return;
-        }
-        if (this.state === 'open' && !this.pinned && !this.chat.busy) {
-          this.minimize();
-        }
-      }),
-    );
+    this.setState('minimized');
   }
 
   open() {
     this.setState('open');
   }
 
+  /** There is no hidden state: closing docks the panel into the edge tab. */
   close() {
-    this.setState('closed');
+    this.setState('minimized');
   }
 
   toggle() {
-    this.setState(this.state === 'open' ? 'closed' : 'open');
+    this.setState(this.state === 'open' ? 'minimized' : 'open');
   }
 
   minimize() {
-    if (this.state === 'closed') {
-      return;
-    }
     this.setState('minimized');
   }
 
@@ -132,6 +113,11 @@ export class OlkilChatUiService extends Disposable implements IOlkilChatUiServic
       return;
     }
     this.state = next;
+    const collapsed = next !== 'open';
+    if (collapsed !== this.collapsed) {
+      this.collapsed = collapsed;
+      this.writeLayout();
+    }
     this.fire();
   }
 
@@ -147,11 +133,8 @@ export class OlkilChatUiService extends Disposable implements IOlkilChatUiServic
       }
       const saved = JSON.parse(raw) as PersistedLayout;
       this.width = clampWidth(saved.width ?? CHAT_PANEL_DEFAULT_WIDTH);
-      this.expanded = Boolean(saved.expanded);
       this.pinned = Boolean(saved.pinned);
-      if (this.settings.get().pinAgentPanel) {
-        this.pinned = true;
-      }
+      this.collapsed = Boolean(saved.collapsed);
     } catch {
       // Corrupt/blocked storage just means defaults.
     }
@@ -163,6 +146,7 @@ export class OlkilChatUiService extends Disposable implements IOlkilChatUiServic
         width: this.width,
         expanded: this.expanded,
         pinned: this.pinned,
+        collapsed: this.collapsed,
       };
       window.localStorage.setItem(STORAGE_KEY, JSON.stringify(payload));
     } catch {

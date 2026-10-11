@@ -15,7 +15,7 @@ import { localize } from '@opensumi/ide-core-common';
 import { IKeymapService } from '@opensumi/ide-keymaps/lib/common/keymaps';
 
 import styles from './editor-empty-component.module.less';
-import logoUrl from '../../../browser/assets/olkil-logo.png';
+import logoUrl from '../../../browser/assets/olkil-icon.png';
 
 /**
  * 单行快捷键信息

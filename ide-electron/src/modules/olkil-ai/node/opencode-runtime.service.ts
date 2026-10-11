@@ -99,6 +99,74 @@ function clipSnapshot(text: string | null): string | null {
   return text.slice(0, MAX_FILE_SNAPSHOT_CHARS);
 }
 
+function samePath(a: string, b: string): boolean {
+  const left = path.normalize(a);
+  const right = path.normalize(b);
+  return process.platform === 'win32' ? left.toLowerCase() === right.toLowerCase() : left === right;
+}
+
+/** What a finished edit/write tool reports about the file it changed. */
+type ToolChangeHint = { existed?: boolean; patch?: string };
+
+function toolChangeHint(meta: Record<string, any>): ToolChangeHint {
+  const filediff = meta.filediff && typeof meta.filediff === 'object' ? meta.filediff : {};
+  const patch = typeof filediff.patch === 'string' ? filediff.patch : typeof meta.diff === 'string' ? meta.diff : '';
+  return {
+    existed: typeof meta.exists === 'boolean' ? meta.exists : undefined,
+    patch: patch || undefined,
+  };
+}
+
+/**
+ * Rebuilds the pre-edit text by undoing a single-file unified patch against the
+ * post-edit text. Returns null when the patch does not line up with `after`.
+ */
+function reverseUnifiedPatch(after: string, patch: string): string | null {
+  const eol = after.includes('\r\n') ? '\r\n' : '\n';
+  const lines = after.split(/\r?\n/);
+  const hunks: Array<{ start: number; count: number; oldLines: string[]; newLines: string[] }> = [];
+  let hunk: (typeof hunks)[number] | null = null;
+  for (const raw of patch.split(/\r?\n/)) {
+    const head = /^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@/.exec(raw);
+    if (head) {
+      hunk = { start: Number(head[1]), count: head[2] === undefined ? 1 : Number(head[2]), oldLines: [], newLines: [] };
+      hunks.push(hunk);
+      continue;
+    }
+    if (!hunk) {
+      continue;
+    }
+    const tag = raw[0];
+    const text = raw.slice(1);
+    if (tag === ' ') {
+      hunk.oldLines.push(text);
+      hunk.newLines.push(text);
+    } else if (tag === '-') {
+      hunk.oldLines.push(text);
+    } else if (tag === '+') {
+      hunk.newLines.push(text);
+    }
+  }
+  if (!hunks.length) {
+    return null;
+  }
+  for (let i = hunks.length - 1; i >= 0; i--) {
+    const { start, count, oldLines, newLines } = hunks[i];
+    // A zero-length range starts *after* line `start`.
+    const from = count === 0 ? start : start - 1;
+    if (newLines.length !== count || from < 0 || from + count > lines.length) {
+      return null;
+    }
+    for (let k = 0; k < count; k++) {
+      if (lines[from + k] !== newLines[k]) {
+        return null;
+      }
+    }
+    lines.splice(from, count, ...oldLines);
+  }
+  return lines.join(eol);
+}
+
 const DEFAULT_DEEPSEEK_BASE = 'https://api.deepseek.com';
 const DEFAULT_OLLAMA_BASE = 'http://127.0.0.1:11434';
 
@@ -857,13 +925,16 @@ export class OlkilOpencodeRuntimeHost {
       think.done = true;
       think.label = 'Thought';
     }
-    if (filePath && /edit|write|patch|apply/i.test(name)) {
+    if (filePath) {
       const abs = resolveWorkspacePath(live.directory, filePath);
-      if (status === 'pending' || status === 'running') {
+      const mutating = /edit|write|patch|apply/i.test(name);
+      // Reads never change the file, so they give a reliable baseline before a later
+      // overwrite. For edits, the running event can arrive after the write landed.
+      if (!mutating || status === 'pending' || status === 'running') {
         this.snapshotBefore(live, abs);
       }
-      if (status === 'completed') {
-        this.recordDiskChange(live, abs);
+      if (mutating && status === 'completed') {
+        this.recordDiskChange(live, abs, toolChangeHint(meta));
         this.queueDiffSync(live);
       }
     }
@@ -886,7 +957,7 @@ export class OlkilOpencodeRuntimeHost {
     }
   }
 
-  private recordDiskChange(live: LiveRun, abs: string): void {
+  private recordDiskChange(live: LiveRun, abs: string, hint?: ToolChangeHint): void {
     if (!isInsideWorkspace(live.directory, abs)) {
       return;
     }
@@ -902,7 +973,15 @@ export class OlkilOpencodeRuntimeHost {
     } catch {
       after = null;
     }
-    const before = live.fileBefore.has(abs) ? live.fileBefore.get(abs) ?? null : null;
+    let before = live.fileBefore.has(abs) ? live.fileBefore.get(abs) ?? null : null;
+    if (hint && after != null && (!live.fileBefore.has(abs) || before === after)) {
+      if (hint.existed === false) {
+        before = null;
+      } else if (hint.patch) {
+        before = reverseUnifiedPatch(after, hint.patch) ?? before;
+      }
+      live.fileBefore.set(abs, before);
+    }
     const kind: FileChangeKind =
       before == null ? (after == null ? 'edit' : 'create') : after == null ? 'delete' : 'edit';
     this.upsertFileChange(live.state, {
@@ -939,11 +1018,7 @@ export class OlkilOpencodeRuntimeHost {
     if (!state.fileChanges) {
       state.fileChanges = [];
     }
-    const existing = state.fileChanges.find(
-      (c) =>
-        path.normalize(c.path) === path.normalize(change.path) ||
-        path.basename(c.path) === path.basename(change.path),
-    );
+    const existing = state.fileChanges.find((c) => samePath(c.path, change.path));
     if (existing) {
       if (change.beforeContent != null) {
         existing.beforeContent = change.beforeContent;

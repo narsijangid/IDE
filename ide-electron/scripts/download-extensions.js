@@ -212,6 +212,7 @@ const downloadVscodeExtensions = async () => {
 
   // 限制并发 promise 数
   await parallelRunPromise(promises, 3);
+  require('./brand-extensions').brandExtensions(targetDir);
   log('安装完毕');
 };
 

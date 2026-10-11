@@ -317,7 +317,7 @@ export class OlkilChatService extends Disposable implements IOlkilChatService {
         if (!isCustomProvider(option.provider)) {
           const ok = await this.aiNode.hasApiKey(option.provider);
           if (!ok) {
-            this.pushUi('status', 'Cloud models are not configured in this OLKIL build.');
+            this.pushUi('status', 'Could not connect to OLKIL cloud models. Sign in and check your internet connection.');
           }
         }
       }
@@ -2853,7 +2853,12 @@ Read the highest-scoring evidence in trail order. For a bug, trace UI → handle
         }
       }
       for (const fc of st.fileChanges || []) {
-        const fp = `${(fc.afterContent || '').length}:${(fc.afterContent || '').slice(0, 64)}`;
+        const fp = [
+          fc.kind,
+          fc.beforeContent == null ? '-' : fc.beforeContent.length,
+          (fc.afterContent || '').length,
+          (fc.afterContent || '').slice(0, 64),
+        ].join(':');
         if (fileChangeFingerprints.get(fc.path) === fp) {
           continue;
         }
@@ -5530,10 +5535,19 @@ Read the highest-scoring evidence in trail order. For a bug, trace UI → handle
       const msg = this.messages[existingIdx];
       const prev = msg.fileChange!;
       const snap = this.snapshots.get(prev.id);
+      // A zero-delta edit card means its baseline was captured after the write;
+      // a later report for the same file carries the real baseline.
+      const staleBaseline =
+        prev.kind === 'edit' &&
+        snap?.kind !== 'create' &&
+        prev.additions + prev.deletions === 0 &&
+        (opts.kind === 'create' || (opts.beforeContent != null && opts.beforeContent !== snap?.beforeContent));
+      const createdNow = prev.kind === 'create' || snap?.kind === 'create' || (staleBaseline && opts.kind === 'create');
       // Always diff against the FIRST version so one card shows the full delta.
       // For created files, baseline stays empty so revert can delete the file.
-      const originalBefore =
-        prev.kind === 'create' || snap?.kind === 'create'
+      const originalBefore = staleBaseline
+        ? opts.beforeContent ?? ''
+        : createdNow
           ? snap?.beforeContent ?? ''
           : snap?.beforeContent ?? opts.beforeContent ?? '';
       const after = opts.afterContent ?? '';
@@ -5558,7 +5572,7 @@ Read the highest-scoring evidence in trail order. For a bug, trace UI → handle
         hunks,
         editCount: (prev.editCount || 1) + 1,
         // keep 'create' if the file was newly created in this turn
-        kind: prev.kind === 'create' ? 'create' : opts.kind,
+        kind: createdNow ? 'create' : opts.kind,
       };
 
       msg.fileChange = updated;
@@ -5567,7 +5581,7 @@ Read the highest-scoring evidence in trail order. For a bug, trace UI → handle
         kind: updated.kind,
         path: opts.path,
         newPath: opts.newPath,
-        beforeContent: originalBefore,
+        beforeContent: staleBaseline && createdNow ? null : originalBefore,
         afterContent: after,
       });
 

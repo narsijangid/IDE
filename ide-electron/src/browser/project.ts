@@ -13,6 +13,8 @@ import { IWorkspaceService } from '@opensumi/ide-workspace/lib/common';
 import { IWindowService, WORKSPACE_COMMANDS } from '@opensumi/ide-core-browser';
 import { ITerminalController } from '@opensumi/ide-terminal-next';
 import { IMainLayoutService } from '@opensumi/ide-main-layout';
+import { EXPLORER_CONTAINER_ID } from '@opensumi/ide-core-browser/lib/common/container-id';
+import { ExplorerOpenedEditorViewId } from '@opensumi/ide-opened-editor/lib/common';
 import { BrowserEditorContribution, WorkbenchEditorService } from '@opensumi/ide-editor/lib/browser';
 import { IThemeService } from '@opensumi/ide-theme';
 
@@ -99,11 +101,44 @@ export class ProjectSwitcherContribution
   }
 
   onDidRestoreState() {
+    this.hideOpenedEditorsByDefault();
     if (electronEnv.metadata.launchToOpenFile) {
       this.editorService.open(URI.file(electronEnv.metadata.launchToOpenFile));
     }
     electronEnv.ipcRenderer.on('openFile', (event, file) => {
       this.editorService.open(URI.file(file));
     });
+  }
+
+  /** Applied once, so re-enabling "Opened Editors" from the Explorer menu sticks. */
+  private hideOpenedEditorsByDefault() {
+    const flag = 'olkil.explorer.openedEditorsDefaultHidden.v2';
+    try {
+      if (window.localStorage.getItem(flag)) {
+        return;
+      }
+    } catch {
+      return;
+    }
+    const accordion = this.mainLayoutService.getAccordionService(EXPLORER_CONTAINER_ID);
+    // The accordion restores its saved layout once it renders, which would undo an
+    // earlier toggle, so wait for that restore before hiding the view.
+    let tries = 0;
+    const attempt = () => {
+      const rendered = (accordion as unknown as { rendered?: boolean }).rendered;
+      if (!rendered) {
+        if (tries++ < 150) {
+          window.setTimeout(attempt, 200);
+        }
+        return;
+      }
+      try {
+        accordion.toggleViewVisibility(ExplorerOpenedEditorViewId, false);
+        window.localStorage.setItem(flag, '1');
+      } catch {
+        // Storage blocked: the view is hidden for this session only.
+      }
+    };
+    attempt();
   }
 }
