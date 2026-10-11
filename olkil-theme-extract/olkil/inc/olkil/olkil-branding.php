@@ -12,7 +12,7 @@ if ( ! defined( 'ABSPATH' ) ) {
 
 define( 'OLKIL_VERSION', '1.6.2' );
 /** Desktop installer version (matches ide-electron/product.json). */
-define( 'OLKIL_APP_VERSION', '1.3.29' ); // release 1.3.29
+define( 'OLKIL_APP_VERSION', '1.3.30' ); // release 1.3.30
 define( 'OLKIL_DIR', trailingslashit( get_template_directory() ) );
 define( 'OLKIL_URI', trailingslashit( get_template_directory_uri() ) );
 
