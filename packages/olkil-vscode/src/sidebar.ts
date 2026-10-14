@@ -6,9 +6,17 @@ import {
   clearSession,
   completeLogin,
   ensureSession,
+  refreshSession,
   type OlkilSession,
 } from './auth';
-import { OlkilEngine } from './engine';
+import { NO_WORKSPACE_DIR, OlkilEngine, type PermissionResponse } from './engine';
+import {
+  DEFAULT_COMMAND_ALLOWLIST,
+  decideCommand,
+  mergeAllowlist,
+  type CommandGate,
+  type TerminalAutoRun,
+} from './command-permission';
 import {
   fetchQuota,
   canUseVscodeAgent,
@@ -39,10 +47,11 @@ import {
 
 function workspaceFolder(): string {
   const folder = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
-  if (!folder) {
-    throw new Error('Open a project folder in VS Code first. OLKIL edits the workspace you have open.');
+  if (folder) {
+    return folder;
   }
-  return folder;
+  fs.mkdirSync(NO_WORKSPACE_DIR, { recursive: true });
+  return NO_WORKSPACE_DIR;
 }
 
 function unwrapEvent(raw: Record<string, unknown>): Record<string, unknown> {
@@ -330,6 +339,68 @@ function permissionId(event: Record<string, unknown>): string {
   return String(props.id || props.permissionID || props.permissionId || props.requestID || '');
 }
 
+/** A shell or web request the agent is blocked on until the user answers. */
+interface PendingPermission {
+  id: string;
+  sessionId: string;
+  kind: 'command' | 'web';
+  detail: string;
+  gate: CommandGate;
+  prefixes: string[];
+}
+
+interface OlkilPrefs {
+  defaultMode: 'agent' | 'ask';
+  autoRun: TerminalAutoRun;
+  allowlist: string[];
+  webFetch: boolean;
+  allowCommit: boolean;
+  allowPush: boolean;
+  allowPr: boolean;
+  keepChatHistory: boolean;
+}
+
+function readPrefs(): OlkilPrefs {
+  const c = vscode.workspace.getConfiguration('olkil');
+  const autoRun = c.get<string>('terminal.autoRun');
+  const allowlist = c.get<string[]>('terminal.allowlist');
+  return {
+    defaultMode: c.get<string>('chat.defaultMode') === 'ask' ? 'ask' : 'agent',
+    autoRun: autoRun === 'always' || autoRun === 'never' ? autoRun : 'allowlist',
+    allowlist: Array.isArray(allowlist) ? allowlist.map(String) : [...DEFAULT_COMMAND_ALLOWLIST],
+    webFetch: c.get<boolean>('permissions.webFetch') !== false,
+    allowCommit: c.get<boolean>('git.allowCommit') !== false,
+    allowPush: c.get<boolean>('git.allowPush') === true,
+    allowPr: c.get<boolean>('git.allowPullRequest') === true,
+    keepChatHistory: c.get<boolean>('privacy.keepChatHistory') !== false,
+  };
+}
+
+function permissionKind(props: Record<string, any>): string {
+  return String(props.permission || props.type || props.tool || props.name || '').toLowerCase();
+}
+
+function permissionDetail(props: Record<string, any>): string {
+  const meta = props.metadata && typeof props.metadata === 'object' ? props.metadata : {};
+  for (const value of [meta.command, props.command, meta.url, props.url]) {
+    if (typeof value === 'string' && value.trim()) return value.trim();
+  }
+  if (Array.isArray(props.patterns) && props.patterns.length) return props.patterns.map(String).join('\n');
+  if (typeof props.pattern === 'string') return props.pattern;
+  if (Array.isArray(props.pattern)) return props.pattern.map(String).join('\n');
+  return String(props.title || '');
+}
+
+/** What "Always allow" turns on for this request, or null when it must be asked every time. */
+function alwaysTarget(p: PendingPermission): { label: string; targets: string[] } | null {
+  if (p.kind === 'web') return { label: 'Always allow web fetch', targets: [] };
+  if (p.gate === 'destructive') return null;
+  if (p.gate === 'gitPush') return { label: 'Always allow', targets: ['git push'] };
+  if (p.gate === 'gitCommit') return { label: 'Always allow', targets: ['git commit'] };
+  if (p.gate === 'gitPr') return { label: 'Always allow', targets: ['pull requests'] };
+  return p.prefixes.length ? { label: 'Always allow', targets: p.prefixes } : null;
+}
+
 function pathLooksAbsolute(p: string): boolean {
   return /^[a-zA-Z]:[\\/]/.test(p) || p.startsWith('/') || p.startsWith('\\\\');
 }
@@ -468,12 +539,24 @@ export class OlkilSidebarProvider implements vscode.WebviewViewProvider {
   private currentChatId = '';
   private currentChatCreatedAt = 0;
   private chatMessages: PersistedChatMessage[] = [];
+  /** Shell / web requests waiting on Allow or Reject, in arrival order. */
+  private pendingPermissions = new Map<string, PendingPermission>();
+  /** Main-chat request the user rejected this turn; the engine ends the turn after a rejection. */
+  private userRejected: { kind: PendingPermission['kind']; detail: string } | null = null;
+  private settingsOpen = false;
+  private configSub: vscode.Disposable;
 
   constructor(
     private readonly extensionUri: vscode.Uri,
     private readonly context?: vscode.ExtensionContext,
   ) {
     this.engine.onEvent((event) => this.onEngineEvent(event));
+    this.configSub = vscode.workspace.onDidChangeConfiguration((e) => {
+      if (e.affectsConfiguration('olkil') || e.affectsConfiguration('editor')) {
+        if (this.settingsOpen) this.pushSettings();
+        if (e.affectsConfiguration('olkil.chat.defaultMode')) this.pushAuth();
+      }
+    });
     this.chatHistory = new ChatHistoryStore(() => this.session);
     this.modelId = String(this.context?.globalState.get('olkil.modelId') || DEFAULT_MODEL_ID);
     this.addDeco = vscode.window.createTextEditorDecorationType({
@@ -634,7 +717,10 @@ export class OlkilSidebarProvider implements vscode.WebviewViewProvider {
     }
     void this.view?.webview.postMessage(msg);
     if (!msg.voWorkerId && this.pocket?.activeTaskId) this.pocket.onChatEvent(msg);
-    if (String(msg.type || '') === 'idle' && !msg.voWorkerId) this.agentBusy = false;
+    if (String(msg.type || '') === 'idle' && !msg.voWorkerId) {
+      this.agentBusy = false;
+      this.clearPermissions();
+    }
     const wid = String(msg.voWorkerId || this.virtualOffice.inspectedWorkerId || '');
     if (this.virtualOffice.active && wid) {
       const t = String(msg.type || '');
@@ -798,7 +884,9 @@ export class OlkilSidebarProvider implements vscode.WebviewViewProvider {
       pocketCode: this.pocket?.code() || '',
       pocketError: this.pocket?.lastError || '',
       remoteAccess: this.keepAwake.isOn(),
+      defaultMode: readPrefs().defaultMode,
     });
+    if (this.settingsOpen) this.pushSettings();
   }
 
   private pushPocket() {
@@ -868,6 +956,7 @@ export class OlkilSidebarProvider implements vscode.WebviewViewProvider {
   }
 
   signOut() {
+    this.clearPermissions();
     clearSession();
     this.session = null;
     this.quota = null;
@@ -889,6 +978,7 @@ export class OlkilSidebarProvider implements vscode.WebviewViewProvider {
 
   async newChat() {
     if (!this.session) return;
+    this.clearPermissions();
     this.persistCurrentChat();
     this.currentChatId = '';
     this.currentChatCreatedAt = 0;
@@ -952,7 +1042,7 @@ export class OlkilSidebarProvider implements vscode.WebviewViewProvider {
   }
 
   private persistCurrentChat() {
-    if (this.virtualOffice.active) return;
+    if (this.virtualOffice.active || !readPrefs().keepChatHistory) return;
     if (!this.currentChatId || !this.chatMessages.some((m) => m.role === 'user')) return;
     const now = Date.now();
     this.chatHistory.scheduleUpsert({
@@ -1004,6 +1094,7 @@ export class OlkilSidebarProvider implements vscode.WebviewViewProvider {
     this.pendingTodos = false;
     this.autoContinues = 0;
     this.userAborted = false;
+    this.userRejected = null;
     this.finishingIdle = false;
     this.completedToolCalls.clear();
     for (const t of this.inkTimers) clearTimeout(t);
@@ -1119,6 +1210,7 @@ export class OlkilSidebarProvider implements vscode.WebviewViewProvider {
       await this.signIn();
       if (!this.session) return;
     }
+    await this.liveSession();
     if (isAddCustomModel(this.modelId) || (isCustomModel(this.modelId) && !this.canRunCustom())) {
       if (!opts?.skipUserEcho) this.post({ type: 'user', text: trimmed || 'Image' });
       this.post({
@@ -1335,8 +1427,20 @@ export class OlkilSidebarProvider implements vscode.WebviewViewProvider {
     return out.slice(0, 80);
   }
 
+  /** Firebase id tokens last one hour; refresh in place before any olkil.com call. */
+  private async liveSession(): Promise<OlkilSession | null> {
+    if (!this.session) return null;
+    try {
+      await refreshSession(this.session);
+    } catch {
+      /* offline: keep the current token */
+    }
+    return this.session;
+  }
+
   private async ensureEngine() {
     if (!this.session) throw new Error('Sign in first.');
+    await this.liveSession();
     const trial = this.shouldUseFreeTrial() ? freeTrialCreds() : null;
     await this.engine.ensureStarted(
       this.session,
@@ -1397,14 +1501,19 @@ export class OlkilSidebarProvider implements vscode.WebviewViewProvider {
   ) {
     if (type === 'permission.asked' || type === 'permission.updated') {
       const id = permissionId(event);
-      if (id) {
-        if (voRun) {
-          const sid = String(props.sessionID || props.sessionId || '');
-          if (sid) void this.engine.replyPermissionFor(sid, id, 'always');
-        } else {
-          void this.engine.replyPermission(id, 'always');
-        }
+      if (!id) return;
+      const sid = String(props.sessionID || props.sessionId || '') || this.engine.sessionId;
+      // Virtual Office teammates run unattended in parallel.
+      if (voRun) {
+        if (sid) void this.engine.replyPermissionFor(sid, id, 'always');
+        return;
       }
+      this.onPermissionAsked(id, sid, props);
+      return;
+    }
+    if (type === 'permission.replied') {
+      const id = String(props.permissionID || props.requestID || props.id || '');
+      if (id && this.pendingPermissions.delete(id)) this.post({ type: 'permissionClear', id });
       return;
     }
     if (type === 'question.asked') {
@@ -1580,6 +1689,8 @@ export class OlkilSidebarProvider implements vscode.WebviewViewProvider {
         this.post({ type: 'idle', voWorkerId: voRun?.workerId });
         return;
       }
+      // session.idle follows and explains the rejection in chat.
+      if (!voRun && this.userRejected && /reject|denied|permission/i.test(String(msg))) return;
       this.turnFailed = true;
       this.post({ type: 'error', text: friendlyEngineError(String(msg)), voWorkerId: voRun?.workerId });
       this.post({ type: 'liveStatus', label: '', detail: '', file: '', clear: true });
@@ -1626,7 +1737,8 @@ export class OlkilSidebarProvider implements vscode.WebviewViewProvider {
     await this.syncDiffs();
 
     const fileChanges = this.turnFiles.size;
-    const incomplete = looksIncompleteReply(cleaned, hadTools, pendingTodos, fileChanges);
+    const rejected = voWorkerId ? null : this.userRejected;
+    const incomplete = !rejected && looksIncompleteReply(cleaned, hadTools, pendingTodos, fileChanges);
     if (incomplete && autoContinues < MAX_AUTO_CONTINUES && !aborted) {
       if (voBag) {
         voBag.autoContinues += 1;
@@ -1676,6 +1788,12 @@ export class OlkilSidebarProvider implements vscode.WebviewViewProvider {
     this.pushFiles();
 
     let summary = cleaned;
+    if (rejected) {
+      const note = rejected.kind === 'web'
+        ? `I didn't fetch \`${rejected.detail}\` because you rejected it. Tell me how you'd like to continue.`
+        : `I didn't run \`${rejected.detail}\` because you rejected it. Tell me what you'd like to do instead.`;
+      summary = summary && !isUserEcho(summary) ? `${summary}\n\n${note}` : note;
+    }
     if ((!summary || isUserEcho(summary)) && !/insufficient balance/i.test(String(summary || ''))) {
       const n = this.turnFiles.size;
       summary =
@@ -2137,6 +2255,7 @@ export class OlkilSidebarProvider implements vscode.WebviewViewProvider {
       await fetchOpenRouterCatalog();
       const model = creds?.model && creds.provider !== 'openrouter' ? creds.model : resolveCloudSlug(this.modelId);
       const billedOut = usage.completion > 0 ? usage.completion : usage.reasoning;
+      await this.liveSession();
       for (let attempt = 0; attempt < 3; attempt++) {
         const charged = await chargeUsage(this.session, {
           prompt: usage.prompt,
@@ -2222,6 +2341,7 @@ export class OlkilSidebarProvider implements vscode.WebviewViewProvider {
   private async refreshQuotaAfterTurn() {
     if (!this.session) return;
     try {
+      await this.liveSession();
       this.quota = await fetchQuota(this.session);
       this.quotaLoaded = true;
       this.refreshFreeTrial();
@@ -2249,6 +2369,10 @@ export class OlkilSidebarProvider implements vscode.WebviewViewProvider {
     session?: string;
     offer?: string;
     ice?: string;
+    response?: string;
+    key?: string;
+    value?: unknown;
+    url?: string;
   }) {
     switch (msg.type) {
       case 'ready':
@@ -2358,6 +2482,25 @@ export class OlkilSidebarProvider implements vscode.WebviewViewProvider {
         this.virtualOffice.setAssignee(allowed ? id : 'manager');
         break;
       }
+      case 'permissionReply':
+        await this.answerPermission(String(msg.id || ''), String(msg.response || 'reject'));
+        break;
+      case 'openSettings':
+        this.openSettings();
+        break;
+      case 'closeSettings':
+        this.settingsOpen = false;
+        break;
+      case 'setSetting':
+        await this.setSetting(String(msg.key || ''), msg.value);
+        break;
+      case 'openUrl': {
+        const url = String(msg.url || '');
+        if (/^https:\/\/([a-z0-9-]+\.)*olkil\.com(\/|$)/i.test(url)) {
+          void vscode.env.openExternal(vscode.Uri.parse(url));
+        }
+        break;
+      }
       default:
         break;
     }
@@ -2365,6 +2508,191 @@ export class OlkilSidebarProvider implements vscode.WebviewViewProvider {
 
   async toggleVirtualOffice() {
     await this.virtualOffice.toggle();
+  }
+
+  private onPermissionAsked(id: string, sessionId: string, props: Record<string, any>) {
+    if (this.pendingPermissions.has(id)) return;
+    const kind = permissionKind(props);
+    const detail = permissionDetail(props);
+    const prefs = readPrefs();
+    if (/external/.test(kind)) {
+      void this.engine.replyPermissionFor(sessionId, id, 'reject');
+      return;
+    }
+    let pending: PendingPermission;
+    if (/(bash|shell|command|terminal)/.test(kind) || (!kind && detail)) {
+      const verdict = decideCommand(detail, {
+        autoRun: prefs.autoRun,
+        allowlist: prefs.allowlist,
+        allowCommit: prefs.allowCommit,
+        allowPush: prefs.allowPush,
+        allowPr: prefs.allowPr,
+      });
+      if (verdict.decision === 'allow') {
+        void this.engine.replyPermissionFor(sessionId, id, 'once');
+        return;
+      }
+      pending = { id, sessionId, kind: 'command', detail, gate: verdict.gate, prefixes: verdict.prefixes };
+    } else if (/(web|fetch)/.test(kind)) {
+      if (prefs.webFetch) {
+        void this.engine.replyPermissionFor(sessionId, id, 'once');
+        return;
+      }
+      pending = { id, sessionId, kind: 'web', detail, gate: '', prefixes: [] };
+    } else {
+      void this.engine.replyPermissionFor(sessionId, id, 'always');
+      return;
+    }
+    this.pendingPermissions.set(id, pending);
+    this.post({
+      type: 'permission',
+      id,
+      kind: pending.kind,
+      detail: pending.detail,
+      gate: pending.gate,
+      always: alwaysTarget(pending),
+    });
+  }
+
+  private async answerPermission(id: string, answer: string) {
+    const pending = this.pendingPermissions.get(id);
+    this.post({ type: 'permissionClear', id });
+    if (!pending) return;
+    this.pendingPermissions.delete(id);
+    let reply: PermissionResponse = answer === 'always' ? 'always' : answer === 'once' ? 'once' : 'reject';
+    if (reply === 'reject') {
+      const firstLine = pending.detail.split('\n')[0].trim();
+      this.userRejected = {
+        kind: pending.kind,
+        detail: firstLine.length > 120 ? `${firstLine.slice(0, 117)}...` : firstLine,
+      };
+    }
+    if (reply === 'always') {
+      const cfg = vscode.workspace.getConfiguration('olkil');
+      const target = vscode.ConfigurationTarget.Global;
+      if (pending.kind === 'web') await cfg.update('permissions.webFetch', true, target);
+      else if (pending.gate === 'gitPush') await cfg.update('git.allowPush', true, target);
+      else if (pending.gate === 'gitCommit') await cfg.update('git.allowCommit', true, target);
+      else if (pending.gate === 'gitPr') await cfg.update('git.allowPullRequest', true, target);
+      else if (pending.prefixes.length) {
+        await cfg.update('terminal.allowlist', mergeAllowlist(readPrefs().allowlist, pending.prefixes), target);
+      } else reply = 'once';
+    }
+    await this.engine.replyPermissionFor(pending.sessionId, id, reply);
+  }
+
+  /** Drops prompts whose turn ended; the engine already settled them. */
+  private clearPermissions() {
+    if (!this.pendingPermissions.size) return;
+    this.pendingPermissions.clear();
+    void this.view?.webview.postMessage({ type: 'permissionClear', all: true });
+  }
+
+  openSettings() {
+    this.settingsOpen = true;
+    this.pushSettings(true);
+  }
+
+  private pushSettings(open?: boolean) {
+    const prefs = readPrefs();
+    const editor = vscode.workspace.getConfiguration('editor');
+    const user = this.session?.user;
+    const quota = this.quotaForUi();
+    this.post({
+      type: 'settings',
+      open,
+      version: String(this.context?.extension.packageJSON?.version || ''),
+      account: {
+        signedIn: Boolean(this.session),
+        name: user?.displayName || '',
+        email: user?.email || '',
+        photo: user?.photoURL || '',
+        plan: quota?.planName || (this.session ? 'Free' : ''),
+        left: quota?.leftLabel || '',
+        paid: this.canRunCloud(),
+      },
+      values: {
+        defaultMode: prefs.defaultMode,
+        modelId: this.modelId,
+        autoRun: prefs.autoRun,
+        allowlist: prefs.allowlist,
+        webFetch: prefs.webFetch,
+        allowCommit: prefs.allowCommit,
+        allowPush: prefs.allowPush,
+        allowPr: prefs.allowPr,
+        keepChatHistory: prefs.keepChatHistory,
+        remoteAccess: this.keepAwake.isOn(),
+        editorFontSize: Number(editor.get('fontSize') || 14),
+        editorTabSize: Number(editor.get('tabSize') || 4),
+        editorWordWrap: editor.get<string>('wordWrap') === 'off' ? 'off' : 'on',
+        editorMinimap: editor.get<boolean>('minimap.enabled') !== false,
+        editorFormatOnSave: editor.get<boolean>('formatOnSave') === true,
+      },
+    });
+  }
+
+  private async setSetting(key: string, value: unknown) {
+    const olkil = vscode.workspace.getConfiguration('olkil');
+    const editor = vscode.workspace.getConfiguration('editor');
+    const target = vscode.ConfigurationTarget.Global;
+    const num = (min: number, max: number) => Math.min(max, Math.max(min, Math.round(Number(value) || min)));
+    switch (key) {
+      case 'defaultMode':
+        await olkil.update('chat.defaultMode', value === 'ask' ? 'ask' : 'agent', target);
+        break;
+      case 'autoRun':
+        await olkil.update(
+          'terminal.autoRun',
+          value === 'always' || value === 'never' ? value : 'allowlist',
+          target,
+        );
+        break;
+      case 'allowlist': {
+        const list = Array.isArray(value) ? value : String(value || '').split(/\r?\n/);
+        await olkil.update(
+          'terminal.allowlist',
+          mergeAllowlist([], list.map((s) => String(s).trim()).filter(Boolean)),
+          target,
+        );
+        break;
+      }
+      case 'resetAllowlist':
+        await olkil.update('terminal.allowlist', undefined, target);
+        break;
+      case 'webFetch':
+        await olkil.update('permissions.webFetch', Boolean(value), target);
+        break;
+      case 'allowCommit':
+        await olkil.update('git.allowCommit', Boolean(value), target);
+        break;
+      case 'allowPush':
+        await olkil.update('git.allowPush', Boolean(value), target);
+        break;
+      case 'allowPr':
+        await olkil.update('git.allowPullRequest', Boolean(value), target);
+        break;
+      case 'keepChatHistory':
+        await olkil.update('privacy.keepChatHistory', Boolean(value), target);
+        break;
+      case 'editorFontSize':
+        await editor.update('fontSize', num(8, 32), target);
+        break;
+      case 'editorTabSize':
+        await editor.update('tabSize', num(1, 8), target);
+        break;
+      case 'editorWordWrap':
+        await editor.update('wordWrap', value === 'on' ? 'on' : 'off', target);
+        break;
+      case 'editorMinimap':
+        await editor.update('minimap.enabled', Boolean(value), target);
+        break;
+      case 'editorFormatOnSave':
+        await editor.update('formatOnSave', Boolean(value), target);
+        break;
+      default:
+        return;
+    }
+    this.pushSettings();
   }
 
   private html(webview: vscode.Webview): string {
@@ -2430,6 +2758,7 @@ export class OlkilSidebarProvider implements vscode.WebviewViewProvider {
   }
 
   dispose() {
+    this.configSub.dispose();
     this.screen.stop();
     this.keepAwake.stop();
     this.pocket?.dispose();

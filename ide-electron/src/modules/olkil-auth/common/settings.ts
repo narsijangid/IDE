@@ -2,6 +2,8 @@
  * OLKIL Settings — persisted IDE + agent preferences (Cursor/VS Code-style).
  */
 
+import { DEFAULT_COMMAND_ALLOWLIST } from 'modules/olkil-ai/common/command-permission';
+
 export const IOlkilSettingsService = 'IOlkilSettingsService';
 export const OLKIL_SETTINGS_STORAGE_KEY = 'olkil.ide.settings';
 export const OLKIL_SETTINGS_SECTION_KEY = 'olkil.settings.section';
@@ -101,33 +103,19 @@ export interface OlkilSettings {
   shareUsageData: boolean;
   keepChatHistory: boolean;
   includeDotfiles: boolean;
+  /** Bumped when permission defaults change so stored settings migrate once. */
+  permissionsRev: number;
 }
 
-export const DEFAULT_TERMINAL_ALLOWLIST: string[] = [
-  'git status',
-  'git diff',
-  'git log',
-  'git show',
-  'git branch',
-  'ls',
-  'dir',
-  'pwd',
-  'cat',
-  'type',
-  'head',
-  'tail',
-  'rg',
-  'grep',
-  'find',
-  'where',
-  'npm test',
-  'npm run',
-  'yarn',
-  'pnpm',
-  'npx',
-  'python',
-  'node',
+export const DEFAULT_TERMINAL_ALLOWLIST: string[] = [...DEFAULT_COMMAND_ALLOWLIST];
+
+/** Pre-rev-2 default list; it auto-ran npx/node/python/yarn, so it is swapped for the safe list on load. */
+const LEGACY_TERMINAL_ALLOWLIST = [
+  'git status', 'git diff', 'git log', 'git show', 'git branch', 'ls', 'dir', 'pwd', 'cat', 'type', 'head', 'tail',
+  'rg', 'grep', 'find', 'where', 'npm test', 'npm run', 'yarn', 'pnpm', 'npx', 'python', 'node',
 ];
+
+export const OLKIL_PERMISSIONS_REV = 2;
 
 export const DEFAULT_OLKIL_SETTINGS: OlkilSettings = {
   defaultChatMode: 'agent',
@@ -139,7 +127,7 @@ export const DEFAULT_OLKIL_SETTINGS: OlkilSettings = {
   autoApplyFileEdits: false,
   continueOnError: true,
   userRules: '',
-  terminalAutoRun: 'always',
+  terminalAutoRun: 'allowlist',
   terminalAllowlist: [...DEFAULT_TERMINAL_ALLOWLIST],
   autoApproveEdits: true,
   autoApproveWeb: true,
@@ -166,6 +154,7 @@ export const DEFAULT_OLKIL_SETTINGS: OlkilSettings = {
   shareUsageData: false,
   keepChatHistory: true,
   includeDotfiles: false,
+  permissionsRev: OLKIL_PERMISSIONS_REV,
 };
 
 export interface SettingsNavItem {
@@ -215,6 +204,15 @@ export function mergeOlkilSettings(raw: unknown): OlkilSettings {
   if (!Array.isArray(next.terminalAllowlist) || next.terminalAllowlist.length === 0) {
     next.terminalAllowlist = [...DEFAULT_TERMINAL_ALLOWLIST];
   }
+  next.terminalAllowlist = next.terminalAllowlist.map((s) => String(s || '').trim()).filter(Boolean);
+  if (!(Number(src.permissionsRev) >= OLKIL_PERMISSIONS_REV)) {
+    const custom = next.terminalAllowlist.filter((entry) => !LEGACY_TERMINAL_ALLOWLIST.includes(entry));
+    next.terminalAllowlist = Array.from(new Set([...DEFAULT_TERMINAL_ALLOWLIST, ...custom]));
+    if (next.terminalAutoRun === 'always') {
+      next.terminalAutoRun = 'allowlist';
+    }
+    next.permissionsRev = OLKIL_PERMISSIONS_REV;
+  }
   if (!Array.isArray(next.mcpServers)) {
     next.mcpServers = [];
   }
@@ -230,7 +228,7 @@ export function mergeOlkilSettings(raw: unknown): OlkilSettings {
   next.editorFontSize = clampNum(next.editorFontSize, 10, 24, 14);
   next.editorTabSize = clampNum(next.editorTabSize, 1, 8, 2);
   if (next.terminalAutoRun !== 'always' && next.terminalAutoRun !== 'allowlist' && next.terminalAutoRun !== 'never') {
-    next.terminalAutoRun = 'always';
+    next.terminalAutoRun = 'allowlist';
   }
   if (next.defaultChatMode !== 'agent' && next.defaultChatMode !== 'plan' && next.defaultChatMode !== 'ask') {
     next.defaultChatMode = 'agent';

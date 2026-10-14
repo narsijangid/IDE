@@ -14,6 +14,7 @@ import logoUrl from '../../../browser/assets/olkil-icon.png';
 import { IOlkilAuthService, OlkilAuthUser } from '../common';
 import {
   ChatModeSetting,
+  DEFAULT_TERMINAL_ALLOWLIST,
   IOlkilSettingsService,
   OLKIL_SETTINGS_SECTION_KEY,
   OlkilCustomModel,
@@ -1314,41 +1315,58 @@ function TerminalPane({
   settings: OlkilSettings;
   patch: (partial: Partial<OlkilSettings>) => void;
 }) {
+  const joined = settings.terminalAllowlist.join('\n');
+  const [draft, setDraft] = useState(joined);
+  useEffect(() => setDraft(joined), [joined]);
+  const commit = () => {
+    const next = draft
+      .split(/\r?\n/)
+      .map((line) => line.trim())
+      .filter(Boolean);
+    if (next.join('\n') !== joined) {
+      patch({ terminalAllowlist: next });
+    }
+  };
   return (
     <div className={styles.pane}>
       <h1 className={styles.paneTitle}>Terminal</h1>
       <p className={styles.paneDesc}>
-        Auto-run controls whether the agent can execute shell commands during a turn without asking. Allowlist is the
-        safer default for unknown commands.
+        Controls which shell commands the agent runs on its own. Anything else shows a Run / Reject card in chat, with
+        an "Always allow" button that adds the command to this list.
       </p>
       <div className={styles.card}>
         <SettingRow title="Auto-run commands"
-          desc="Always runs every command. Allowlist runs matching prefixes only. Never blocks shell until you change this." control={<Segmented
+          desc="Always runs every command except destructive ones. Allowlist runs only matching prefixes. Ask every time prompts before each command." control={<Segmented
             value={settings.terminalAutoRun}
             onChange={(terminalAutoRun) => patch({ terminalAutoRun })}
             options={[
               { id: 'always', label: 'Always' },
               { id: 'allowlist', label: 'Allowlist' },
-              { id: 'never', label: 'Never' },
+              { id: 'never', label: 'Ask every time' },
             ]}
           />} />
         <div className={styles.block}>
           <label className={styles.label}>Command allowlist</label>
           <textarea
             className={styles.textarea}
-            value={settings.terminalAllowlist.join('\n')}
-            onChange={(e) =>
-              patch({
-                terminalAllowlist: e.target.value
-                  .split(/\r?\n/)
-                  .map((line) => line.trim())
-                  .filter(Boolean),
-              })
-            }
+            value={draft}
+            spellCheck={false}
+            onChange={(e) => setDraft(e.target.value)}
+            onBlur={commit}
           />
           <p className={styles.hint}>
-            One prefix per line. Example: <code>git status</code> allows that command and anything starting with it.
+            One prefix per line. <code>npm install</code> also allows <code>npm install react</code>. Destructive commands
+            like <code>rm -rf</code> always ask.
           </p>
+          <div>
+            <button
+              type="button"
+              className={`${styles.btn} ${styles.btnGhost}`}
+              onClick={() => patch({ terminalAllowlist: [...DEFAULT_TERMINAL_ALLOWLIST] })}
+            >
+              Reset to defaults
+            </button>
+          </div>
         </div>
       </div>
     </div>
@@ -1368,7 +1386,7 @@ function PermissionsPane({
       <p className={styles.paneDesc}>What the agent may do without extra confirmation while a run is in progress.</p>
       <div className={styles.card}>
         <SettingRow title="Auto-approve file edits" desc="Allow the engine to write workspace files. Chat still shows Accept / Revert cards." control={<Switch on={settings.autoApproveEdits} onChange={(autoApproveEdits) => patch({ autoApproveEdits })} />} />
-        <SettingRow title="Allow web fetch" desc="Agent may request public URLs for docs and APIs." control={<Switch on={settings.autoApproveWeb} onChange={(autoApproveWeb) => patch({ autoApproveWeb })} />} />
+        <SettingRow title="Allow web fetch" desc="Fetch public URLs for docs and APIs without asking. Off: chat asks first." control={<Switch on={settings.autoApproveWeb} onChange={(autoApproveWeb) => patch({ autoApproveWeb })} />} />
         <SettingRow title="Block files outside the workspace" desc="Deny reads/writes above the opened folder (recommended)." control={<Switch on={settings.denyExternalDirectory} onChange={(denyExternalDirectory) => patch({ denyExternalDirectory })} />} />
       </div>
     </div>

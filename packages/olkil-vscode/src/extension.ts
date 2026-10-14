@@ -39,6 +39,10 @@ export function activate(context: vscode.ExtensionContext) {
     vscode.commands.registerCommand('olkil.chat.history', () => provider.showHistory()),
     vscode.commands.registerCommand('olkil.signIn', () => provider.signIn()),
     vscode.commands.registerCommand('olkil.signOut', () => provider.signOut()),
+    vscode.commands.registerCommand('olkil.settings.open', async () => {
+      await openOlkilChat();
+      provider.openSettings();
+    }),
     vscode.commands.registerCommand('olkil.askSelection', async () => {
       const editor = vscode.window.activeTextEditor;
       if (!editor || editor.selection.isEmpty) return;

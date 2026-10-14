@@ -355,6 +355,8 @@ export interface IOlkilAiNodeService {
   clineGetState(runId: string): Promise<ClineEngineRunState>;
   /** Abort an in-flight agent run. */
   clineCancel(runId: string): Promise<boolean>;
+  /** Answer a command / web permission card shown in chat. */
+  clinePermissionReply(runId: string, permissionId: string, response: EnginePermissionResponse): Promise<boolean>;
   /** MCP servers discovered from Cursor/VS Code/extension mcp.json files (no secrets). */
   listDiscoveredMcpServers(workspaceRoot?: string): Promise<DiscoveredMcpServer[]>;
   /** Probe an OpenAI-compatible custom endpoint before saving. */
@@ -395,6 +397,11 @@ export interface ClineEngineRunRequest {
   /** Shell during a run: always / matching prefixes only / never */
   terminalAutoRun?: 'always' | 'allowlist' | 'never';
   terminalAllowlist?: string[];
+  /** Show Run / Reject cards for commands outside the policy instead of auto-deciding. */
+  askPermissions?: boolean;
+  gitAllowCommit?: boolean;
+  gitAllowPush?: boolean;
+  gitAllowPr?: boolean;
   mcpServers?: Array<{
     name: string;
     enabled: boolean;
@@ -452,6 +459,22 @@ export interface ClineEngineRunState {
   status?: string;
   /** Live file edits for Olkil accept/revert cards */
   fileChanges?: ClineEngineFileChange[];
+  /** Oldest unanswered permission request, if the run is waiting on the user. */
+  permission?: EnginePermissionRequest;
+  /** Requests waiting behind permission. */
+  permissionQueued?: number;
+}
+
+export type EnginePermissionResponse = 'once' | 'always' | 'reject';
+
+export interface EnginePermissionRequest {
+  id: string;
+  kind: 'command' | 'web';
+  /** Command line(s) or URL shown in the card. */
+  detail: string;
+  gate: '' | 'destructive' | 'gitCommit' | 'gitPush' | 'gitPr';
+  /** "Always allow" button; null when the request must be approved each time. */
+  always: { label: string; targets: string[] } | null;
 }
 
 export type FileChangeKind = 'edit' | 'create' | 'rename' | 'delete';
@@ -621,6 +644,9 @@ export interface IOlkilChatService {
   /** Load a saved chat from Firebase history. */
   loadChatHistory(id: string): Promise<void>;
   stop(): void;
+  /** Permission card the agent is waiting on (Run / Reject / Always allow). */
+  pendingPermission: (EnginePermissionRequest & { queued: number }) | null;
+  replyPermission(id: string, response: EnginePermissionResponse): Promise<void>;
   /** Drop a queued follow-up before it runs. */
   cancelQueued(id: string): void;
   /** Re-run from the last user message (Cursor regenerate). */

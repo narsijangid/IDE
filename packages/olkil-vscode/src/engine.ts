@@ -27,6 +27,8 @@ const IDENTITY_FILE = path.join(OPENCODE_HOME_DIR, 'AGENTS.md');
 const AUTH_FILE = path.join(OPENCODE_HOME_DIR, 'auth.json');
 const CONFIG_FILE = path.join(OPENCODE_HOME_DIR, 'opencode.json');
 const PLUGIN_FILE = path.join(OPENCODE_HOME_DIR, 'plugin', 'olkil-compat.mjs');
+/** Empty engine directory used when VS Code has no folder open. */
+export const NO_WORKSPACE_DIR = path.join(OLKIL_HOME, 'no-workspace');
 
 const OLKIL_IDENTITY = `# OLKIL
 
@@ -50,6 +52,7 @@ Stay inside the workspace. Do not run npm/yarn/pnpm/vite/next build unless asked
 `;
 
 export type EngineEventHandler = (event: Record<string, unknown>) => void;
+export type PermissionResponse = 'once' | 'always' | 'reject';
 
 function mkdirp(dir: string) {
   fs.mkdirSync(dir, { recursive: true });
@@ -310,10 +313,11 @@ function olkilConfig(cloud: EngineCreds | null, customs: CustomEndpoint[] | Cust
     share: 'disabled',
     logLevel: 'WARN',
     enabled_providers: enabled,
+    // Shell and web fetch ask so the sidebar can apply the user's auto-run policy per command.
     permission: {
       edit: 'allow',
-      bash: 'allow',
-      webfetch: 'allow',
+      bash: 'ask',
+      webfetch: 'ask',
       doom_loop: 'allow',
       external_directory: 'deny',
     },
@@ -328,8 +332,8 @@ function olkilConfig(cloud: EngineCreds | null, customs: CustomEndpoint[] | Cust
         tools,
         permission: {
           edit: 'allow',
-          bash: 'allow',
-          webfetch: 'allow',
+          bash: 'ask',
+          webfetch: 'ask',
         },
       },
       plan: { disable: true },
@@ -378,7 +382,13 @@ function wrapUserPrompt(user: string, directory: string, turns: number): string 
   if (/\[OLKIL Ask mode:/.test(text)) return text;
   if (turns > 1) return text;
   const bits: string[] = [];
-  if (directory) bits.push('Workspace: ' + directory + '.');
+  if (directory && path.resolve(directory) === path.resolve(NO_WORKSPACE_DIR)) {
+    bits.push(
+      'Workspace: none. No project folder is open. Answer the user directly in chat: explain, plan, and show code in fenced code blocks. Do not search, read, or edit files on disk. If the request needs files in their project, give the full code in chat and mention they can use File → Open Folder so you can create or edit the files there.',
+    );
+  } else if (directory) {
+    bits.push('Workspace: ' + directory + '.');
+  }
   bits.push(text);
   return bits.join('\n\n');
 }
@@ -460,6 +470,7 @@ export class OlkilEngine {
       this.customs.map((c) => [c.id, c.model, c.baseUrl, c.apiKey].join(':')).join(','),
       String(extraCloudModels().length),
       'compact-prune-1',
+      'permission-ask-1',
     ].join('|');
   }
 
@@ -754,7 +765,7 @@ export class OlkilEngine {
     }
   }
 
-  async replyPermission(id: string, response: 'always' | 'reject' = 'always') {
+  async replyPermission(id: string, response: PermissionResponse = 'always') {
     if (!this.sessionId || !id) return;
     try {
       await this.request('POST', '/session/' + this.sessionId + '/permissions/' + id, { response });
@@ -763,7 +774,7 @@ export class OlkilEngine {
     }
   }
 
-  async replyPermissionFor(sessionId: string, id: string, response: 'always' | 'reject' = 'always') {
+  async replyPermissionFor(sessionId: string, id: string, response: PermissionResponse = 'always') {
     if (!sessionId || !id) return;
     try {
       await this.request('POST', '/session/' + sessionId + '/permissions/' + id, { response });

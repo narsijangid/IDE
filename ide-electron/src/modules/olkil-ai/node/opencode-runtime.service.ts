@@ -7,8 +7,11 @@ import type {
   ClineEngineFileChange,
   ClineEngineRunRequest,
   ClineEngineRunState,
+  EnginePermissionRequest,
+  EnginePermissionResponse,
   FileChangeKind,
 } from '../common';
+import { decideCommand } from '../common/command-permission';
 import { findModel, applyCustomModelEndpoints, customEndpointFor, DEFAULT_MODEL_ID, type AiProviderId, type CustomModelEndpoint } from '../common/models';
 import { isHeavyProjectBuildCommand, userAskedToRunBuild } from '../common/shell-policy';
 import { routeOpenRouterModel } from '../common/auto-router';
@@ -41,6 +44,14 @@ interface LiveRun {
   autoApproveWeb: boolean;
   terminalAutoRun: 'always' | 'allowlist' | 'never';
   terminalAllowlist: string[];
+  askPermissions: boolean;
+  gitAllowCommit: boolean;
+  gitAllowPush: boolean;
+  gitAllowPr: boolean;
+  /** Requests shown as Run / Reject cards, oldest first. */
+  permissionQueue: Array<{ request: EnginePermissionRequest; sessionId: string }>;
+  /** Last request the user rejected this turn. */
+  rejected?: { kind: EnginePermissionRequest['kind']; detail: string };
   userPrompt: string;
   inputTokens: number;
   outputTokens: number;
@@ -376,6 +387,50 @@ export class OlkilOpencodeRuntimeHost {
     return Boolean(live || state);
   }
 
+  async replyPermission(runId: string, permissionId: string, response: EnginePermissionResponse): Promise<boolean> {
+    const live = this.lives.get(runId);
+    if (!live) {
+      return false;
+    }
+    const item = live.permissionQueue.find((entry) => entry.request.id === permissionId);
+    if (!item) {
+      return false;
+    }
+    live.permissionQueue = live.permissionQueue.filter((entry) => entry !== item);
+    this.syncPermissionState(live);
+    if (response === 'reject') {
+      const firstLine = item.request.detail.split('\n')[0].trim();
+      live.rejected = {
+        kind: item.request.kind,
+        detail: firstLine.length > 120 ? `${firstLine.slice(0, 117)}...` : firstLine,
+      };
+    } else {
+      live.state.status = item.request.kind === 'web' ? 'Fetching' : 'Running command';
+    }
+    this.sendPermissionReply(live, item.sessionId, permissionId, response);
+    return true;
+  }
+
+  private sendPermissionReply(live: LiveRun, sessionId: string, id: string, response: EnginePermissionResponse): void {
+    void this.sidecar
+      ?.request('POST', `/session/${sessionId}/permissions/${id}`, {
+        query: { directory: live.directory },
+        body: { response },
+      })
+      .catch(() => undefined);
+  }
+
+  private syncPermissionState(live: LiveRun): void {
+    const head = live.permissionQueue[0];
+    live.state.permission = head ? { ...head.request } : undefined;
+    live.state.permissionQueued = Math.max(0, live.permissionQueue.length - 1);
+    if (head) {
+      live.state.status = 'Waiting for your approval';
+    } else if (/approval/i.test(live.state.status || '')) {
+      live.state.status = 'Planning next move';
+    }
+  }
+
   async run(request: ClineEngineRunRequest): Promise<ClineEngineRunState> {
     const { runId } = request;
     const state: ClineEngineRunState = {
@@ -453,6 +508,11 @@ export class OlkilOpencodeRuntimeHost {
           autoApproveWeb,
           terminalAutoRun,
           terminalAllowlist: request.terminalAllowlist || [],
+          askPermissions: request.mode === 'agent' && request.askPermissions === true,
+          gitAllowCommit: request.gitAllowCommit !== false,
+          gitAllowPush: request.gitAllowPush === true,
+          gitAllowPr: request.gitAllowPr === true,
+          permissionQueue: [],
           userPrompt: request.prompt || '',
           inputTokens: 0,
           outputTokens: 0,
@@ -473,7 +533,21 @@ export class OlkilOpencodeRuntimeHost {
             } else {
               state.status = '';
             }
+            if (live.rejected) {
+              // OpenCode ends the turn on a rejected permission; say so instead of looking like a dropped connection.
+              const note = live.rejected.kind === 'web'
+                ? `I didn't fetch \`${live.rejected.detail}\` because you rejected it. Tell me how you'd like to continue.`
+                : `I didn't run \`${live.rejected.detail}\` because you rejected it. Tell me what you'd like to do instead.`;
+              state.text = state.text.trim() ? `${state.text.trim()}\n\n${note}` : note;
+              if (state.error && /reject|denied|permission/i.test(state.error)) {
+                state.error = undefined;
+                state.status = '';
+              }
+            }
             state.done = true;
+            live.permissionQueue = [];
+            state.permission = undefined;
+            state.permissionQueued = 0;
             this.lives.delete(runId);
             for (const [sid, rid] of [...this.runBySession.entries()]) {
               if (rid === runId) {
@@ -559,6 +633,10 @@ export class OlkilOpencodeRuntimeHost {
     const root = request.workspaceRoot?.trim();
     if (root) {
       bits.push(`Workspace: ${root}. Stay inside this folder.`);
+    } else {
+      bits.push(
+        `No project folder is open. Answer the user directly in chat: explain, plan, and show code in fenced code blocks. Do not search, read, or edit files on disk. If the request needs files in their project, give the full code in chat and mention they can use File → Open Folder so you can create or edit the files there.`,
+      );
     }
     bits.push(
       `You are OLKIL's coding agent. Product name is OLKIL. Never say you are OpenCode, Cursor, Cline, ChatGPT, or Claude.`,
@@ -771,20 +849,32 @@ export class OlkilOpencodeRuntimeHost {
         }
         break;
       }
-      case 'permission.asked': {
+      case 'permission.asked':
+      case 'permission.updated': {
         const permission = event.properties;
         const id = permissionIdOf(permission);
-        if (!id) {
+        if (!id || live.permissionQueue.some((item) => item.request.id === id)) {
           break;
         }
-        const response = decidePermissionResponse(live, permission);
         const sid = sessionIdOf(event) || live.sessionId;
-        void this.sidecar
-          ?.request('POST', `/session/${sid}/permissions/${id}`, {
-            query: { directory: live.directory },
-            body: { response },
-          })
-          .catch(() => undefined);
+        const decision = decidePermissionResponse(live, permission, id);
+        if (typeof decision === 'object') {
+          live.permissionQueue.push({ request: decision, sessionId: sid });
+          this.syncPermissionState(live);
+          break;
+        }
+        this.sendPermissionReply(live, sid, id, decision);
+        break;
+      }
+      case 'permission.replied': {
+        const id = String(
+          event.properties?.requestID || event.properties?.permissionID || event.properties?.id || '',
+        );
+        const before = live.permissionQueue.length;
+        live.permissionQueue = live.permissionQueue.filter((item) => item.request.id !== id);
+        if (live.permissionQueue.length !== before) {
+          this.syncPermissionState(live);
+        }
         break;
       }
       case 'question.asked': {
@@ -1245,28 +1335,71 @@ export class OlkilOpencodeRuntimeHost {
   }
 }
 
-function decidePermissionResponse(live: LiveRun, permission: any): 'always' | 'once' | 'reject' {
+/**
+ * Answers OpenCode right away, or returns a request to show as a Run / Reject card.
+ * Cards are only used for interactive chat runs; every other run must never block on a human.
+ */
+function decidePermissionResponse(
+  live: LiveRun,
+  permission: any,
+  id: string,
+): EnginePermissionResponse | EnginePermissionRequest {
   const kind = String(
     permission?.permission || permission?.type || permission?.tool || permission?.name || '',
   ).toLowerCase();
   const command = permissionCommand(permission);
+  const isShell = /(bash|shell|command|terminal|cmd)/.test(kind) || (!kind && Boolean(command));
+  const isWeb = /(webfetch|websearch|fetch|url)/.test(kind);
 
   if (/(external.?directory|outside)/.test(kind)) {
     return 'reject';
   }
-  if (isHeavyProjectBuildCommand(command) && !userAskedToRunBuild(live.userPrompt)) {
+  if (isShell && isHeavyProjectBuildCommand(command) && !userAskedToRunBuild(live.userPrompt)) {
     return 'reject';
   }
-  // Agent mode: never silently reject — that freezes the UI on "Planning next move"
-  // while OpenCode waits. Plan/Ask still block writes.
-  if (live.mode === 'agent') {
-    return 'always';
+  if (live.mode !== 'agent') {
+    return isShell || /(edit|write|patch|file)/.test(kind) ? 'reject' : 'always';
   }
-  if (/(bash|shell|command|terminal|cmd)/.test(kind) || (!kind && command)) {
-    return 'reject';
+  if (isShell) {
+    const verdict = decideCommand(command, {
+      autoRun: live.terminalAutoRun,
+      allowlist: live.terminalAllowlist,
+      allowCommit: live.gitAllowCommit,
+      allowPush: live.gitAllowPush,
+      allowPr: live.gitAllowPr,
+    });
+    if (verdict.decision === 'allow') {
+      return 'once';
+    }
+    if (!live.askPermissions) {
+      return verdict.gate ? 'reject' : 'once';
+    }
+    let always: EnginePermissionRequest['always'] = null;
+    if (verdict.gate === 'gitPush') {
+      always = { label: 'Always allow', targets: ['git push'] };
+    } else if (verdict.gate === 'gitCommit') {
+      always = { label: 'Always allow', targets: ['git commit'] };
+    } else if (verdict.gate === 'gitPr') {
+      always = { label: 'Always allow', targets: ['pull requests'] };
+    } else if (verdict.gate !== 'destructive' && verdict.prefixes.length) {
+      always = { label: 'Always allow', targets: verdict.prefixes };
+    }
+    return { id, kind: 'command', detail: command || 'Run a shell command', gate: verdict.gate, always };
   }
-  if (/(edit|write|patch|file)/.test(kind)) {
-    return 'reject';
+  if (isWeb) {
+    if (live.autoApproveWeb) {
+      return 'once';
+    }
+    if (!live.askPermissions) {
+      return 'reject';
+    }
+    return {
+      id,
+      kind: 'web',
+      detail: permissionCommand(permission) || 'Fetch a URL',
+      gate: '',
+      always: { label: 'Always allow web fetch', targets: [] },
+    };
   }
   return 'always';
 }
@@ -1276,17 +1409,19 @@ function permissionCommand(permission: any): string {
     return '';
   }
   const meta = permission.metadata || {};
-  if (typeof meta.command === 'string') {
-    return meta.command;
+  for (const value of [meta.command, permission.command, meta.url, permission.url]) {
+    if (typeof value === 'string' && value.trim()) {
+      return value.trim();
+    }
   }
-  if (typeof permission.command === 'string') {
-    return permission.command;
+  if (Array.isArray(permission.patterns) && permission.patterns.length) {
+    return permission.patterns.map(String).join('\n');
   }
   if (typeof permission.pattern === 'string') {
     return permission.pattern;
   }
-  if (Array.isArray(permission.patterns) && permission.patterns[0]) {
-    return String(permission.patterns[0]);
+  if (Array.isArray(permission.pattern)) {
+    return permission.pattern.map(String).join('\n');
   }
   return '';
 }

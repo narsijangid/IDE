@@ -322,7 +322,7 @@ export class IdeRemote {
       models: this.host.listModels().slice(0, 40),
       pairCode: '',
       pairExpiresAt: '',
-      appVersion: '1.3.30',
+      appVersion: '1.3.31',
     });
   }
 

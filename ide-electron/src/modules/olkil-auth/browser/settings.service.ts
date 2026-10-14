@@ -53,8 +53,12 @@ export class OlkilSettingsService extends Disposable implements IOlkilSettingsSe
     try {
       const disk = await this.mainStorage.getItem<Partial<OlkilSettings>>(MAIN_STORAGE_NAME);
       if (disk && typeof disk === 'object' && Object.keys(disk).length) {
-        this.value = mergeOlkilSettings({ ...this.value, ...disk });
+        // The disk copy wins, including its permissionsRev, so an old copy still migrates.
+        this.value = mergeOlkilSettings({ ...this.value, ...disk, permissionsRev: disk.permissionsRev });
         this.writeLocal(this.value);
+        if (disk.permissionsRev !== this.value.permissionsRev) {
+          void this.writeDisk(this.value);
+        }
       }
     } catch {
       // Disk storage is optional.

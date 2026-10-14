@@ -374,6 +374,9 @@ function writeStripGatewayPlugin(homeDir: string): string {
         output.status = "deny";
         return;
       }
+      if (/bash|shell|webfetch|websearch/.test(kind)) {
+        return;
+      }
       output.status = "allow";
     },
     "experimental.chat.system.transform": async function (_input, output) {

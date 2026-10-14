@@ -4,6 +4,7 @@ import { IElectronMainUIService } from '@opensumi/ide-core-common/lib/electron';
 import { IOlkilAuthService } from '../../olkil-auth/common';
 import { IOlkilSettingsService } from '../../olkil-auth/common/settings';
 import { loadSubscription, OlkilSubscription, readCachedSubscription } from '../../olkil-auth/browser/account.view';
+import { OLKIL_AUTH_OPEN_ACCOUNT } from '../../olkil-auth/browser/commands';
 import { customModelCatalogId, findModel, isMeteredCloudProvider } from '../common/models';
 import {
   ActivityInfo,
@@ -107,6 +108,8 @@ export const ExtensionChatHost = () => {
     let voActive = office.active;
     let voInspected = office.inspectedWorkerId;
 
+    let permissionSig = '';
+
     const resetMirror = () => {
       sent.clear();
       fileSigs.clear();
@@ -114,6 +117,31 @@ export const ExtensionChatHost = () => {
       uiBusy = false;
       lastPhase = '';
       ollamaSig = '';
+      permissionSig = '';
+    };
+
+    const syncPermission = () => {
+      const pending = chat.pendingPermission;
+      const sig = pending ? `${pending.id}:${pending.queued}` : '';
+      if (sig === permissionSig) {
+        return;
+      }
+      const sameRequest = Boolean(pending) && permissionSig.split(':')[0] === pending!.id;
+      permissionSig = sig;
+      if (!sameRequest) {
+        post({ type: 'permissionClear', all: true });
+      }
+      if (pending) {
+        post({
+          type: 'permission',
+          id: pending.id,
+          kind: pending.kind,
+          detail: pending.detail,
+          gate: pending.gate,
+          always: pending.always,
+          queued: pending.queued,
+        });
+      }
     };
 
     const customsForUi = () =>
@@ -165,6 +193,7 @@ export const ExtensionChatHost = () => {
         voInspected: office.inspectedWorkerId || '',
         voRunning: voRunning(),
         remoteAccess: Boolean(remoteRef.current?.isOn()),
+        defaultMode: settings.get().defaultChatMode === 'ask' ? 'ask' : 'agent',
       });
     };
 
@@ -596,6 +625,7 @@ export const ExtensionChatHost = () => {
           void chat.init();
           pushAuth();
           syncTranscript();
+          syncPermission();
           void refreshQuota();
           if (office.active && office.inspectedWorkerId) {
             showVoWorkerChat(office.inspectedWorkerId);
@@ -605,9 +635,13 @@ export const ExtensionChatHost = () => {
           try {
             await auth.signIn();
           } catch (err: any) {
-            post({ type: 'error', text: err?.message || String(err) });
+            const text = err?.message || String(err);
+            if (!/login cancelled/i.test(text)) {
+              post({ type: 'error', text });
+            }
           }
           pushAuth();
+          void refreshQuota();
           break;
         case 'signOut':
           await auth.signOut();
@@ -698,6 +732,14 @@ export const ExtensionChatHost = () => {
           await commands.executeCommand(OLKIL_VIRTUAL_OFFICE_TOGGLE.id);
           pushAuth();
           break;
+        case 'permissionReply': {
+          const response = msg.response === 'always' || msg.response === 'reject' ? msg.response : 'once';
+          await chat.replyPermission(String(msg.id || ''), response);
+          break;
+        }
+        case 'openSettings':
+          await commands.executeCommand(OLKIL_AUTH_OPEN_ACCOUNT.id);
+          break;
         case 'setVoAssignee':
           if (isAssigneeId(msg.id)) {
             office.setAssignee(msg.id);
@@ -782,7 +824,10 @@ export const ExtensionChatHost = () => {
     window.addEventListener('message', onMessage);
     window.addEventListener('olkil-wallet-updated', onWallet);
     setSrcDoc(buildSrcDoc(String(logoUrl)));
-    const chatSub = chat.onDidChange(() => syncTranscript());
+    const chatSub = chat.onDidChange(() => {
+      syncTranscript();
+      syncPermission();
+    });
     const authSub = auth.onDidChangeSession(() => {
       pushAuth();
       void refreshQuota();
@@ -824,6 +869,7 @@ interface WebviewMessage {
   id?: string;
   plan?: string;
   workerId?: string;
+  response?: string;
   skipUserEcho?: boolean;
   images?: Array<{ name?: string; mime?: string; dataUrl?: string }>;
 }

@@ -46,6 +46,9 @@ export const FREE_DEEPSEEK_TOKENS = 50_000;
 
 export interface DeepseekAccess {
   signedIn: boolean;
+  email: string;
+  /** False when olkil.com could not be reached, so `isPaid` is unknown rather than false. */
+  verified: boolean;
   isPaid: boolean;
   used: number;
   limit: number;
@@ -208,7 +211,7 @@ export function estimateOlkilCostUsd(model: string, usage: OlkilApiUsage | null)
   } else {
     outputUsd = (output > 0 ? output : reasoning) * rates.completion;
   }
-  const usd = fresh * rates.prompt + cacheRead * readRate + outputUsd;
+  const usd = room * rates.prompt + cacheRead * readRate + outputUsd;
   return Number.isFinite(usd) && usd > 0 && usd < 500 ? usd : 0;
 }
 
@@ -532,6 +535,16 @@ async function refreshIdToken(refreshToken: string): Promise<{ idToken: string; 
   return { idToken: String(data.id_token), expiresIn: Number(data.expires_in || 3600) };
 }
 
+/** Signed-in email plus a Firebase id token refreshed when near expiry. */
+export async function freshIdSession(): Promise<{ idToken: string; email: string } | null> {
+  const idToken = await validIdToken();
+  if (!idToken) {
+    return null;
+  }
+  const session = await loadSession();
+  return { idToken, email: String(session?.user?.email || '') };
+}
+
 async function validIdToken(): Promise<string | null> {
   const session = await loadSession();
   if (!session?.refreshToken) {
@@ -584,6 +597,7 @@ type QuotaDecision = {
 };
 
 let quotaCache: QuotaDecision | null = null;
+const lastDecisionByEmail = new Map<string, QuotaDecision>();
 
 function signInMessage(): string {
   return 'Sign in to OLKIL to use cloud models. Local Ollama still works.';
@@ -733,32 +747,39 @@ export async function getDeepseekAccess(): Promise<DeepseekAccess> {
   let cloudLocked = false;
   let message = '';
 
-  const fromEmail = await quotaFromEmailFallback();
-  if (fromEmail) {
-    applyCache(fromEmail);
-    isPaid = fromEmail.isPaid || isPaidPlanName(fromEmail.plan);
-    if (!fromEmail.allowed && (isPaid || fromEmail.reason === 'quota_exceeded')) {
-      cloudLocked = true;
-      message = fromEmail.message || usedUpMessage();
-    }
-  } else {
+  const emailKey = email.toLowerCase();
+  let decision: QuotaDecision | null = signedIn ? await quotaFromEmailFallback() : null;
+  if (!decision && signedIn) {
     const token = await validIdToken();
     if (token) {
       try {
-        const decision = applyCache(await fetchQuotaDecision(token));
-        isPaid = decision.isPaid || isPaidPlanName(decision.plan);
-        if (!decision.allowed && (isPaid || decision.reason === 'quota_exceeded')) {
-          cloudLocked = true;
-          message = decision.message || usedUpMessage();
+        const fetched = await fetchQuotaDecision(token);
+        if (fetched.reason !== 'quota_unavailable') {
+          decision = fetched;
         }
       } catch {
-        // keep defaults
+        // fall through to the last answer for this account
       }
+    }
+  }
+  if (decision) {
+    lastDecisionByEmail.set(emailKey, decision);
+  } else if (signedIn) {
+    decision = lastDecisionByEmail.get(emailKey) || null;
+  }
+  if (decision) {
+    applyCache(decision);
+    isPaid = decision.isPaid || isPaidPlanName(decision.plan);
+    if (!decision.allowed && (isPaid || decision.reason === 'quota_exceeded')) {
+      cloudLocked = true;
+      message = decision.message || usedUpMessage();
     }
   }
 
   return {
     signedIn,
+    email,
+    verified: Boolean(decision),
     isPaid,
     used,
     limit: FREE_DEEPSEEK_TOKENS,
@@ -779,6 +800,13 @@ export async function assertOlkilWallet(provider: AiProviderId): Promise<void> {
     throw new OlkilWalletError(signInMessage(), 'auth_required');
   }
 
+  if (!access.verified) {
+    throw new OlkilWalletError(
+      'Could not reach olkil.com to check your plan. Check your internet connection and retry. Local Ollama still works.',
+      'quota_unavailable',
+    );
+  }
+
   // Unpaid: local Ollama only. Auto is OpenRouter — never free.
   if (!access.isPaid) {
     if (provider === 'deepseek') {
@@ -788,7 +816,7 @@ export async function assertOlkilWallet(provider: AiProviderId): Promise<void> {
       return;
     }
     throw new OlkilWalletError(
-      'Cloud Auto models need an OLKIL Lite, Pro, or Ultra plan with remaining credit. Local Ollama still works.',
+      `${access.email} is on the Free plan. Cloud models need an OLKIL Lite, Pro, or Ultra plan — buy one, or sign out and sign in with the account that has your plan. Local Ollama still works.`,
       'plan_required',
     );
   }

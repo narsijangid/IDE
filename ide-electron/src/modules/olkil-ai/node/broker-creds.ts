@@ -2,6 +2,7 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import fetch from 'node-fetch';
+import { freshIdSession } from './olkil-wallet.service';
 
 const BILLING = (process.env.OLKIL_BILLING_URL || 'https://olkil.com').replace(/\/$/, '');
 
@@ -19,6 +20,8 @@ export interface BrokerCreds {
 }
 
 let cache: BrokerCreds | null = null;
+/** Account the cached grant was issued to; a different sign-in must not reuse it. */
+let cacheEmail = '';
 
 /** Company pool keys must never be used, stored, or sent by the desktop app. */
 export function isUpstreamProviderKey(value: string): boolean {
@@ -36,6 +39,9 @@ export function cachedBroker(): BrokerCreds | null {
   if (!cache.baseURL.includes('/olkil-payu/v1/broker/')) {
     return null;
   }
+  if (cacheEmail !== (readStoredSession()?.email || '').toLowerCase()) {
+    return null;
+  }
   return cache;
 }
 
@@ -48,7 +54,7 @@ function sessionFiles(): string[] {
   return dirs.map((dir) => path.join(dir, 'auth-session.json'));
 }
 
-async function readIdToken(): Promise<{ idToken: string; email: string } | null> {
+function readStoredSession(): { idToken: string; email: string } | null {
   for (const file of sessionFiles()) {
     try {
       const session = JSON.parse(fs.readFileSync(file, 'utf8')) as {
@@ -88,14 +94,16 @@ function accept(json: Record<string, unknown> | null): BrokerCreds | null {
 
 /**
  * Ask OLKIL for a broker grant. A response that contains a provider key is ignored.
+ * Firebase id tokens live one hour, so the grant request always uses a refreshed token.
  */
 export async function ensureOpenRouterBroker(): Promise<BrokerCreds | null> {
   const hit = cachedBroker();
   if (hit) {
     return hit;
   }
-  const session = await readIdToken();
+  const session = (await freshIdSession().catch(() => null)) || readStoredSession();
   if (!session) {
+    cache = null;
     return null;
   }
   const body = JSON.stringify({ id_token: session.idToken, email: session.email });
@@ -115,6 +123,7 @@ export async function ensureOpenRouterBroker(): Promise<BrokerCreds | null> {
       const creds = accept((await res.json().catch(() => null)) as Record<string, unknown> | null);
       if (creds) {
         cache = creds;
+        cacheEmail = session.email.toLowerCase();
         return creds;
       }
     } catch {

@@ -119,7 +119,7 @@ export function buildOpencodeConfigContent(
     permission: {
       edit: 'allow',
       bash: 'ask',
-      webfetch: 'allow',
+      webfetch: 'ask',
       doom_loop: 'allow',
       external_directory: 'deny',
     },

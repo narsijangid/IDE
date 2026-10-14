@@ -81,7 +81,7 @@ import { EMBEDDED_ENV } from './embedded-secrets';
 import { cachedBroker, ensureOpenRouterBroker } from './broker-creds';
 import { CommandRunner } from './command-runner';
 import { getOlkilAgentRuntime } from './agent-runtime';
-import type { ClineEngineRunRequest, ClineEngineRunState } from '../common';
+import type { ClineEngineRunRequest, ClineEngineRunState, EnginePermissionResponse } from '../common';
 import { listDiscoveredMcpServers as discoverMcpServers } from './mcp-discover';
 import {
   assertOlkilWallet,
@@ -489,6 +489,10 @@ export class OlkilAiNodeService implements IOlkilAiNodeService {
 
   async clineCancel(runId: string): Promise<boolean> {
     return getOlkilAgentRuntime().cancel(runId);
+  }
+
+  async clinePermissionReply(runId: string, permissionId: string, response: EnginePermissionResponse): Promise<boolean> {
+    return getOlkilAgentRuntime().replyPermission(runId, permissionId, response);
   }
 
   listDiscoveredMcpServers(workspaceRoot?: string): Promise<DiscoveredMcpServer[]> {

@@ -16,6 +16,8 @@ import {
   ChatToolCall,
   FileChangeInfo,
   FileChangeKind,
+  EnginePermissionRequest,
+  EnginePermissionResponse,
   IOlkilAiNodeService,
   IOlkilChatService,
   OlkilAiNodeServicePath,
@@ -23,6 +25,7 @@ import {
   QueuedChatMessage,
   UiChatMessage,
 } from '../common';
+import { mergeAllowlist } from '../common/command-permission';
 import { AI_MODELS, DEFAULT_MODEL_ID, findModel, publicModelName, applyCustomModelEndpoints, applyOpenRouterExtraModels, customModelCatalogId, isCustomProvider, isMeteredCloudProvider, isRetiredOlkilModel } from '../common/models';
 import { isAutoModelId } from '../common/auto-router';
 import {
@@ -242,6 +245,7 @@ export class OlkilChatService extends Disposable implements IOlkilChatService {
 
   queuedMessages: QueuedChatMessage[] = [];
   agentTodos: AgentTodoItem[] = [];
+  pendingPermission: (EnginePermissionRequest & { queued: number }) | null = null;
   checkpoints: Array<{ id: string; label: string; createdAt: number }> = [];
   private checkpointSnapshots = new Map<
     string,
@@ -314,10 +318,11 @@ export class OlkilChatService extends Disposable implements IOlkilChatService {
         await this.refreshOllamaStatus();
       } else {
         this.ollamaDownload = { phase: 'idle', percent: 0, message: '' };
-        if (!isCustomProvider(option.provider)) {
+        await this.auth.getValidIdToken().catch(() => null);
+        if (!isCustomProvider(option.provider) && this.auth.isSignedIn()) {
           const ok = await this.aiNode.hasApiKey(option.provider);
-          if (!ok) {
-            this.pushUi('status', 'Could not connect to OLKIL cloud models. Sign in and check your internet connection.');
+          if (!ok && this.auth.isSignedIn()) {
+            this.pushUi('status', 'Could not connect to OLKIL cloud models. Check your internet connection, then send again.');
           }
         }
       }
@@ -814,12 +819,43 @@ export class OlkilChatService extends Disposable implements IOlkilChatService {
     this.fire();
   }
 
+  async replyPermission(id: string, response: EnginePermissionResponse): Promise<void> {
+    const pending = this.pendingPermission;
+    const runId = this.activeClineRunId;
+    if (!pending || pending.id !== id || !runId) {
+      return;
+    }
+    this.pendingPermission = null;
+    this.setStatus(response === 'reject' ? 'Planning next move' : pending.kind === 'web' ? 'Fetching' : 'Running command');
+    this.fire();
+    if (response === 'always') {
+      this.rememberAlwaysAllow(pending);
+    }
+    await this.aiNode.clinePermissionReply(runId, id, response).catch(() => false);
+  }
+
+  private rememberAlwaysAllow(request: EnginePermissionRequest): void {
+    const saved = this.settings.get();
+    if (request.kind === 'web') {
+      this.settings.patch({ autoApproveWeb: true });
+    } else if (request.gate === 'gitPush') {
+      this.settings.patch({ gitAllowPush: true });
+    } else if (request.gate === 'gitCommit') {
+      this.settings.patch({ gitAllowCommit: true });
+    } else if (request.gate === 'gitPr') {
+      this.settings.patch({ gitAllowPr: true });
+    } else if (request.always?.targets.length) {
+      this.settings.patch({ terminalAllowlist: mergeAllowlist(saved.terminalAllowlist, request.always.targets) });
+    }
+  }
+
   stop() {
     this.cancelRequested = true;
     const runId = this.activeClineRunId;
     if (runId) {
       void this.aiNode.clineCancel(runId).catch(() => undefined);
     }
+    this.pendingPermission = null;
     this.completeOpenActivities();
     this.status = 'Stopped';
     this.busy = false;
@@ -2656,14 +2692,9 @@ Read the highest-scoring evidence in trail order. For a bug, trace UI → handle
    * Live tools / thinking / file-change cards surface in the Olkil chat UI.
    */
   private async runClineEngine(pendingId: string, prompt: string): Promise<string> {
+    // No folder open: the node runtime uses an empty scratch directory (never
+    // the IDE codebase) and tells the agent to answer in chat.
     const workspaceRoot = this.workspaceRoot();
-    // No folder open: never fall back to the IDE codebase. Soft ask only when
-    // the user wants project edits; basic Q&A can still answer in chat.
-    if (!workspaceRoot) {
-      if (this.wantsProjectFolder(prompt)) {
-        return 'Please open your project folder in OLKIL first (File → Open Folder), then ask me again and I’ll work only inside that folder.';
-      }
-    }
 
     const runId = `olkil_${Date.now()}_${++msgSeq}`;
     this.activeClineRunId = runId;
@@ -2686,6 +2717,10 @@ Read the highest-scoring evidence in trail order. For a bug, trace UI → handle
       autoApproveWeb: this.chatMode === 'agent' && saved.autoApproveWeb,
       terminalAutoRun: this.chatMode === 'agent' ? saved.terminalAutoRun : 'never',
       terminalAllowlist: saved.terminalAllowlist,
+      askPermissions: true,
+      gitAllowCommit: saved.gitAllowCommit,
+      gitAllowPush: saved.gitAllowPush,
+      gitAllowPr: saved.gitAllowPr,
       mcpServers: saved.mcpServers
         .filter((server) => server.enabled)
         .map((server) => ({
@@ -2753,6 +2788,11 @@ Read the highest-scoring evidence in trail order. For a bug, trace UI → handle
     };
 
     const applyState = async (st: Awaited<ReturnType<IOlkilAiNodeService['clineGetState']>>) => {
+      const ask = !st.done && st.permission ? { ...st.permission, queued: st.permissionQueued || 0 } : null;
+      if ((ask?.id || '') !== (this.pendingPermission?.id || '') || (ask?.queued || 0) !== (this.pendingPermission?.queued || 0)) {
+        this.pendingPermission = ask;
+        this.fire();
+      }
       if (st.done) {
         this.setStatus('');
       } else {
@@ -2944,6 +2984,10 @@ Read the highest-scoring evidence in trail order. For a bug, trace UI → handle
       await this.aiNode.clineCancel(runId);
       return (lastText || '').trim() || 'Stopped.';
     } finally {
+      if (this.pendingPermission) {
+        this.pendingPermission = null;
+        this.fire();
+      }
       if (explorerRefreshTimer) {
         clearTimeout(explorerRefreshTimer);
         explorerRefreshTimer = null;
@@ -5732,14 +5776,6 @@ Read the highest-scoring evidence in trail order. For a bug, trace UI → handle
   }
 
   /** True when the user is asking to create/edit files in a project. */
-  private wantsProjectFolder(text: string): boolean {
-    if (this.requiresImplementation(text)) return true;
-    const t = (text || '').toLowerCase();
-    return /\b(landing\s*page|website|webpage|html|css|react|next\.?js|folder|project|file|code|create|build|make|write|add|edit|fix|update)\b/i.test(
-      t,
-    );
-  }
-
   private isIdeInstallPath(candidate: string): boolean {
     const n = path.resolve(candidate).replace(/\\/g, '/').toLowerCase();
     if (n.includes('/ide-electron/') || n.endsWith('/ide-electron')) return true;

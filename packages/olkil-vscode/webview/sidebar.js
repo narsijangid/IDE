@@ -121,6 +121,13 @@ const state = {
   pocketCode: '',
   pocketError: '',
   remoteAccess: false,
+  /** Shell / web requests waiting on Allow or Reject (oldest first) */
+  permissions: [],
+  settingsOpen: false,
+  /** { account, values, version } from the host */
+  settings: null,
+  /** The user picked Agent/Ask this session, so the default mode no longer applies */
+  modeTouched: false,
 };
 
 function ensureVoChat(workerId) {
@@ -706,6 +713,16 @@ function render(opts) {
   const typing = typingId === 'input' || typingId === 'cModel' || typingId === 'cBase' || typingId === 'cKey' || typingId === 'modelSearch';
   // Actively typing in Ask box: never remount chat (restarts phase-shine / live loaders → blink).
   // After a short pause, the quiet timer flushes pending updates with caret restored.
+  // Settings fields keep their own value while focused; a remount would drop the caret.
+  if (
+    state.settingsOpen &&
+    active &&
+    active.closest &&
+    active.closest('.settings') &&
+    /^(INPUT|TEXTAREA)$/.test(active.tagName)
+  ) {
+    return;
+  }
   const activelyTyping = typingId === 'input' && Date.now() < inputTypingUntil;
   if (activelyTyping && document.querySelector('.composer')) {
     if (active && typeof active.value === 'string') state.draft = active.value;
@@ -732,12 +749,21 @@ function render(opts) {
         state.virtualOffice ? 'Dev Studio' : 'Vertual Office'
       }">${state.virtualOffice ? 'Dev Studio' : 'Vertual Office'}</button>
       <span class="plan">${escapeHtml(planLabel() || (state.signedIn ? name : 'Sign in'))}</span>
+      <button type="button" class="icon-btn${state.settingsOpen ? ' on' : ''}" id="settingsBtn" title="Settings" aria-label="Settings">${GEAR_SVG}</button>
     </div>`,
   );
   app.appendChild(top);
   top.querySelector('#voBtn').addEventListener('click', () => {
     vscode.postMessage({ type: 'toggleVirtualOffice' });
   });
+  top.querySelector('#settingsBtn').addEventListener('click', () => {
+    if (state.settingsOpen) closeSettings();
+    else vscode.postMessage({ type: 'openSettings' });
+  });
+  if (state.settingsOpen && state.settings) {
+    app.appendChild(renderSettings());
+    return;
+  }
 
   const remote = el(`<div class="remote-row${state.remoteAccess ? ' on' : ''}">
     <button type="button" class="switch${state.remoteAccess ? ' on' : ''}" id="remoteBtn" role="switch" aria-checked="${state.remoteAccess ? 'true' : 'false'}" title="Keep the screen on while Cursor is open"><i></i></button>
@@ -1034,6 +1060,7 @@ function render(opts) {
       </div>
     </div>
   </div>`);
+  if (state.permissions.length && !state.virtualOffice) app.appendChild(renderPermissionCard(state.permissions[0]));
   app.appendChild(composer);
 
   if (review && state.reviewOpen) {
@@ -1080,6 +1107,7 @@ function render(opts) {
     btn.addEventListener('click', (e) => {
       e.stopPropagation();
       state.chatMode = btn.getAttribute('data-mode') === 'ask' ? 'ask' : 'agent';
+      state.modeTouched = true;
       state.modeMenu = false;
       render({ keepFocus: true });
     });
@@ -2377,6 +2405,266 @@ function showRemoteQr(url) {
   document.body.appendChild(node);
 }
 
+const IS_MAC = /Mac|iPhone|iPad/i.test(navigator.platform || '');
+const SVG_ATTRS = 'viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"';
+const GEAR_SVG = `<svg ${SVG_ATTRS}><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg>`;
+const BACK_SVG = `<svg ${SVG_ATTRS}><path d="M15 18l-6-6 6-6"/></svg>`;
+const TERMINAL_SVG = `<svg ${SVG_ATTRS}><rect x="3" y="4.5" width="18" height="15" rx="2.5"/><path d="M7 9.5l3 2.5-3 2.5M12.5 15h4.5"/></svg>`;
+const GLOBE_SVG = `<svg ${SVG_ATTRS}><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3c2.5 2.6 3.8 5.6 3.8 9s-1.3 6.4-3.8 9c-2.5-2.6-3.8-5.6-3.8-9S9.5 5.6 12 3z"/></svg>`;
+const SHIELD_SVG = `<svg ${SVG_ATTRS}><path d="M12 3.5l7 3v5.3c0 4.2-2.9 7.1-7 8.7-4.1-1.6-7-4.5-7-8.7V6.5z"/><path d="M12 8.5v4M12 15.5h.01"/></svg>`;
+
+function answerPermission(id, response) {
+  state.permissions = state.permissions.filter((p) => p.id !== id);
+  if (!state.permissions.length && /approval/i.test(state.phase || '')) {
+    state.phase = state.busy ? 'Planning next moves' : '';
+  }
+  vscode.postMessage({ type: 'permissionReply', id, response });
+  render({ keepFocus: true });
+}
+
+function permissionTitle(p) {
+  if (p.kind === 'web') return 'Allow web request?';
+  if (p.gate === 'destructive') return 'Run destructive command?';
+  if (p.gate === 'gitPush') return 'Push to the remote?';
+  if (p.gate === 'gitCommit') return 'Create a git commit?';
+  if (p.gate === 'gitPr') return 'Open a pull request?';
+  return 'Run this command?';
+}
+
+function renderPermissionCard(p) {
+  const isWeb = p.kind === 'web';
+  const danger = p.gate === 'destructive';
+  const title = permissionTitle(p);
+  const badge = danger
+    ? '<span class="perm-badge danger">Destructive</span>'
+    : String(p.gate || '').indexOf('git') === 0
+      ? '<span class="perm-badge">Git</span>'
+      : '';
+  const waiting = Math.max(state.permissions.length - 1, p.queued || 0);
+  const more = waiting ? `<span class="perm-more">+${waiting} queued</span>` : '';
+  const always = p.always;
+  const alwaysHtml = always
+    ? `<button type="button" class="perm-always" id="permAlways" title="Don't ask again">${escapeHtml(always.label)}${(always.targets || [])
+        .map((t) => ` <code>${escapeHtml(t)}</code>`)
+        .join('')}</button>`
+    : '';
+  const lines = String(p.detail || '').split('\n').filter((l) => l.trim());
+  const body = lines.length
+    ? lines
+        .map((l) => `${isWeb ? '' : '<span class="perm-prompt">$</span>'}${escapeHtml(l)}`)
+        .join('\n')
+    : escapeHtml(isWeb ? 'Fetch a URL' : 'Run a shell command');
+  const card = el(`<div class="perm-card${danger ? ' danger' : ''}" role="alertdialog" aria-label="${escapeHtml(title)}">
+    <div class="perm-head">
+      <span class="perm-icon" aria-hidden="true">${danger ? SHIELD_SVG : isWeb ? GLOBE_SVG : TERMINAL_SVG}</span>
+      <span class="perm-title">${escapeHtml(title)}</span>
+      ${badge}${more}
+    </div>
+    <pre class="perm-cmd">${body}</pre>
+    <div class="perm-actions">
+      ${alwaysHtml}
+      <span class="perm-spacer"></span>
+      <button type="button" class="perm-reject" id="permReject">Reject</button>
+      <button type="button" class="perm-allow" id="permAllow" title="${IS_MAC ? '⌘' : 'Ctrl'}+Enter">${isWeb ? 'Allow' : 'Run'}<kbd>${IS_MAC ? '⌘' : 'Ctrl'}⏎</kbd></button>
+    </div>
+  </div>`);
+  card.querySelector('#permAllow').addEventListener('click', () => answerPermission(p.id, 'once'));
+  card.querySelector('#permReject').addEventListener('click', () => answerPermission(p.id, 'reject'));
+  const alwaysBtn = card.querySelector('#permAlways');
+  if (alwaysBtn) alwaysBtn.addEventListener('click', () => answerPermission(p.id, 'always'));
+  return card;
+}
+
+function closeSettings() {
+  state.settingsOpen = false;
+  vscode.postMessage({ type: 'closeSettings' });
+  render();
+}
+
+function setSetting(key, value) {
+  if (state.settings && state.settings.values) state.settings.values[key] = value;
+  vscode.postMessage({ type: 'setSetting', key, value });
+}
+
+function setRow(title, desc, control) {
+  return `<div class="set-row">
+    <div class="set-text"><div class="set-title">${escapeHtml(title)}</div>${desc ? `<div class="set-desc">${escapeHtml(desc)}</div>` : ''}</div>
+    <div class="set-control">${control}</div>
+  </div>`;
+}
+
+function setSwitch(key, on) {
+  return `<button type="button" class="switch${on ? ' on' : ''}" data-switch="${key}" role="switch" aria-checked="${on ? 'true' : 'false'}"><i></i></button>`;
+}
+
+function setSegmented(key, value, options) {
+  return `<div class="seg" role="radiogroup">${options
+    .map(
+      (o) =>
+        `<button type="button" class="seg-btn${o.id === value ? ' on' : ''}" data-seg="${key}" data-val="${o.id}" role="radio" aria-checked="${o.id === value ? 'true' : 'false'}">${escapeHtml(o.label)}</button>`,
+    )
+    .join('')}</div>`;
+}
+
+const AUTO_RUN_HINT = {
+  always: 'Runs every command without asking. Destructive commands (rm -rf, git reset --hard, …) still ask.',
+  allowlist: 'Runs commands on your allowlist. Anything else shows Run / Reject first.',
+  never: 'Asks before every command.',
+};
+
+function renderSettings() {
+  const s = state.settings || {};
+  const v = s.values || {};
+  const a = s.account || {};
+  const initial = (String(a.name || a.email || '?').trim()[0] || '?').toUpperCase();
+  const models = (state.models || []).filter((m) => m.id !== 'custom');
+  const modelOptions = models
+    .map((m) => `<option value="${escapeHtml(m.id)}"${m.id === state.modelId ? ' selected' : ''}>${escapeHtml(m.label)}</option>`)
+    .join('');
+  const account = a.signedIn
+    ? `<div class="acct-row">
+        <span class="acct-avatar">${escapeHtml(initial)}</span>
+        <div class="acct-text">
+          <div class="acct-name">${escapeHtml(a.name || a.email || 'Signed in')}</div>
+          <div class="acct-mail">${escapeHtml(a.email || '')}</div>
+        </div>
+        <span class="acct-plan${a.paid ? ' paid' : ''}">${escapeHtml(a.plan || 'Free')}</span>
+      </div>
+      ${a.left ? `<div class="acct-left">${escapeHtml(a.left)}</div>` : ''}
+      <div class="acct-actions">
+        <button type="button" class="ghost" id="setPlan">${a.paid ? 'Manage plan' : 'Upgrade'}</button>
+        <button type="button" class="ghost danger" id="setSignOut">Log out</button>
+      </div>`
+    : `<div class="acct-row">
+        <span class="acct-avatar">?</span>
+        <div class="acct-text">
+          <div class="acct-name">Not signed in</div>
+          <div class="acct-mail">Use your olkil.com account</div>
+        </div>
+      </div>
+      <div class="acct-actions"><button type="button" class="primary" id="setSignIn">Log in</button></div>`;
+  const root = el(`<div class="settings">
+    <div class="set-head">
+      <button type="button" class="icon-btn" id="setBack" title="Back to chat" aria-label="Back to chat">${BACK_SVG}</button>
+      <span class="set-heading">Settings</span>
+    </div>
+    <div class="set-scroll">
+      <div class="set-group">Account</div>
+      <section class="set-card set-account">${account}</section>
+
+      <div class="set-group">Agent</div>
+      <section class="set-card">
+        ${setRow('Default mode', 'Used for new chats.', setSegmented('defaultMode', v.defaultMode || 'agent', [
+          { id: 'agent', label: 'Agent' },
+          { id: 'ask', label: 'Ask' },
+        ]))}
+        ${models.length ? setRow('Model', 'Model for new messages.', `<select class="set-select" id="setModel">${modelOptions}</select>`) : ''}
+      </section>
+
+      <div class="set-group">Terminal &amp; permissions</div>
+      <section class="set-card">
+        <div class="set-row set-row-stack">
+          <div class="set-text"><div class="set-title">Auto-run commands</div><div class="set-desc">${escapeHtml(AUTO_RUN_HINT[v.autoRun] || AUTO_RUN_HINT.allowlist)}</div></div>
+          ${setSegmented('autoRun', v.autoRun || 'allowlist', [
+            { id: 'always', label: 'Always' },
+            { id: 'allowlist', label: 'Allowlist' },
+            { id: 'never', label: 'Ask every time' },
+          ])}
+        </div>
+        <div class="set-block">
+          <div class="set-block-head"><span class="set-title">Command allowlist</span><button type="button" class="link-btn" id="setResetAllow">Reset</button></div>
+          <textarea class="set-textarea" id="setAllowlist" spellcheck="false" rows="6">${escapeHtml((v.allowlist || []).join('\n'))}</textarea>
+          <div class="set-desc">One prefix per line. <code>npm install</code> also allows <code>npm install react</code>. "Always allow" on a prompt adds to this list.</div>
+        </div>
+        ${setRow('Web fetch', 'Fetch public URLs for docs and APIs without asking.', setSwitch('webFetch', v.webFetch !== false))}
+      </section>
+
+      <div class="set-group">Git</div>
+      <section class="set-card">
+        ${setRow('Commit without asking', 'git commit', setSwitch('allowCommit', v.allowCommit !== false))}
+        ${setRow('Push without asking', 'git push', setSwitch('allowPush', !!v.allowPush))}
+        ${setRow('Pull requests without asking', 'gh pr create / glab mr create', setSwitch('allowPr', !!v.allowPr))}
+      </section>
+
+      <div class="set-group">Editor</div>
+      <section class="set-card">
+        ${setRow('Font size', '', `<input class="set-num" type="number" min="8" max="32" data-num="editorFontSize" value="${Number(v.editorFontSize) || 14}" />`)}
+        ${setRow('Tab size', '', `<input class="set-num" type="number" min="1" max="8" data-num="editorTabSize" value="${Number(v.editorTabSize) || 4}" />`)}
+        ${setRow('Word wrap', '', setSegmented('editorWordWrap', v.editorWordWrap || 'off', [
+          { id: 'off', label: 'Off' },
+          { id: 'on', label: 'On' },
+        ]))}
+        ${setRow('Minimap', '', setSwitch('editorMinimap', v.editorMinimap !== false))}
+        ${setRow('Format on save', '', setSwitch('editorFormatOnSave', !!v.editorFormatOnSave))}
+      </section>
+
+      <div class="set-group">Privacy &amp; remote</div>
+      <section class="set-card">
+        ${setRow('Keep chat history', 'Sync your last 3 chats for 48 hours.', setSwitch('keepChatHistory', v.keepChatHistory !== false))}
+        ${setRow('Remote Access', 'Keep this screen awake and reachable from your phone.', setSwitch('remoteAccess', !!state.remoteAccess))}
+      </section>
+
+      <div class="set-group">About</div>
+      <section class="set-card">
+        ${setRow('OLKIL', s.version ? 'Version ' + s.version : '', '<button type="button" class="link-btn" data-url="https://olkil.com">olkil.com</button>')}
+        ${setRow('Plans & pricing', '', '<button type="button" class="link-btn" data-url="https://olkil.com/pricing/">Open</button>')}
+      </section>
+    </div>
+  </div>`);
+
+  root.querySelector('#setBack').addEventListener('click', closeSettings);
+  root.addEventListener('click', (e) => {
+    const target = e.target;
+    const seg = target.closest && target.closest('[data-seg]');
+    if (seg) {
+      setSetting(seg.getAttribute('data-seg'), seg.getAttribute('data-val'));
+      render();
+      return;
+    }
+    const sw = target.closest && target.closest('[data-switch]');
+    if (sw) {
+      const key = sw.getAttribute('data-switch');
+      if (key === 'remoteAccess') {
+        vscode.postMessage({ type: 'toggleRemoteAccess' });
+        return;
+      }
+      const values = (state.settings && state.settings.values) || {};
+      const current = key === 'webFetch' || key === 'allowCommit' || key === 'keepChatHistory' || key === 'editorMinimap'
+        ? values[key] !== false
+        : !!values[key];
+      setSetting(key, !current);
+      render();
+      return;
+    }
+    const link = target.closest && target.closest('[data-url]');
+    if (link) vscode.postMessage({ type: 'openUrl', url: link.getAttribute('data-url') });
+  });
+  root.querySelectorAll('[data-num]').forEach((input) => {
+    input.addEventListener('change', () => setSetting(input.getAttribute('data-num'), Number(input.value)));
+  });
+  const allow = root.querySelector('#setAllowlist');
+  allow.addEventListener('change', () => {
+    setSetting('allowlist', allow.value.split(/\r?\n/).map((l) => l.trim()).filter(Boolean));
+  });
+  root.querySelector('#setResetAllow').addEventListener('click', () => {
+    vscode.postMessage({ type: 'setSetting', key: 'resetAllowlist', value: true });
+  });
+  const modelSel = root.querySelector('#setModel');
+  if (modelSel) {
+    modelSel.addEventListener('change', () => {
+      state.modelId = modelSel.value;
+      vscode.postMessage({ type: 'setModel', modelId: modelSel.value });
+    });
+  }
+  const plan = root.querySelector('#setPlan');
+  if (plan) plan.addEventListener('click', () => vscode.postMessage({ type: 'openUrl', url: 'https://olkil.com/pricing/' }));
+  const signOut = root.querySelector('#setSignOut');
+  if (signOut) signOut.addEventListener('click', () => vscode.postMessage({ type: 'signOut' }));
+  const signIn = root.querySelector('#setSignIn');
+  if (signIn) signIn.addEventListener('click', () => vscode.postMessage({ type: 'signIn' }));
+  return root;
+}
+
 function escapeHtml(s) {
   return String(s || '')
     .replace(/&/g, '&amp;')
@@ -2402,6 +2690,7 @@ window.addEventListener('message', (event) => {
     if (typeof msg.pocketCode === 'string') state.pocketCode = msg.pocketCode;
     if (typeof msg.pocketError === 'string') state.pocketError = msg.pocketError;
     if (typeof msg.remoteAccess === 'boolean') state.remoteAccess = msg.remoteAccess;
+    if (msg.defaultMode && !state.modeTouched) state.chatMode = msg.defaultMode === 'ask' ? 'ask' : 'agent';
     if (msg.voAssignee) state.voAssignee = msg.voAssignee;
     if (Array.isArray(msg.voAssignees)) state.voAssignees = msg.voAssignees;
     if (Array.isArray(msg.voRunning)) state.voRunning = msg.voRunning;
@@ -2424,6 +2713,36 @@ window.addEventListener('message', (event) => {
       }
     }
     render({ keepFocus: true });
+  } else if (msg.type === 'permission') {
+    if (!msg.id) return;
+    const known = state.permissions.find((p) => p.id === msg.id);
+    if (known) {
+      known.queued = Number(msg.queued) || 0;
+      render({ keepFocus: true });
+      return;
+    }
+    state.permissions.push({
+      id: String(msg.id),
+      kind: msg.kind === 'web' ? 'web' : 'command',
+      detail: String(msg.detail || ''),
+      gate: String(msg.gate || ''),
+      always: msg.always || null,
+      queued: Number(msg.queued) || 0,
+    });
+    if (state.busy || state.phase) state.phase = 'Waiting for your approval';
+    render({ keepFocus: true });
+  } else if (msg.type === 'permissionClear') {
+    const before = state.permissions.length;
+    state.permissions = msg.all ? [] : state.permissions.filter((p) => p.id !== msg.id);
+    if (before === state.permissions.length) return;
+    if (!state.permissions.length && /approval/i.test(state.phase || '')) {
+      state.phase = state.busy ? 'Planning next moves' : '';
+    }
+    render({ keepFocus: true });
+  } else if (msg.type === 'settings') {
+    state.settings = { account: msg.account || {}, values: msg.values || {}, version: msg.version || '' };
+    if (msg.open) state.settingsOpen = true;
+    if (state.settingsOpen) render({ keepFocus: true });
   } else if (msg.type === 'remoteQr') {
     if (msg.open && msg.url) showRemoteQr(String(msg.url));
     else hideRemoteQr();
@@ -2671,6 +2990,19 @@ window.addEventListener('message', (event) => {
     render();
   }
 });
+
+document.addEventListener(
+  'keydown',
+  (ev) => {
+    if (!state.permissions.length || state.virtualOffice || state.settingsOpen) return;
+    if (ev.key === 'Enter' && (ev.ctrlKey || ev.metaKey) && !ev.shiftKey && !ev.altKey) {
+      ev.preventDefault();
+      ev.stopPropagation();
+      answerPermission(state.permissions[0].id, 'once');
+    }
+  },
+  true,
+);
 
 render();
 vscode.postMessage({ type: 'ready' });

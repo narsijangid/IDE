@@ -2,7 +2,7 @@
   "name": "olkil",
   "displayName": "OLKIL AI Code Editor",
   "description": "OLKIL AI Code Editor for VS Code — AI coding agent, chat, autocomplete alternative, and pair programmer. Write, debug, refactor, and ship faster. Cursor alternative, Copilot alternative, Claude Code alternative, Codex alternative in Visual Studio Code.",
-  "version": "1.0.93",
+  "version": "1.0.94",
   "publisher": "OLKIL",
   "license": "UNLICENSED",
   "icon": "media/icon.png",
@@ -92,6 +92,12 @@
         "category": "OLKIL"
       },
       {
+        "command": "olkil.settings.open",
+        "title": "Settings",
+        "category": "OLKIL",
+        "icon": "$(gear)"
+      },
+      {
         "command": "olkil.openWebsite",
         "title": "OLKIL: Open olkil.com"
       },
@@ -153,9 +159,14 @@
           "group": "navigation@2"
         },
         {
+          "command": "olkil.settings.open",
+          "when": "view == olkil.sidebar",
+          "group": "navigation@3"
+        },
+        {
           "command": "olkil.signOut",
           "when": "view == olkil.sidebar && olkil.signedIn",
-          "group": "navigation@3"
+          "group": "navigation@4"
         }
       ],
       "editor/title": [
@@ -209,6 +220,62 @@
           "type": "string",
           "default": "https://olkil.com",
           "description": "OLKIL account origin used for sign-in and plan checks."
+        },
+        "olkil.chat.defaultMode": {
+          "type": "string",
+          "enum": ["agent", "ask"],
+          "enumDescriptions": ["Edit files and run commands", "Answer only, no tools"],
+          "default": "agent",
+          "description": "Mode for new chats."
+        },
+        "olkil.terminal.autoRun": {
+          "type": "string",
+          "enum": ["always", "allowlist", "never"],
+          "enumDescriptions": [
+            "Run every command without asking (destructive commands still ask)",
+            "Run allowlisted commands; ask for everything else",
+            "Ask before every command"
+          ],
+          "default": "allowlist",
+          "description": "When the agent may run terminal commands without asking."
+        },
+        "olkil.terminal.allowlist": {
+          "type": "array",
+          "items": { "type": "string" },
+          "default": [
+            "git status", "git diff", "git log", "git show", "git branch", "git rev-parse",
+            "ls", "dir", "pwd", "cd", "echo", "cat", "type", "head", "tail", "wc", "tree", "rg", "grep", "findstr",
+            "where", "which", "Get-ChildItem", "Get-Content", "Get-Location", "Test-Path", "Select-String",
+            "Select-Object", "Sort-Object", "Measure-Object", "node -v", "node --version", "npm -v", "npm --version",
+            "npm ls", "npm view", "npm test", "npm run test", "npm run lint", "yarn test", "pnpm test",
+            "python --version", "tsc --noEmit", "npx tsc --noEmit"
+          ],
+          "description": "Command prefixes the agent may run without asking. \"npm install\" allows \"npm install anything\"."
+        },
+        "olkil.permissions.webFetch": {
+          "type": "boolean",
+          "default": true,
+          "description": "Let the agent fetch public URLs (docs, APIs) without asking."
+        },
+        "olkil.git.allowCommit": {
+          "type": "boolean",
+          "default": true,
+          "description": "Let the agent run git commit without asking."
+        },
+        "olkil.git.allowPush": {
+          "type": "boolean",
+          "default": false,
+          "description": "Let the agent run git push without asking."
+        },
+        "olkil.git.allowPullRequest": {
+          "type": "boolean",
+          "default": false,
+          "description": "Let the agent open pull requests (gh / glab) without asking."
+        },
+        "olkil.privacy.keepChatHistory": {
+          "type": "boolean",
+          "default": true,
+          "description": "Sync your last chats to your OLKIL account (3 chats, 48 hours)."
         }
       }
     }
